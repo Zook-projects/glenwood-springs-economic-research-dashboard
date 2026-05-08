@@ -634,7 +634,7 @@ export function DashboardView({ data }: Props) {
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] grid-cols-1 items-stretch">
                 <CommerceTimeSeriesChart
                   bundle={contextBundle}
-                  selectedZip={selectedZip}
+                  selectedZip={commerceFocusZip ?? selectedZip}
                   variant={commerceVariant}
                   cadence={commerceCadence}
                   onCadenceChange={setCommerceCadence}
