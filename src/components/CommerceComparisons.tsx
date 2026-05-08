@@ -29,6 +29,7 @@ import type {
   ContextPlaceEntry,
 } from '../types/context';
 import { fmtCompactUSD } from '../lib/format';
+import { ANCHOR_ZIPS } from '../lib/flowQueries';
 import {
   COMMERCE_VARIANT_TREND_KEY,
   type CommerceVariant,
@@ -38,13 +39,15 @@ interface Props {
   bundle: ContextBundle | null;
   selectedZip: string | null;
   variant: CommerceVariant;
-  // When provided, the Anchor Places + Place Share rows become clickable
-  // and call this with the row's ZIP. Toggling the same row off (i.e.,
-  // clicking the currently selected anchor) is the parent's job — pass
-  // null when the same ZIP is being deselected.
-  onSelectPlace?: (zip: string | null) => void;
+  // Section-local focus ZIP for the Anchor Places bar + Pie. Clicking
+  // a place sets this state on the parent; it never propagates to the
+  // dashboard-wide `selectedZip`. Used so Commerce can show a within-
+  // section highlight without affecting Workforce, Demographics, etc.
+  commerceFocusZip?: string | null;
+  onCommerceFocusZip?: (zip: string | null) => void;
   // Active county filter (FIPS GEOID, e.g. "08045"). Drives:
   //   - the Counties card highlight (selected county shows in amber)
+  //   - the Anchor Places bar (filtered to that county's anchors)
   //   - the Anchor place mix pie's slice set (only places whose
   //     containing county matches the selection appear)
   // The line-chart highlight in CommerceTimeSeriesChart is wired through
@@ -115,6 +118,7 @@ function HorizontalBars({
   ariaLabel,
   axisMax,
   onRowClick,
+  showPercent = false,
 }: {
   rows: BarRow[];
   formatValue: (v: number) => string;
@@ -127,11 +131,18 @@ function HorizontalBars({
   // `key`. The current implementation in CommerceComparisons routes that
   // through to a ZIP-keyed selection callback in DashboardView.
   onRowClick?: (key: string) => void;
+  // When true, append a `% of total` column to the right of the dollar
+  // value. Total = sum of `value` across the visible rows.
+  showPercent?: boolean;
 }) {
   const max = useMemo(() => {
     if (axisMax !== undefined) return axisMax;
     return rows.reduce((m, r) => Math.max(m, r.value), 0) || 1;
   }, [rows, axisMax]);
+  const total = useMemo(
+    () => rows.reduce((s, r) => s + (r.value > 0 ? r.value : 0), 0),
+    [rows],
+  );
 
   if (rows.length === 0) {
     return (
@@ -144,6 +155,8 @@ function HorizontalBars({
     );
   }
 
+  const gridTemplate = showPercent ? '120px 1fr 70px 50px' : '120px 1fr 70px';
+
   return (
     <ul
       className="flex flex-col gap-1"
@@ -152,6 +165,7 @@ function HorizontalBars({
     >
       {rows.map((r) => {
         const pct = (r.value / max) * 100;
+        const sharePct = total > 0 ? (r.value / total) * 100 : 0;
         const fill = r.highlight ? 'var(--accent)' : (r.fill ?? 'var(--corridor-1)');
         const clickable = onRowClick != null;
         const inner = (
@@ -189,6 +203,14 @@ function HorizontalBars({
             >
               {formatValue(r.value)}
             </span>
+            {showPercent && (
+              <span
+                className="text-[10px] tnum text-right"
+                style={{ color: 'var(--text-dim)', opacity: 0.7 }}
+              >
+                {sharePct.toFixed(1)}%
+              </span>
+            )}
           </>
         );
         return (
@@ -196,7 +218,7 @@ function HorizontalBars({
             key={r.key}
             className="grid items-center gap-2"
             style={{
-              gridTemplateColumns: '120px 1fr 70px',
+              gridTemplateColumns: gridTemplate,
             }}
           >
             {clickable ? (
@@ -206,7 +228,7 @@ function HorizontalBars({
                 aria-pressed={!!r.highlight}
                 className="grid items-center gap-2 text-left rounded-sm transition-colors hover:bg-white/5 focus:outline-none focus-visible:ring-1 px-1 -mx-1 py-0.5"
                 style={{
-                  gridTemplateColumns: '120px 1fr 70px',
+                  gridTemplateColumns: gridTemplate,
                   // The button spans the full row's grid columns by
                   // re-declaring its own grid; the parent <li> still
                   // governs vertical rhythm.
@@ -314,7 +336,7 @@ function PiePlaces({
   const isInteractive = (s: PieSlice) => clickEnabled && s.interactive !== false;
 
   return (
-    <div className="flex gap-3 items-stretch min-w-0">
+    <div className="flex justify-center min-w-0">
       <div className="relative shrink-0" style={{ width: VB, height: VB }}>
         <svg
           viewBox={`0 0 ${VB} ${VB}`}
@@ -389,67 +411,6 @@ function PiePlaces({
           </g>
         </svg>
       </div>
-      <ul
-        className="flex-1 min-w-0 flex flex-col gap-0.5"
-        role="list"
-        aria-label={ariaLabel}
-      >
-        {slices.map((s) => {
-          const pct = (s.value / total) * 100;
-          const isHover = hover === s.key;
-          const inner = (
-            <>
-              <span
-                className="inline-block rounded-sm shrink-0"
-                style={{ width: 8, height: 8, background: s.fill, opacity: 0.85 }}
-              />
-              <span
-                className="text-[10px] truncate text-left"
-                style={{
-                  color: s.highlight ? 'var(--accent)' : 'var(--text-h)',
-                  fontWeight: s.highlight ? 600 : 400,
-                }}
-                title={`${s.label} → ${s.countyName}`}
-              >
-                {s.label}
-              </span>
-              <span
-                className="text-[10px] tnum text-right"
-                style={{ color: 'var(--text-dim)' }}
-              >
-                {pct.toFixed(1)}%
-              </span>
-            </>
-          );
-          return (
-            <li
-              key={s.key}
-              className="grid items-center gap-1.5"
-              style={{ gridTemplateColumns: '10px 1fr 40px' }}
-              onMouseEnter={() => setHover(s.key)}
-              onMouseLeave={() => setHover(null)}
-            >
-              {isInteractive(s) ? (
-                <button
-                  type="button"
-                  onClick={() => onSliceClick?.(s.key)}
-                  aria-pressed={s.highlight}
-                  className="grid items-center gap-1.5 text-left rounded-sm transition-colors hover:bg-white/5 focus:outline-none focus-visible:ring-1 px-1 -mx-1 py-0.5"
-                  style={{
-                    gridTemplateColumns: '10px 1fr 40px',
-                    gridColumn: '1 / -1',
-                    background: isHover ? 'rgba(255,255,255,0.04)' : 'transparent',
-                  }}
-                >
-                  {inner}
-                </button>
-              ) : (
-                inner
-              )}
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }
@@ -492,15 +453,23 @@ export function CommerceComparisons({
   bundle,
   selectedZip,
   variant,
-  onSelectPlace,
+  commerceFocusZip = null,
+  onCommerceFocusZip,
   selectedCountyGeoid = null,
   onSelectCounty,
 }: Props) {
-  // Toggle helper: clicking the currently selected anchor clears the
-  // filter; clicking any other anchor sets it. Mirrors how the rest of
-  // the dashboard treats "click again to deselect."
-  const handleRowClick = onSelectPlace
-    ? (zip: string) => onSelectPlace(zip === selectedZip ? null : zip)
+  // A place is highlighted if it matches either the dashboard-wide
+  // workforce selection (so the section still scopes when a workplace
+  // anchor is clicked in the Workforce section above) or the section-
+  // local focus state (Anchor Places / Pie click). The focus state
+  // never leaves Commerce.
+  const focusZip = commerceFocusZip ?? selectedZip;
+  // Toggle helper: clicking the currently focused anchor clears the
+  // local highlight; clicking any other anchor sets it. Never mutates
+  // the dashboard-wide `selectedZip`.
+  const handleRowClick = onCommerceFocusZip
+    ? (zip: string) =>
+        onCommerceFocusZip(zip === commerceFocusZip ? null : zip)
     : undefined;
   const handleCountyClick = onSelectCounty
     ? (geoid: string) =>
@@ -532,23 +501,20 @@ export function CommerceComparisons({
       if (latestYear == null || d.year > latestYear) latestYear = d.year;
     });
 
-    // Color each county bar on a value-driven gradient (lighter = higher,
-    // darker = lower). Min/max anchor the ramp to this card's data range
-    // so the spread reads correctly even when one county dominates.
-    const countyMin = countyData.reduce((m, d) => Math.min(m, d.value), Infinity);
-    const countyMax = countyData.reduce((m, d) => Math.max(m, d.value), -Infinity);
+    // Counties bars render in white to match the Anchor Places bar
+    // styling. The selected county overrides to amber via `highlight`.
     const countyRows: BarRow[] = countyData
       .sort((a, b) => b.value - a.value)
       .map((d) => ({
         key: d.county.geoid,
         label: d.county.name,
         value: d.value,
-        fill: colorForValue(d.value, countyMin, countyMax),
+        fill: '#ffffff',
         highlight: d.county.geoid === selectedCountyGeoid,
       }));
 
     // Places — sorted descending on the active variant. Highlight the
-    // currently selected workplace ZIP.
+    // currently focused ZIP (workforce selection OR section-local).
     const placeData = env.places
       .map((p: ContextPlaceEntry) => {
         const latest = pickAnnualLatest(p.trend as unknown as CommerceTrend | undefined, measure);
@@ -556,26 +522,38 @@ export function CommerceComparisons({
       })
       .filter((x): x is { place: ContextPlaceEntry; year: number; value: number } => x != null);
 
-    // Pie still uses the value gradient, but the Anchor places bar chart
-    // gets a single neutral fill — sequential greys on closely-spaced
-    // values were hard to discriminate. The selected anchor still
-    // overrides to amber via the `highlight` channel.
-    const placeRows: BarRow[] = placeData
+    // Municipalities bar:
+    //   Default (no county selected) → the 10 anchor workplaces in the
+    //     study area that publish CDOR data (the 11 anchors minus Old
+    //     Snowmass, which is unincorporated and has no CDOR filings).
+    //   County selected → every municipality in that county that has
+    //     CDOR data, regardless of anchor status. Eagle County
+    //     therefore surfaces Vail / Avon / Eagle / Gypsum / Minturn /
+    //     Red Cliff (the supplementary set), Garfield surfaces its
+    //     anchors, Pitkin surfaces its anchors.
+    const filteredMunicipalityData = selectedCountyGeoid
+      ? placeData.filter((d) => d.place.countyGeoid === selectedCountyGeoid)
+      : placeData.filter((d) => ANCHOR_ZIPS.includes(d.place.zip));
+
+    // Bars render in white per the v3 dashboard refresh — the bar is
+    // purely a length channel. The active focus still overrides to
+    // amber via `highlight`.
+    const placeRows: BarRow[] = filteredMunicipalityData
       .sort((a, b) => b.value - a.value)
       .map((d) => ({
         key: d.place.zip,
         label: d.place.name,
         value: d.value,
-        fill: 'var(--corridor-1)',
-        highlight: d.place.zip === selectedZip,
+        fill: '#ffffff',
+        highlight: d.place.zip === focusZip,
       }));
 
-    // Pie entries — start with the real anchor places, then append a
-    // synthetic "Unincorporated {county}" slice for Garfield and Pitkin
-    // representing the residual: county total − sum of anchors in that
-    // county. Eagle is excluded (it has no anchors in our set, and
-    // showing the entire county as a single "Unincorporated Eagle"
-    // slice would dwarf everything else without adding insight).
+    // Pie entries — start with every place in env.places (the 11
+    // anchors PLUS the Eagle-County supplementary municipalities), then
+    // append a synthetic "Unincorporated {county}" slice for each
+    // residual county representing county total − sum of places in
+    // that county. The pie therefore covers the full county-collected
+    // commerce footprint of the three valley counties.
     interface PieEntry {
       key: string;
       label: string;
@@ -595,7 +573,7 @@ export function CommerceComparisons({
       isUnincorporated: false,
     }));
 
-    const RESIDUAL_COUNTIES = ['08045', '08097'];
+    const RESIDUAL_COUNTIES = ['08045', '08097', '08037'];
     for (const geoid of RESIDUAL_COUNTIES) {
       const county = env.counties.find((c) => c.geoid === geoid);
       if (!county) continue;
@@ -636,12 +614,12 @@ export function CommerceComparisons({
         countyName: e.countyName,
         value: e.value,
         fill: colorForValue(e.value, pieMin, pieMax),
-        highlight: e.zip != null && e.zip === selectedZip,
+        highlight: e.zip != null && e.zip === focusZip,
         interactive: !e.isUnincorporated,
       }));
 
     return { countyRows, placeRows, pieSlices, latestYear };
-  }, [bundle, measure, selectedZip, selectedCountyGeoid]);
+  }, [bundle, measure, focusZip, selectedCountyGeoid]);
 
   const variantLabel =
     variant === 'gross' ? 'Gross Sales' : variant === 'retail' ? 'Retail Sales' : 'Net Taxable Sales';
@@ -655,7 +633,7 @@ export function CommerceComparisons({
     ? (
         bundle?.commerce?.counties.find((c) => c.geoid === selectedCountyGeoid)?.name.replace(/ County$/, '') ?? 'TOTAL'
       ).toUpperCase()
-    : 'GARFIELD + PITKIN';
+    : 'GARFIELD + PITKIN + EAGLE';
 
   return (
     <div className="flex flex-col gap-3">
@@ -677,39 +655,45 @@ export function CommerceComparisons({
       </ChartCard>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <ChartCard
-          title={`Anchor places · ${variantLabel}${yearTag}`}
-          subtitle={
-            handleRowClick
-              ? 'Click a place to scope the dashboard to that anchor'
-              : 'Bars tinted by containing county'
-          }
-        >
-          <HorizontalBars
-            rows={placeRows}
-            formatValue={fmtCompactUSD}
-            emptyLabel="no place data"
-            ariaLabel="Anchor place comparison"
-            onRowClick={handleRowClick}
-          />
-        </ChartCard>
-        <ChartCard
-          title={`Anchor place mix · ${variantLabel}${yearTag}`}
+          title={`Municipalities · ${variantLabel}${yearTag}`}
           subtitle={
             selectedCountyGeoid
               ? `Filtered to ${
                   bundle?.commerce?.counties.find((c) => c.geoid === selectedCountyGeoid)?.name.replace(/ County$/, '') ??
                   'selected county'
-                } anchors${handleRowClick ? ' · click a slice to scope the dashboard' : ''}`
+                } municipalities`
               : handleRowClick
-              ? 'Click a slice to scope the dashboard'
-              : 'Each place as % of the anchor total'
+              ? 'Click a municipality to highlight it within Commerce'
+              : 'Anchor workplaces · % of visible total'
+          }
+        >
+          <HorizontalBars
+            rows={placeRows}
+            formatValue={fmtCompactUSD}
+            emptyLabel="no municipality data"
+            ariaLabel="Municipality comparison"
+            onRowClick={handleRowClick}
+            showPercent
+          />
+        </ChartCard>
+        <ChartCard
+          title={`Municipality mix · ${variantLabel}${yearTag}`}
+          subtitle={
+            selectedCountyGeoid
+              ? `Filtered to ${
+                  bundle?.commerce?.counties.find((c) => c.geoid === selectedCountyGeoid)?.name.replace(/ County$/, '') ??
+                  'selected county'
+                }${handleRowClick ? ' · click a slice to highlight it' : ''}`
+              : handleRowClick
+              ? 'Click a slice to highlight it within Commerce'
+              : 'Each municipality as % of the visible total'
           }
         >
           <PiePlaces
             slices={pieSlices}
             formatValue={fmtCompactUSD}
-            emptyLabel="no place data"
-            ariaLabel="Anchor place mix"
+            emptyLabel="no municipality data"
+            ariaLabel="Municipality mix"
             onSliceClick={handleRowClick}
             centerLabel={pieCenterLabel}
           />

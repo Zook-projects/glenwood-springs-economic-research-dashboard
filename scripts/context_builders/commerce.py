@@ -15,7 +15,12 @@ import json
 from pathlib import Path
 
 from context_schema import build_envelope, source, trend_series
-from geographies import COUNTY_FIPS, STATE_FIPS, all_place_records
+from geographies import (
+    COUNTY_FIPS,
+    STATE_FIPS,
+    all_place_records,
+    supplementary_place_records,
+)
 
 CACHE_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "context-cache"
 CDOR_DIR = CACHE_ROOT / "cdor"
@@ -305,6 +310,25 @@ def build_commerce() -> dict:
             "trend": place_trend,
             "shareOfCounty": share_block,
         }
+    # Eagle County supplementary places (Vail, Avon, Eagle, Gypsum,
+    # Minturn, Red Cliff). These are NOT anchors and do not appear in
+    # any other topic's place list — they exist only so the Commerce
+    # pie chart can show the Eagle municipal breakdown when Eagle is
+    # the active county scope. Skip silently when CDOR has no rows for
+    # a given jurisdiction (rather than emitting a zeroed entry).
+    for rec in supplementary_place_records():
+        cdor_block, place_trend, latest_y = _cdor_aggregate_for_jurisdiction(rec["name"], level="city")
+        if not cdor_block:
+            continue
+        if latest_y is not None:
+            cdor_latest_years.append(latest_y)
+        county_geoid = rec.get("county_geoid")
+        share_block = _share_of_county(place_trend, county_trends.get(county_geoid, {}))
+        place_data[rec["zip"]] = {
+            "latest": cdor_block,
+            "trend": place_trend,
+            "shareOfCounty": share_block,
+        }
 
     actual_latest = max(cdor_latest_years) if cdor_latest_years else 2024
 
@@ -352,4 +376,5 @@ def build_commerce() -> dict:
         state_data={"latest": state_block or None, "trend": state_trend},
         county_data=county_data,
         place_data=place_data,
+        extra_place_records=supplementary_place_records(),
     )

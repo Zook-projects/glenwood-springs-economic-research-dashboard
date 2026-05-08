@@ -10,21 +10,21 @@
       "agency": "U.S. Bureau of Labor Statistics",
       "dataset": "Quarterly Census of Employment and Wages",
       "endpoint": "https://data.bls.gov/cew/data/api",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     },
     {
       "id": "LAUS",
       "agency": "U.S. Bureau of Labor Statistics",
       "dataset": "Local Area Unemployment Statistics",
       "endpoint": "https://api.bls.gov/publicAPI/v2/timeseries/data",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     },
     {
       "id": "BEA_REIS",
       "agency": "U.S. Bureau of Economic Analysis",
       "dataset": "Regional Economic Accounts",
       "endpoint": "https://apps.bea.gov/api/data",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     }
   ],
   "state": {

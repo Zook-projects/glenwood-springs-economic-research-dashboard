@@ -611,12 +611,17 @@ function TopicCard({
   large?: boolean;
 }) {
   const allEmpty = rows.every((r) => r.value == null);
+  // For the Dashboard's large Commerce KPI card, the variant toggle moves
+  // to the top-right corner of the card so it reads as the section's
+  // primary control. All other cards keep the inline toggle row below
+  // the headline label.
+  const cornerToggle = topic === 'commerce' && large && variantToggle;
   return (
     <div
       className={
         stretch
-          ? 'glass rounded-md p-3 flex flex-col gap-2'
-          : 'glass rounded-md p-3 shrink-0 flex flex-col gap-2'
+          ? 'glass rounded-md p-3 flex flex-col gap-2 relative'
+          : 'glass rounded-md p-3 shrink-0 flex flex-col gap-2 relative'
       }
       style={
         stretch
@@ -624,6 +629,9 @@ function TopicCard({
           : { width: 240, minHeight: 110 }
       }
     >
+      {cornerToggle && (
+        <div className="absolute top-3 right-3 z-10">{variantToggle}</div>
+      )}
       <div>
         <div
           className={`${large ? 'text-xs' : 'text-[10px]'} font-medium uppercase tracking-wider`}
@@ -645,9 +653,9 @@ function TopicCard({
             {sourceLine}
           </div>
         )}
-        {(variantToggle || cadenceToggle) && (
+        {((!cornerToggle && variantToggle) || cadenceToggle) && (
           <div className="flex items-center gap-1.5 flex-wrap">
-            {variantToggle}
+            {!cornerToggle && variantToggle}
             {cadenceToggle}
           </div>
         )}

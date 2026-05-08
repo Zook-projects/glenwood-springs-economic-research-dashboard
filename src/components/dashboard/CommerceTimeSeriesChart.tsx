@@ -26,7 +26,6 @@ import { getPlaceWithRails } from '../../lib/contextQueries';
 import { fmtCompactUSD } from '../../lib/format';
 import {
   COMMERCE_CADENCE_LABEL,
-  COMMERCE_VARIANT_CHIP_LABEL,
   COMMERCE_VARIANT_LABEL,
   COMMERCE_VARIANT_TREND_KEY,
   VariantToggle,
@@ -40,7 +39,6 @@ interface Props {
   selectedZip: string | null;
   variant: CommerceVariant;
   cadence: CommerceCadence;
-  onVariantChange: (v: CommerceVariant) => void;
   onCadenceChange: (v: CommerceCadence) => void;
   // When set in multi-series (no-anchor) mode, the matching county's
   // line renders in amber (var(--accent)) and is brought to the front;
@@ -156,7 +154,6 @@ export function CommerceTimeSeriesChart({
   selectedZip,
   variant,
   cadence,
-  onVariantChange,
   onCadenceChange,
   highlightCountyGeoid = null,
 }: Props) {
@@ -327,17 +324,11 @@ export function CommerceTimeSeriesChart({
       title={`Sales · ${variantLabel}`}
       subtitle={subtitle}
     >
-      {/* Toggles + multi-series legend share one row so the legend sits
-          to the right of the variant/cadence buttons rather than wrapping
-          to a second line. */}
+      {/* Cadence toggle + multi-series legend share one row. The
+          gross/retail/taxable variant control lives on the KPI card now,
+          so this header only shows the Annual/Monthly cadence and (in
+          aggregate mode) the county legend. */}
       <div className="flex items-center gap-3 flex-wrap">
-        <VariantToggle<CommerceVariant>
-          value={variant}
-          onChange={onVariantChange}
-          options={['gross', 'retail', 'taxable']}
-          labels={COMMERCE_VARIANT_CHIP_LABEL}
-          ariaLabel="CDOR sales metric"
-        />
         <VariantToggle<CommerceCadence>
           value={cadence}
           onChange={onCadenceChange}
@@ -387,14 +378,14 @@ export function CommerceTimeSeriesChart({
         </div>
       ) : (
         <div
-          className="relative w-full flex-1 flex flex-col"
+          className="relative w-full flex-1"
           style={{ minHeight: 240 }}
         >
           <svg
             viewBox={`0 0 ${W} ${H}`}
             preserveAspectRatio="none"
             className="w-full h-full"
-            style={{ display: 'block', flex: 1, minHeight: 200 }}
+            style={{ display: 'block' }}
             onMouseLeave={() => setHoverIdx(null)}
           >
             <defs>
@@ -404,41 +395,19 @@ export function CommerceTimeSeriesChart({
               </linearGradient>
             </defs>
             <g transform={`translate(${M.left}, ${M.top})`}>
-              {/* Y gridlines + tick labels (zero baseline included) */}
+              {/* Y gridlines (tick labels are rendered as HTML overlays
+                  below so the text stays crisp under the SVG's
+                  non-uniform stretch). */}
               {yTicks.map((t) => (
-                <g key={t}>
-                  <line
-                    x1={0}
-                    x2={innerW}
-                    y1={sy(t)}
-                    y2={sy(t)}
-                    stroke="var(--panel-border)"
-                    strokeDasharray={t === 0 ? undefined : '2 3'}
-                  />
-                  <text
-                    x={-6}
-                    y={sy(t)}
-                    fontSize="9"
-                    textAnchor="end"
-                    dominantBaseline="middle"
-                    fill="var(--text-dim)"
-                  >
-                    {fmtCompactUSD(t)}
-                  </text>
-                </g>
-              ))}
-              {/* X tick labels */}
-              {xTicks.map((t) => (
-                <text
+                <line
                   key={t}
-                  x={sx(t)}
-                  y={innerH + 14}
-                  fontSize="9"
-                  textAnchor="middle"
-                  fill="var(--text-dim)"
-                >
-                  {Math.round(t)}
-                </text>
+                  x1={0}
+                  x2={innerW}
+                  y1={sy(t)}
+                  y2={sy(t)}
+                  stroke="var(--panel-border)"
+                  strokeDasharray={t === 0 ? undefined : '2 3'}
+                />
               ))}
               {/* Area gradient — only in single-series mode. */}
               {!isMulti && primaryAreaPath && (
@@ -514,6 +483,44 @@ export function CommerceTimeSeriesChart({
               />
             </g>
           </svg>
+          {/* Axis tick labels — rendered as HTML overlays so text stays
+              crisp under the SVG's non-uniform stretch (preserveAspectRatio="none").
+              Positions are computed in viewBox space and converted to
+              percentages of the same container the SVG fills exactly. */}
+          <div className="absolute inset-0 pointer-events-none">
+            {yTicks.map((t) => (
+              <div
+                key={`y-${t}`}
+                className="absolute tnum"
+                style={{
+                  left: `${((M.left - 6) / W) * 100}%`,
+                  top: `${((M.top + sy(t)) / H) * 100}%`,
+                  transform: 'translate(-100%, -50%)',
+                  fontSize: 9,
+                  color: 'var(--text-dim)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {fmtCompactUSD(t)}
+              </div>
+            ))}
+            {xTicks.map((t) => (
+              <div
+                key={`x-${t}`}
+                className="absolute tnum"
+                style={{
+                  left: `${((M.left + sx(t)) / W) * 100}%`,
+                  top: `${((M.top + innerH + 6) / H) * 100}%`,
+                  transform: 'translateX(-50%)',
+                  fontSize: 9,
+                  color: 'var(--text-dim)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {Math.round(t)}
+              </div>
+            ))}
+          </div>
           {/* Floating tooltip (HTML so text stays crisp regardless of SVG scale) */}
           {focused && tooltipPct && (
             <div

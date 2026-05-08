@@ -77,6 +77,7 @@ def build_envelope(
     state_data: dict | None,
     county_data: dict[str, dict],
     place_data: dict[str, dict],
+    extra_place_records: list[dict] | None = None,
 ) -> dict:
     """
     Compose the wire-format topic envelope.
@@ -84,6 +85,12 @@ def build_envelope(
     `state_data`        : single dict {latest, trend} or None
     `county_data`       : keyed by 5-digit county GEOID (e.g., '08045')
     `place_data`        : keyed by anchor ZIP (e.g., '81601')
+    `extra_place_records`: optional list of place records to append
+        beyond the 11 anchors. Used by the commerce builder so the
+        Eagle County supplementary municipalities (Vail, Avon, Eagle,
+        Gypsum, Minturn, Red Cliff) appear in the wire format alongside
+        the anchor places. Each record matches the dict shape returned
+        by `all_place_records()`.
 
     Levels with no data emitted by a fetcher come through as
     {latest: null, trend: {}}; the renderer treats null as "no data
@@ -108,7 +115,10 @@ def build_envelope(
         })
 
     places = []
-    for rec in all_place_records():
+    place_recs = list(all_place_records())
+    if extra_place_records:
+        place_recs.extend(extra_place_records)
+    for rec in place_recs:
         d = place_data.get(rec["zip"], {})
         # Strip non-serializable centroid tuple — keep only what the UI uses.
         place_entry = {

@@ -10,28 +10,28 @@
       "agency": "Colorado Department of Revenue",
       "dataset": "Lodging Tax Reports",
       "endpoint": "https://data.colorado.gov/resource/5xyk-vsx9.json",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     },
     {
       "id": "QCEW_TOURISM",
       "agency": "U.S. Bureau of Labor Statistics",
       "dataset": "QCEW NAICS 71 (Arts/Ent) + NAICS 72 (Accommodation/Food)",
       "endpoint": "https://data.bls.gov/cew/data/api",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     },
     {
       "id": "BTS_T100",
       "agency": "U.S. Bureau of Transportation Statistics",
       "dataset": "T-100 Domestic Segment Data",
       "endpoint": "https://www.transtats.bts.gov/",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     },
     {
       "id": "RFTA_YIR",
       "agency": "Roaring Fork Transportation Authority",
       "dataset": "Annual Year-in-Review",
       "endpoint": "https://www.rfta.com/public-documents/",
-      "lastPulled": "2026-05-04"
+      "lastPulled": "2026-05-07"
     }
   ],
   "state": {

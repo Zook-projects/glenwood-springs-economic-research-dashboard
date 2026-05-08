@@ -95,10 +95,19 @@ def main() -> int:
     print("  topic          state    counties    places", file=sys.stderr)
     print("  " + "-" * 50, file=sys.stderr)
 
+    # Commerce includes Eagle County supplementary municipalities
+    # (Vail, Avon, Eagle, Gypsum, Minturn, Red Cliff) on top of the 11
+    # anchors so the pie chart can show municipal breakdowns when
+    # Eagle is the active county scope. Other topics keep the
+    # 11-anchor expectation.
+    EXPECTED_PLACES_BY_TOPIC = {"commerce": 17}
     all_warnings: dict[str, list[str]] = {}
     for topic in TOPICS:
         env = _try_build(topic)
-        warnings = validate_envelope(env)
+        warnings = validate_envelope(
+            env,
+            expected_place_count=EXPECTED_PLACES_BY_TOPIC.get(topic, 11),
+        )
         all_warnings[topic] = warnings
         print(coverage_table(env), file=sys.stderr)
         write_topic_json(env, OUT_DIR / f"{topic}.json")

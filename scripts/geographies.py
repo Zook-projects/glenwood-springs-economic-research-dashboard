@@ -124,6 +124,24 @@ PLACE_CODES: dict[str, dict] = {
 }
 
 
+# Supplementary places used ONLY by the commerce builder. These are
+# Eagle County municipalities — they are NOT anchors in the 11-anchor
+# study area and are NOT used for LODES, demographics, employment, or
+# housing. They exist purely so the Commerce pie chart can show the
+# Eagle County municipal breakdown when the Counties card scopes to
+# Eagle, and so the Eagle "Unincorporated remainder" calculation has
+# something to subtract from. Place codes verified against Census 2024
+# Gazetteer place GEOIDs for Colorado (state FIPS 08).
+SUPPLEMENTARY_PLACE_CODES: dict[str, dict] = {
+    "81620": {"place_code": "03930", "place_name": "Avon",      "county_fips": "037", "kind": "place"},
+    "81631": {"place_code": "22080", "place_name": "Eagle",     "county_fips": "037", "kind": "place"},
+    "81637": {"place_code": "33640", "place_name": "Gypsum",    "county_fips": "037", "kind": "place"},
+    "81645": {"place_code": "50040", "place_name": "Minturn",   "county_fips": "037", "kind": "place"},
+    "81649": {"place_code": "63820", "place_name": "Red Cliff", "county_fips": "037", "kind": "place"},
+    "81657": {"place_code": "80435", "place_name": "Vail",      "county_fips": "037", "kind": "place"},
+}
+
+
 def place_geoid(zip_code: str) -> str | None:
     """Full 7-digit Census Place GEOID for an anchor ZIP, or None for ZCTA-fallback anchors."""
     rec = PLACE_CODES.get(zip_code)
@@ -160,6 +178,23 @@ def all_place_records() -> list[dict]:
             "county_geoid": county_geoid(zip_code),
             "county_name": county_name(zip_code),
             "centroid": CITY_CENTROIDS.get(zip_code),
+        })
+    return out
+
+
+def supplementary_place_records() -> list[dict]:
+    """Eagle County municipality records used ONLY by the commerce builder."""
+    out = []
+    for zip_code in sorted(SUPPLEMENTARY_PLACE_CODES.keys()):
+        rec = SUPPLEMENTARY_PLACE_CODES[zip_code]
+        out.append({
+            "zip": zip_code,
+            "name": rec["place_name"],
+            "kind": rec["kind"],
+            "place_geoid": f"{STATE_FIPS}{rec['place_code']}",
+            "county_geoid": f"{STATE_FIPS}{rec['county_fips']}",
+            "county_name": COUNTY_FIPS[rec["county_fips"]],
+            "centroid": None,
         })
     return out
 

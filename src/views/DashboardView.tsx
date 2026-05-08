@@ -104,6 +104,12 @@ export function DashboardView({ data }: Props) {
   // highlight in CommerceTimeSeriesChart and the place filter in
   // CommerceComparisons' pie chart. null = no county filter (default).
   const [commerceCountyGeoid, setCommerceCountyGeoid] = useState<string | null>(null);
+  // Section-local place focus for the Anchor Places bar + Pie. Clicks
+  // on those surfaces highlight inside Commerce only — they do NOT
+  // touch the dashboard-wide `selectedZip` (which is set by the
+  // Workforce section's anchor click and continues to scope Commerce
+  // through the existing `selectedZip` prop).
+  const [commerceFocusZip, setCommerceFocusZip] = useState<string | null>(null);
 
   // ----- Derived state (mirrors the relevant parts of CommuteView) --------
   const selectionKind: 'aggregate' | 'anchor' | 'non-anchor' = useMemo(() => {
@@ -631,7 +637,6 @@ export function DashboardView({ data }: Props) {
                   selectedZip={selectedZip}
                   variant={commerceVariant}
                   cadence={commerceCadence}
-                  onVariantChange={setCommerceVariant}
                   onCadenceChange={setCommerceCadence}
                   highlightCountyGeoid={commerceCountyGeoid}
                 />
@@ -640,7 +645,8 @@ export function DashboardView({ data }: Props) {
                     bundle={contextBundle}
                     selectedZip={selectedZip}
                     variant={commerceVariant}
-                    onSelectPlace={handleSelectZip}
+                    commerceFocusZip={commerceFocusZip}
+                    onCommerceFocusZip={setCommerceFocusZip}
                     selectedCountyGeoid={commerceCountyGeoid}
                     onSelectCounty={setCommerceCountyGeoid}
                   />

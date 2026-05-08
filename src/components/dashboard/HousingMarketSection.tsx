@@ -16,7 +16,7 @@
 // Pure SVG + d3-shape / d3-scale, mirroring the rendering style used across
 // the rest of the dashboard. No new dependencies.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { line as d3Line } from 'd3-shape';
 import { scaleLinear, scaleBand } from 'd3-scale';
 import type {
@@ -293,20 +293,22 @@ function HeadlineStats({ geo }: { geo: Geography | null }) {
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-3">
-        {items.map((it) => (
-          <div key={it.label} className="flex flex-col">
-            <div
-              className="text-xl font-semibold tabular-nums"
-              style={{ color: 'var(--text-h)' }}
-            >
-              {fmtDollars(it.value)}
+      <div className="flex-1 flex items-center">
+        <div className="grid grid-cols-3 gap-3 w-full justify-items-center text-center">
+          {items.map((it) => (
+            <div key={it.label} className="flex flex-col items-center">
+              <div
+                className="text-xl font-semibold tabular-nums"
+                style={{ color: 'var(--text-h)' }}
+              >
+                {fmtDollars(it.value)}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                {it.label}
+              </div>
             </div>
-            <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
-              {it.label}
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -399,6 +401,18 @@ function TimeSeriesChart({
   // surfaces the value for every visible series at that year.
   const [hoverYear, setHoverYear] = useState<number | null>(null);
 
+  // Legend-driven highlight. Independent of the section-wide `activeId`
+  // filter (which is driven by the City Comparison bar chart). Clicking a
+  // legend item emphasizes that series without removing the others, so
+  // peers stay in view for context. Clicking the same item toggles it off.
+  const [legendHighlight, setLegendHighlight] = useState<string | null>(null);
+  // When an external filter is applied or cleared, drop any local legend
+  // highlight so the two states don't desync.
+  useEffect(() => {
+    setLegendHighlight(null);
+  }, [activeId]);
+  const effectiveHighlight = legendHighlight ?? highlightId;
+
   // Map a viewBox-space x coord (within plot bounds) → nearest integer year
   // that has data on at least one series. Snapping keeps the tooltip aligned
   // with the actual data points instead of interpolating between them.
@@ -463,15 +477,19 @@ function TimeSeriesChart({
       {/* Legend */}
       <div className="flex flex-wrap gap-x-3 gap-y-1">
         {series.map((s) => {
-          const isActive = highlightId === s.geo.id;
+          const isActive = effectiveHighlight === s.geo.id;
           return (
             <button
               key={s.geo.id}
-              onClick={() => onActivate(s.geo.id)}
+              onClick={() =>
+                setLegendHighlight((prev) =>
+                  prev === s.geo.id ? null : s.geo.id,
+                )
+              }
               className="flex items-center gap-1.5 text-[10px] tabular-nums"
               style={{
                 color: isActive ? 'var(--accent)' : 'var(--text)',
-                opacity: isActive || highlightId == null ? 1 : 0.6,
+                opacity: isActive || effectiveHighlight == null ? 1 : 0.6,
               }}
             >
               <span
@@ -535,8 +553,8 @@ function TimeSeriesChart({
             ))}
             {/* Series lines */}
             {series.map((s) => {
-              const isActive = highlightId === s.geo.id;
-              const isDimmed = highlightId != null && !isActive;
+              const isActive = effectiveHighlight === s.geo.id;
+              const isDimmed = effectiveHighlight != null && !isActive;
               const path = lineGen(s.trend) ?? '';
               return (
                 <path
@@ -570,7 +588,7 @@ function TimeSeriesChart({
                     cx={sx(focused.year)}
                     cy={sy(r.value)}
                     r={3}
-                    fill={highlightId === r.geo.id ? 'var(--accent)' : r.color}
+                    fill={effectiveHighlight === r.geo.id ? 'var(--accent)' : r.color}
                     stroke="rgba(11,13,16,0.95)"
                     strokeWidth={1}
                     vectorEffect="non-scaling-stroke"
@@ -620,7 +638,7 @@ function TimeSeriesChart({
             </div>
             <ul className="flex flex-col gap-0.5">
               {focused.rows.slice(0, 8).map((r) => {
-                const isActive = highlightId === r.geo.id;
+                const isActive = effectiveHighlight === r.geo.id;
                 return (
                   <li
                     key={r.geo.id}
@@ -759,8 +777,8 @@ function HousingTypeRadar({
         {/* Data polygon */}
         <polygon
           points={polyPoints}
-          fill="rgba(79, 179, 169, 0.22)"
-          stroke="#4FB3A9"
+          fill="rgba(255, 255, 255, 0.18)"
+          stroke="#FFFFFF"
           strokeWidth={1.6}
         />
         {/* Data dots — invisible larger hit-target sits below each
@@ -786,7 +804,7 @@ function HousingTypeRadar({
                 cx={x}
                 cy={y}
                 r={selected ? 6 : active ? 5 : 3}
-                fill={selected ? 'var(--accent)' : '#4FB3A9'}
+                fill={selected ? 'var(--accent)' : '#FFFFFF'}
                 stroke={selected || active ? 'var(--text-h)' : 'none'}
                 strokeWidth={selected ? 1.5 : active ? 1 : 0}
                 pointerEvents="none"
@@ -886,9 +904,9 @@ function HousingTypeBars({
   const yMax = useMemo(() => data.reduce((m, d) => (d.value != null && d.value > m ? d.value : m), 0), [data]);
   const y = useMemo(() => scaleLinear().domain([0, yMax * 1.18 || 1]).range([innerH, 0]), [yMax, innerH]);
 
-  // Value-based gradient: bars darken as their value increases. Map the
-  // smallest non-null value to a light teal and the largest to a deep
-  // teal, interpolating linearly in HSL-ish RGB space.
+  // Value-based gradient: bars brighten as their value increases. Map the
+  // smallest non-null value to a medium grey and the largest to white,
+  // interpolating linearly in RGB space.
   const yMin = useMemo(
     () => data.reduce(
       (m, d) => (d.value != null && (m == null || d.value < m) ? d.value : m),
@@ -897,15 +915,15 @@ function HousingTypeBars({
     [data],
   );
   const colorForValue = (v: number | null): string => {
-    if (v == null || yMax <= 0) return '#4FB3A9';
+    if (v == null || yMax <= 0) return '#6B7280';
     const lo = yMin ?? v;
     const span = Math.max(1, yMax - lo);
     const t = Math.min(1, Math.max(0, (v - lo) / span));
-    // Light end (low value): pale teal #B8E3DE
-    // Dark end (high value): deep teal #1F6B62
+    // Low end (low value): medium grey #6B7280
+    // High end (high value): white #FFFFFF
     const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
     const rgb = (r: number, g: number, b: number) => `rgb(${r}, ${g}, ${b})`;
-    return rgb(lerp(0xB8, 0x1F), lerp(0xE3, 0x6B), lerp(0xDE, 0x62));
+    return rgb(lerp(0x6B, 0xFF), lerp(0x72, 0xFF), lerp(0x80, 0xFF));
   };
 
   return (
