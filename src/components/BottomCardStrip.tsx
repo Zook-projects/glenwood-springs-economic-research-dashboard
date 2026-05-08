@@ -973,7 +973,7 @@ function CardsForRacWac({
     ? odMixOverride!.subtitle
     : mixIsRac
       ? 'RAC · latest year'
-      : 'WAC · latest year';
+      : 'Workplace Area Characteristics · latest year';
   const mixTitle = useOdOverride
     ? odMixOverride!.title
     : `${scope} · Workforce mix`;
@@ -1017,7 +1017,7 @@ function CardsForRacWac({
     <>
       {showWacTotal && wacLatest && wacTrend && (
         <Card
-          title={`${scope} · Total jobs (WAC)`}
+          title={`${scope} · Total jobs`}
           subtitle="Workplace total jobs · 2002–2023"
           grow={isAggregate}
         >
@@ -1035,7 +1035,7 @@ function CardsForRacWac({
       )}
       {wacLatest && isAggregate && (
         <>
-          <Card title={`${scope} · Age`} subtitle="WAC · latest year" width={220} grow>
+          <Card title={`${scope} · Age`} subtitle="Workplace Area Characteristics · latest year" width={220} grow>
             <AgeBarChart
               rows={ageRows(wacLatest.age)}
               total={wacLatest.totalJobs}
@@ -1043,7 +1043,7 @@ function CardsForRacWac({
               onBucketClick={makeBucketToggle('age')}
             />
           </Card>
-          <Card title={`${scope} · Wages`} subtitle="WAC · latest year" width={240} grow>
+          <Card title={`${scope} · Wages`} subtitle="Workplace Area Characteristics · latest year" width={240} grow>
             <WageBarChart
               rows={wageRows(wacLatest.wage)}
               total={wacLatest.totalJobs}
@@ -1051,7 +1051,7 @@ function CardsForRacWac({
               onBucketClick={makeBucketToggle('wage')}
             />
           </Card>
-          <Card title={`${scope} · Industry · NAICS-3`} subtitle="WAC · latest year" width={240} grow>
+          <Card title={`${scope} · Industry · NAICS-3`} subtitle="Workplace Area Characteristics · latest year" width={240} grow>
             <NaicsPieChart
               rows={naicsRows(wacLatest.naics3)}
               total={wacLatest.totalJobs}

@@ -63,6 +63,10 @@ interface Props {
   // sub-line context is visible without click. Used by the Dashboard view's
   // region pane where vertical real estate is plentiful.
   defaultExpanded?: boolean;
+  // When true, tile labels (hero + accordion rows) render in the heading
+  // text color instead of the default dim gray. Dashboard view opts in for
+  // higher contrast against the panel background.
+  whiteLabels?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,10 +193,12 @@ function AccordionRow({
   item,
   open,
   onToggle,
+  whiteLabels = false,
 }: {
   item: StatItem;
   open: boolean;
   onToggle: () => void;
+  whiteLabels?: boolean;
 }) {
   return (
     <div
@@ -207,7 +213,7 @@ function AccordionRow({
       >
         <span
           className="text-[10px] font-medium uppercase tracking-wider truncate"
-          style={{ color: 'var(--text-dim)' }}
+          style={{ color: whiteLabels ? 'var(--text-h)' : 'var(--text-dim)' }}
         >
           {item.label}
         </span>
@@ -250,9 +256,11 @@ function AccordionRow({
 function LayoutAccordion({
   items,
   defaultExpanded = false,
+  whiteLabels = false,
 }: {
   items: StatItem[];
   defaultExpanded?: boolean;
+  whiteLabels?: boolean;
 }) {
   const [openIds, setOpenIds] = useState<Set<string>>(
     () => (defaultExpanded ? new Set(items.map((it) => it.id)) : new Set()),
@@ -272,6 +280,7 @@ function LayoutAccordion({
           item={it}
           open={openIds.has(it.id)}
           onToggle={() => toggle(it.id)}
+          whiteLabels={whiteLabels}
         />
       ))}
     </div>
@@ -282,7 +291,7 @@ function LayoutAccordion({
 // Hero row + condensed accordion list
 // ---------------------------------------------------------------------------
 
-function HeroRow({ item }: { item: StatItem }) {
+function HeroRow({ item, whiteLabels = false }: { item: StatItem; whiteLabels?: boolean }) {
   return (
     <div
       className="py-2.5 border-b last:border-0"
@@ -290,7 +299,7 @@ function HeroRow({ item }: { item: StatItem }) {
     >
       <div
         className="text-[10px] font-medium uppercase tracking-wider"
-        style={{ color: 'var(--text-dim)' }}
+        style={{ color: whiteLabels ? 'var(--text-h)' : 'var(--text-dim)' }}
       >
         {item.label}
       </div>
@@ -320,9 +329,11 @@ function HeroRow({ item }: { item: StatItem }) {
 function LayoutHero({
   items,
   defaultExpanded = false,
+  whiteLabels = false,
 }: {
   items: StatItem[];
   defaultExpanded?: boolean;
+  whiteLabels?: boolean;
 }) {
   const heroIds = new Set(['workforce']);
   const heroItems = items.filter((it) => heroIds.has(it.id));
@@ -330,10 +341,10 @@ function LayoutHero({
   return (
     <div>
       {heroItems.map((it) => (
-        <HeroRow key={it.id} item={it} />
+        <HeroRow key={it.id} item={it} whiteLabels={whiteLabels} />
       ))}
       <div className="mt-1">
-        <LayoutAccordion items={tailItems} defaultExpanded={defaultExpanded} />
+        <LayoutAccordion items={tailItems} defaultExpanded={defaultExpanded} whiteLabels={whiteLabels} />
       </div>
     </div>
   );
@@ -857,7 +868,7 @@ export function StatsAggregated(props: Props) {
         // back to a single column on mobile so neither half collapses.
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
           <div className="min-w-0">
-            <LayoutHero items={items} defaultExpanded={props.defaultExpanded} />
+            <LayoutHero items={items} defaultExpanded={props.defaultExpanded} whiteLabels={props.whiteLabels} />
           </div>
           <div className="min-w-0">
             <AnchorRankings

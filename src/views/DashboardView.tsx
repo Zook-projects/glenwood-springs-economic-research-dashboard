@@ -338,36 +338,6 @@ export function DashboardView({ data }: Props) {
           })}
         </nav>
 
-        {/* Filter group — docked at the bottom of the menu on desktop,
-            stacked below the chips on mobile. Hosts the same Mode /
-            Direction / ZIP controls that previously lived in the sticky
-            top filter header. */}
-        <div
-          className="md:mt-auto px-3 py-3 flex flex-col gap-3 border-t md:border-t"
-          style={{ borderColor: 'var(--panel-border)' }}
-        >
-          <div
-            className="text-[10px] font-semibold uppercase tracking-wider"
-            style={{ color: 'var(--text-dim)' }}
-          >
-            Filters
-          </div>
-          <ModeToggle
-            mode={mode}
-            onChange={setMode}
-            disabled={selectionKind === 'non-anchor'}
-            aggregate={selectionKind === 'aggregate'}
-          />
-          <DirectionToggle
-            value={directionFilter}
-            onChange={setDirectionFilter}
-          />
-          <ZipSelector
-            zips={zips}
-            selectedZip={selectedZip}
-            onSelectZip={handleSelectZip}
-          />
-        </div>
       </aside>
 
       {/* Main scrolling content. */}
@@ -392,12 +362,25 @@ export function DashboardView({ data }: Props) {
               }}
             >
               <h2
-                className="text-[10px] font-semibold uppercase tracking-wider mb-3"
-                style={{ color: 'var(--text-dim)' }}
+                className="text-base font-semibold uppercase tracking-wider mb-3"
+                style={{ color: 'var(--text-h)' }}
               >
-                Workforce, Jobs &amp; OD Flows
+                Workforce
               </h2>
-              <WorkforceAboutCard />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <WorkforceAboutCard />
+                <WorkforceFiltersCard
+                  mode={mode}
+                  onModeChange={setMode}
+                  modeDisabled={selectionKind === 'non-anchor'}
+                  modeAggregate={selectionKind === 'aggregate'}
+                  directionFilter={directionFilter}
+                  onDirectionChange={setDirectionFilter}
+                  zips={zips}
+                  selectedZip={selectedZip}
+                  onSelectZip={handleSelectZip}
+                />
+              </div>
               {selectedZip == null || selectedZip === 'ALL_OTHER' ? (
                 <StatsAggregated
                   flowsInbound={flowsInbound}
@@ -411,6 +394,7 @@ export function DashboardView({ data }: Props) {
                   driveDistance={driveDistance}
                   layout="side-by-side"
                   defaultExpanded
+                  whiteLabels
                 />
               ) : selectionKind === 'anchor' && perZipBlockData ? (
                 // Anchor view: 1/3 left column (totals + Workforce flows OD chart)
@@ -700,7 +684,7 @@ export function DashboardView({ data }: Props) {
 function WorkforceAboutCard() {
   return (
     <div
-      className="rounded-md p-3 flex flex-col gap-2 mb-3"
+      className="rounded-md p-3 flex flex-col gap-2"
       style={{
         background: 'rgba(255,255,255,0.03)',
         border: '1px solid var(--panel-border)',
@@ -775,6 +759,71 @@ function WorkforceAboutCard() {
           </span>
         </li>
       </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Filters card — sibling of WorkforceAboutCard inside the Workforce section.
+// Hosts the Mode + Direction toggles on the left and the Workplaces (anchor
+// ZIP chips) on the right. Replaces the sidebar filter dock so all filter
+// affordances live next to the data they scope.
+// ---------------------------------------------------------------------------
+function WorkforceFiltersCard({
+  mode,
+  onModeChange,
+  modeDisabled,
+  modeAggregate,
+  directionFilter,
+  onDirectionChange,
+  zips,
+  selectedZip,
+  onSelectZip,
+}: {
+  mode: Mode;
+  onModeChange: (m: Mode) => void;
+  modeDisabled: boolean;
+  modeAggregate: boolean;
+  directionFilter: DirectionFilter;
+  onDirectionChange: (d: DirectionFilter) => void;
+  zips: FlowData['zips'];
+  selectedZip: string | null;
+  onSelectZip: (z: string | null) => void;
+}) {
+  return (
+    <div
+      className="rounded-md p-3 grid grid-cols-1 md:grid-cols-2 gap-3"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--panel-border)',
+      }}
+    >
+      <div className="flex flex-col gap-3">
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--text-h)' }}
+        >
+          Filters
+        </div>
+        <ModeToggle
+          mode={mode}
+          onChange={onModeChange}
+          disabled={modeDisabled}
+          aggregate={modeAggregate}
+        />
+        <DirectionToggle
+          value={directionFilter}
+          onChange={onDirectionChange}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <ZipSelector
+          zips={zips}
+          selectedZip={selectedZip}
+          onSelectZip={onSelectZip}
+          hideSearch
+        />
+      </div>
     </div>
   );
 }

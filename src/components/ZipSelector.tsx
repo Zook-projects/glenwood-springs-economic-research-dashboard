@@ -9,9 +9,13 @@ interface Props {
   zips: ZipMeta[];
   selectedZip: string | null;
   onSelectZip: (zip: string | null) => void;
+  // When true, the type-ahead search input + dropdown are hidden so only
+  // the anchor-chip row renders. Used by the dashboard's inline filter card
+  // where space is tighter and the search is redundant with the chip list.
+  hideSearch?: boolean;
 }
 
-export function ZipSelector({ zips, selectedZip, onSelectZip }: Props) {
+export function ZipSelector({ zips, selectedZip, onSelectZip, hideSearch = false }: Props) {
   const [query, setQuery] = useState('');
   const anchorZips = useMemo(
     () => ANCHOR_ZIPS.map((z) => zips.find((x) => x.zip === z)).filter(Boolean) as ZipMeta[],
@@ -93,6 +97,7 @@ export function ZipSelector({ zips, selectedZip, onSelectZip }: Props) {
           );
         })}
       </div>
+      {!hideSearch && (
       <div className="relative pt-1">
         <input
           type="text"
@@ -149,6 +154,7 @@ export function ZipSelector({ zips, selectedZip, onSelectZip }: Props) {
           </ul>
         )}
       </div>
+      )}
     </div>
   );
 }
