@@ -728,6 +728,7 @@ function TopicCard({
   sparkline,
   stretch = false,
   large = false,
+  valueColumnLabel,
 }: {
   topic: ContextTopic;
   headlineLabel: string;
@@ -748,6 +749,10 @@ function TopicCard({
   // label/value text up so the dashboard's Commerce KPI card reads at
   // headline scale rather than the compact strip scale.
   large?: boolean;
+  // Overrides the default "Total" header on the first numeric column in
+  // the per-capita-aware layout. Commerce passes the active variant's
+  // full descriptor (e.g. "Gross Sales") so the card is self-describing.
+  valueColumnLabel?: string;
 }) {
   const allEmpty = rows.every((r) => r.value == null);
   // For the Dashboard's large Commerce KPI card, the variant toggle moves
@@ -760,11 +765,11 @@ function TopicCard({
   // gets the second column — the strip-size card is too narrow to fit
   // comfortably without truncating labels.
   const hasPerCapita = large && rows.some((r) => r.perCapitaValue !== undefined);
-  const valueChipColWidth = large ? 56 : 44;
-  const numericColMinWidth = large ? 130 : 100; // value + chip + gap
-  const labelTextSize = large ? 'text-sm' : 'text-[11px]';
-  const valueTextSize = large ? 'text-lg font-semibold' : 'text-[12px]';
-  const chipTextSize = large ? 'text-xs' : 'text-[10px]';
+  const valueChipColWidth = large ? 44 : 44;
+  const numericColMinWidth = large ? 108 : 100; // value + chip + gap
+  const labelTextSize = large ? 'text-[12px]' : 'text-[11px]';
+  const valueTextSize = large ? 'text-base font-semibold' : 'text-[12px]';
+  const chipTextSize = large ? 'text-[11px]' : 'text-[10px]';
   return (
     <div
       className={
@@ -829,13 +834,13 @@ function TopicCard({
           >
             <span />
             <span
-              className="text-[10px] uppercase tracking-wider text-right"
+              className={`${large ? 'text-[11px]' : 'text-[10px]'} uppercase tracking-wider text-right`}
               style={{ color: 'var(--text-dim)' }}
             >
-              Total
+              {valueColumnLabel ?? 'Total'}
             </span>
             <span
-              className="text-[10px] uppercase tracking-wider text-right"
+              className={`${large ? 'text-[11px]' : 'text-[10px]'} uppercase tracking-wider text-right`}
               style={{ color: 'var(--text-dim)' }}
             >
               Per Capita
@@ -882,29 +887,12 @@ function TopicCard({
                       : `${r.changePct >= 0 ? '+' : ''}${r.changePct.toFixed(1)}%`}
                   </span>
                 </div>
-                <div className="flex items-baseline justify-end gap-2">
+                <div className="flex items-baseline justify-end">
                   <span
                     className={`${valueTextSize} tnum`}
                     style={{ color: r.perCapitaValue ? 'var(--text-h)' : 'var(--text-dim)' }}
                   >
                     {r.perCapitaValue ?? '—'}
-                  </span>
-                  <span
-                    className={`${chipTextSize} tnum`}
-                    style={{
-                      color: 'var(--text-dim)',
-                      minWidth: valueChipColWidth,
-                      textAlign: 'right',
-                    }}
-                    title={
-                      r.perCapitaChangePct == null
-                        ? undefined
-                        : `${r.perCapitaChangePct >= 0 ? '+' : ''}${r.perCapitaChangePct.toFixed(2)}% per-capita vs. prior year`
-                    }
-                  >
-                    {r.perCapitaChangePct == null
-                      ? ''
-                      : `${r.perCapitaChangePct >= 0 ? '+' : ''}${r.perCapitaChangePct.toFixed(1)}%`}
                   </span>
                 </div>
               </li>
@@ -1175,6 +1163,9 @@ export function ContextCards({
             sparkline={sparkline}
             stretch
             large={topic === 'commerce' && largeCommerce}
+            valueColumnLabel={
+              topic === 'commerce' ? COMMERCE_VARIANT_LABEL[commerceVariant] : undefined
+            }
           />
         );
       })}
