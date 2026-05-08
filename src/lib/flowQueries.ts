@@ -10,6 +10,7 @@ import type {
   SegmentBucket,
   SegmentFilter,
   WageBucket,
+  WorkforceCountyFilter,
   ZipMeta,
 } from '../types/flow';
 import type {
@@ -94,6 +95,55 @@ export const INNER_ROARING_FORK_ANCHOR_ZIPS = [
 /** True when zip is one of the five inner Roaring Fork anchor workplaces. */
 export function isInnerRoaringForkAnchorZip(zip: string): boolean {
   return INNER_ROARING_FORK_ANCHOR_ZIPS.includes(zip);
+}
+
+/**
+ * County membership for each of the 11 anchor ZIPs. Drives the Workforce
+ * section's county filter. Anchors mapped to 'eagle' (Basalt) and any
+ * non-Garfield/Pitkin ZIPs are hidden from the chip row when the filter is
+ * set to Garfield or Pitkin, but reappear under 'all'. ZIP centroid is the
+ * source of truth even where a town spans a county line (e.g., Basalt
+ * straddles Eagle/Pitkin; the 81621 centroid is in Eagle County).
+ */
+export const ANCHOR_COUNTY: Record<string, 'garfield' | 'pitkin' | 'eagle' | 'mesa'> = {
+  '81601': 'garfield', // Glenwood Springs
+  '81611': 'pitkin',   // Aspen
+  '81615': 'pitkin',   // Snowmass Village
+  '81621': 'eagle',    // Basalt
+  '81623': 'garfield', // Carbondale
+  '81630': 'mesa',     // De Beque
+  '81635': 'garfield', // Parachute
+  '81647': 'garfield', // New Castle
+  '81650': 'garfield', // Rifle
+  '81652': 'garfield', // Silt
+  '81654': 'pitkin',   // Old Snowmass
+};
+
+/** True when the anchor ZIP belongs to the selected county filter. 'all' is
+ * always true. Non-anchor ZIPs return false except under 'all'. */
+export function isAnchorInCounty(zip: string, county: WorkforceCountyFilter): boolean {
+  if (county === 'all') return true;
+  return ANCHOR_COUNTY[zip] === county;
+}
+
+/**
+ * Restrict the FlowRow set to commutes whose anchor-side ZIP belongs to the
+ * selected county. Either endpoint qualifies — anchor↔anchor pairs survive
+ * when at least one anchor is in the county, and non-anchor partner ZIPs
+ * (residences in inbound flows, workplaces in outbound flows) are kept as
+ * long as the anchor end matches. When `county === 'all'` the input array
+ * is returned unchanged so consumers can rely on referential equality.
+ */
+export function filterFlowsByAnchorCounty(
+  flows: FlowRow[],
+  county: WorkforceCountyFilter,
+): FlowRow[] {
+  if (county === 'all') return flows;
+  return flows.filter((f) => {
+    const originCounty = ANCHOR_COUNTY[f.originZip];
+    const destCounty = ANCHOR_COUNTY[f.destZip];
+    return originCounty === county || destCounty === county;
+  });
 }
 
 /**

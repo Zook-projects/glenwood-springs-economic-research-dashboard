@@ -2,8 +2,8 @@
 // lets you select any ZIP in the dataset (workplace OR residence side).
 
 import { useMemo, useState } from 'react';
-import type { ZipMeta } from '../types/flow';
-import { ANCHOR_ZIPS } from '../lib/flowQueries';
+import type { WorkforceCountyFilter, ZipMeta } from '../types/flow';
+import { ANCHOR_ZIPS, isAnchorInCounty } from '../lib/flowQueries';
 
 interface Props {
   zips: ZipMeta[];
@@ -13,13 +13,36 @@ interface Props {
   // the anchor-chip row renders. Used by the dashboard's inline filter card
   // where space is tighter and the search is redundant with the chip list.
   hideSearch?: boolean;
+  // Optional county filter scoped to the chip row. When provided, the chip
+  // row narrows to the selected county's anchors and a county chip row
+  // renders directly below the workplace chip row. Defaults to 'all' / no
+  // filter when omitted, preserving existing callers (CommuteView's
+  // DashboardTile) without changes.
+  selectedCounty?: WorkforceCountyFilter;
+  onSelectCounty?: (county: WorkforceCountyFilter) => void;
 }
 
-export function ZipSelector({ zips, selectedZip, onSelectZip, hideSearch = false }: Props) {
+const COUNTY_OPTIONS: ReadonlyArray<{ key: WorkforceCountyFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'garfield', label: 'Garfield' },
+  { key: 'pitkin', label: 'Pitkin' },
+];
+
+export function ZipSelector({
+  zips,
+  selectedZip,
+  onSelectZip,
+  hideSearch = false,
+  selectedCounty = 'all',
+  onSelectCounty,
+}: Props) {
   const [query, setQuery] = useState('');
   const anchorZips = useMemo(
-    () => ANCHOR_ZIPS.map((z) => zips.find((x) => x.zip === z)).filter(Boolean) as ZipMeta[],
-    [zips],
+    () =>
+      ANCHOR_ZIPS.map((z) => zips.find((x) => x.zip === z))
+        .filter(Boolean)
+        .filter((z) => isAnchorInCounty((z as ZipMeta).zip, selectedCounty)) as ZipMeta[],
+    [zips, selectedCounty],
   );
 
   const queryLower = query.trim().toLowerCase();
@@ -97,6 +120,38 @@ export function ZipSelector({ zips, selectedZip, onSelectZip, hideSearch = false
           );
         })}
       </div>
+      {onSelectCounty && (
+        <div className="pt-1">
+          <label
+            className="block text-[10px] font-medium uppercase tracking-wider mb-1"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            County
+          </label>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Workforce county filter">
+            {COUNTY_OPTIONS.map((opt) => {
+              const active = selectedCounty === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  aria-pressed={active}
+                  aria-label={`Filter workplaces by ${opt.label} county${active ? ' (selected)' : ''}`}
+                  onClick={() => onSelectCounty(opt.key)}
+                  className="text-[11px] px-2 py-1 rounded-md border transition-colors focus:outline-none focus-visible:ring-1"
+                  style={{
+                    background: active ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
+                    color: active ? '#1a1207' : 'var(--text-h)',
+                    borderColor: active ? 'var(--accent)' : 'var(--panel-border)',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {!hideSearch && (
       <div className="relative pt-1">
         <input

@@ -19,6 +19,7 @@ import type {
   ContextTopic,
   ContextEnvelope,
   ContextTrend,
+  TrendPoint,
 } from '../types/context';
 import { CONTEXT_TOPIC_LABELS } from '../types/context';
 import { getPlaceWithRails } from '../lib/contextQueries';
@@ -283,6 +284,14 @@ interface Row {
   // complete year vs. the prior year on the active variant. Null/undefined
   // suppresses the chip.
   changePct?: number | null;
+  // Optional per-capita value (formatted, e.g. "$28,415"). Commerce-only.
+  // When present (even as null), the row is treated as a per-capita-aware
+  // row and TopicCard renders the second column. Undefined preserves the
+  // legacy single-column layout for non-commerce topics.
+  perCapitaValue?: string | null;
+  // YoY % change of the per-capita ratio (sales_t / pop_t vs. sales_t-1 /
+  // pop_t-1). Null suppresses the chip.
+  perCapitaChangePct?: number | null;
 }
 
 /**
@@ -350,6 +359,73 @@ function commerceYoYPct(
   return ((last - prior) / prior) * 100;
 }
 
+/**
+ * Per-capita commerce ratio for the latest annual commerce value over the
+ * population trend point with the matching year. Falls back to the
+ * demographics latest population when an exact-year match is unavailable
+ * (commerce data extends past ACS vintage in most years). Returns null
+ * when either value is missing or population is non-positive.
+ */
+function commercePerCapita(
+  commerceTrend: ContextTrend | undefined,
+  measure: 'gross' | 'retail' | 'taxable',
+  populationTrend: TrendPoint[] | undefined,
+  populationLatest: number | null,
+): number | null {
+  const annual = (commerceTrend as CommerceTrend | undefined)?.annual;
+  if (!annual || annual.length === 0) return null;
+  const last = annual[annual.length - 1];
+  const sales = last[measure];
+  if (typeof sales !== 'number' || !isFinite(sales)) return null;
+  const popAtYear = populationTrend?.find((p) => p.year === last.year)?.value;
+  const pop = popAtYear ?? populationLatest;
+  if (pop == null || !isFinite(pop) || pop <= 0) return null;
+  return sales / pop;
+}
+
+/**
+ * YoY % change of the per-capita ratio: compares (sales_t / pop_t) vs.
+ * (sales_t-1 / pop_t-1). Requires year-aligned population for both years
+ * (falls through to null otherwise) so the YoY chip never mixes vintages.
+ */
+function commercePerCapitaYoYPct(
+  commerceTrend: ContextTrend | undefined,
+  measure: 'gross' | 'retail' | 'taxable',
+  populationTrend: TrendPoint[] | undefined,
+): number | null {
+  const annual = (commerceTrend as CommerceTrend | undefined)?.annual;
+  if (!annual || annual.length < 2) return null;
+  const last = annual[annual.length - 1];
+  const prior = annual[annual.length - 2];
+  const popLast = populationTrend?.find((p) => p.year === last.year)?.value;
+  const popPrior = populationTrend?.find((p) => p.year === prior.year)?.value;
+  if (popLast == null || popPrior == null || popLast <= 0 || popPrior <= 0) return null;
+  const salesLast = last[measure];
+  const salesPrior = prior[measure];
+  if (
+    typeof salesLast !== 'number' ||
+    typeof salesPrior !== 'number' ||
+    !isFinite(salesLast) ||
+    !isFinite(salesPrior)
+  ) {
+    return null;
+  }
+  const ratioLast = salesLast / popLast;
+  const ratioPrior = salesPrior / popPrior;
+  if (!isFinite(ratioLast) || !isFinite(ratioPrior) || ratioPrior === 0) return null;
+  return ((ratioLast - ratioPrior) / ratioPrior) * 100;
+}
+
+/**
+ * Format a per-capita commerce dollar value. Per-capita commerce lands
+ * in the thousands–tens-of-thousands range (e.g. ~$28,000 for a small
+ * city), so a comma-grouped integer is the right scale — billion/million
+ * compact formatting would erase resolution.
+ */
+function fmtPerCapita(v: number): string {
+  return `$${fmtInt(Math.round(v))}`;
+}
+
 function buildRows(
   env: ContextEnvelope,
   topic: ContextTopic,
@@ -362,21 +438,71 @@ function buildRows(
   const fmt = FORMATTERS[topic];
   const isCommerce = topic === 'commerce';
   const commerceMeasure = COMMERCE_VARIANT_TREND_KEY[commerceVariant];
+  // Demographics envelope is the per-capita denominator source. Pulled
+  // outside the per-row helper so we don't repeat the lookup, and tagged
+  // optional because callers built before the demographics topic existed
+  // could in theory pass a partial bundle (the public ContextBundle type
+  // requires it, but defensive null-handling keeps the per-capita column
+  // graceful if a deployment ever ships without the file).
+  const demoEnv = isCommerce ? bundle.demographics : null;
 
   // Helper to format a single value with the topic's formatter, or fall
   // back to a dimmed em-dash placeholder. For the Commerce card it also
   // pulls the matching trend's YoY % onto the row so the card can render
-  // the change chip beside the value.
+  // the change chip beside the value, and computes the per-capita ratio
+  // (and its YoY) using the matching demographics geography.
   const fmtRow = (
     label: string,
     latest: ContextLatest | null,
     trend?: ContextTrend,
+    populationTrend?: TrendPoint[],
+    populationLatest?: number | null,
   ): Row => {
     const v = readNumber(latest, key);
     const row: Row = { label, value: v == null ? null : fmt(v) };
-    if (isCommerce) row.changePct = commerceYoYPct(trend, commerceMeasure);
+    if (isCommerce) {
+      row.changePct = commerceYoYPct(trend, commerceMeasure);
+      const perCap = commercePerCapita(
+        trend,
+        commerceMeasure,
+        populationTrend,
+        populationLatest ?? null,
+      );
+      // Mark the row as per-capita-aware regardless of whether the lookup
+      // resolved — a null perCapitaValue still triggers the second column
+      // in TopicCard so missing rows render an em-dash and column
+      // alignment stays clean.
+      row.perCapitaValue = perCap == null ? null : fmtPerCapita(perCap);
+      row.perCapitaChangePct = commercePerCapitaYoYPct(
+        trend,
+        commerceMeasure,
+        populationTrend,
+      );
+    }
     return row;
   };
+
+  // Resolve the demographics population trend + latest for a given
+  // geography. Returns undefined-friendly values so callers can spread
+  // them straight into fmtRow.
+  const popForPlace = (zip: string) => {
+    const p = demoEnv?.places.find((x) => x.zip === zip);
+    return {
+      trend: p?.trend?.population as TrendPoint[] | undefined,
+      latest: readNumber(p?.latest ?? null, 'population'),
+    };
+  };
+  const popForCounty = (geoid: string) => {
+    const c = demoEnv?.counties.find((x) => x.geoid === geoid);
+    return {
+      trend: c?.trend?.population as TrendPoint[] | undefined,
+      latest: readNumber(c?.latest ?? null, 'population'),
+    };
+  };
+  const popForState = () => ({
+    trend: demoEnv?.state?.trend?.population as TrendPoint[] | undefined,
+    latest: readNumber(demoEnv?.state?.latest ?? null, 'population'),
+  });
 
   if (selectedZip) {
     const { place, county, state } = getPlaceWithRails(bundle, topic, selectedZip);
@@ -393,10 +519,17 @@ function buildRows(
           placeLabel = `${place.name} (${(share * 100).toFixed(0)}% of ${county.name.replace(/ County$/, '')})`;
         }
       }
-      rows.push(fmtRow(placeLabel, place.latest, place.trend));
+      const pop = isCommerce ? popForPlace(place.zip) : { trend: undefined, latest: null };
+      rows.push(fmtRow(placeLabel, place.latest, place.trend, pop.trend, pop.latest));
     }
-    if (county) rows.push(fmtRow(county.name, county.latest, county.trend));
-    if (state) rows.push(fmtRow(state.name, state.latest, state.trend));
+    if (county) {
+      const pop = isCommerce ? popForCounty(county.geoid) : { trend: undefined, latest: null };
+      rows.push(fmtRow(county.name, county.latest, county.trend, pop.trend, pop.latest));
+    }
+    if (state) {
+      const pop = isCommerce ? popForState() : { trend: undefined, latest: null };
+      rows.push(fmtRow(state.name, state.latest, state.trend, pop.trend, pop.latest));
+    }
     return rows;
   }
 
@@ -407,9 +540,15 @@ function buildRows(
   const rows: Row[] = [];
   for (const fips of AGGREGATE_COUNTY_ORDER) {
     const c = env.counties.find((x) => x.geoid === fips);
-    if (c) rows.push(fmtRow(c.name, c.latest, c.trend));
+    if (c) {
+      const pop = isCommerce ? popForCounty(c.geoid) : { trend: undefined, latest: null };
+      rows.push(fmtRow(c.name, c.latest, c.trend, pop.trend, pop.latest));
+    }
   }
-  if (env.state) rows.push(fmtRow(env.state.name, env.state.latest, env.state.trend));
+  if (env.state) {
+    const pop = isCommerce ? popForState() : { trend: undefined, latest: null };
+    rows.push(fmtRow(env.state.name, env.state.latest, env.state.trend, pop.trend, pop.latest));
+  }
   return rows;
 }
 
@@ -616,6 +755,16 @@ function TopicCard({
   // primary control. All other cards keep the inline toggle row below
   // the headline label.
   const cornerToggle = topic === 'commerce' && large && variantToggle;
+  // Two-column mode: any row carrying a perCapitaValue field (even null)
+  // marks the card as per-capita-aware. Only the large dashboard variant
+  // gets the second column — the strip-size card is too narrow to fit
+  // comfortably without truncating labels.
+  const hasPerCapita = large && rows.some((r) => r.perCapitaValue !== undefined);
+  const valueChipColWidth = large ? 56 : 44;
+  const numericColMinWidth = large ? 130 : 100; // value + chip + gap
+  const labelTextSize = large ? 'text-sm' : 'text-[11px]';
+  const valueTextSize = large ? 'text-lg font-semibold' : 'text-[12px]';
+  const chipTextSize = large ? 'text-xs' : 'text-[10px]';
   return (
     <div
       className={
@@ -667,6 +816,101 @@ function TopicCard({
         >
           no data published
         </div>
+      ) : hasPerCapita ? (
+        // Per-capita-aware layout: 3-column grid (label · total+yoy ·
+        // per-capita+yoy). Column headers render once above the rows so
+        // it's clear which column is which.
+        <div className={`flex flex-col ${large ? 'gap-1.5 mt-2' : 'gap-0.5 mt-0.5'}`}>
+          <div
+            className="grid items-baseline gap-3"
+            style={{
+              gridTemplateColumns: `minmax(0, 1fr) minmax(${numericColMinWidth}px, max-content) minmax(${numericColMinWidth}px, max-content)`,
+            }}
+          >
+            <span />
+            <span
+              className="text-[10px] uppercase tracking-wider text-right"
+              style={{ color: 'var(--text-dim)' }}
+            >
+              Total
+            </span>
+            <span
+              className="text-[10px] uppercase tracking-wider text-right"
+              style={{ color: 'var(--text-dim)' }}
+            >
+              Per Capita
+            </span>
+          </div>
+          <ul className={`flex flex-col ${large ? 'gap-1.5' : 'gap-0.5'}`} role="list">
+            {rows.map((r) => (
+              <li
+                key={r.label}
+                className="grid items-baseline gap-3"
+                style={{
+                  gridTemplateColumns: `minmax(0, 1fr) minmax(${numericColMinWidth}px, max-content) minmax(${numericColMinWidth}px, max-content)`,
+                }}
+              >
+                <span
+                  className={`${labelTextSize} truncate`}
+                  style={{ color: 'var(--text-dim)' }}
+                  title={r.label}
+                >
+                  {r.label}
+                </span>
+                <div className="flex items-baseline justify-end gap-2">
+                  <span
+                    className={`${valueTextSize} tnum`}
+                    style={{ color: r.value ? 'var(--text-h)' : 'var(--text-dim)' }}
+                  >
+                    {r.value ?? '—'}
+                  </span>
+                  <span
+                    className={`${chipTextSize} tnum`}
+                    style={{
+                      color: 'var(--text-dim)',
+                      minWidth: valueChipColWidth,
+                      textAlign: 'right',
+                    }}
+                    title={
+                      r.changePct == null
+                        ? undefined
+                        : `${r.changePct >= 0 ? '+' : ''}${r.changePct.toFixed(2)}% vs. prior year`
+                    }
+                  >
+                    {r.changePct == null
+                      ? ''
+                      : `${r.changePct >= 0 ? '+' : ''}${r.changePct.toFixed(1)}%`}
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-end gap-2">
+                  <span
+                    className={`${valueTextSize} tnum`}
+                    style={{ color: r.perCapitaValue ? 'var(--text-h)' : 'var(--text-dim)' }}
+                  >
+                    {r.perCapitaValue ?? '—'}
+                  </span>
+                  <span
+                    className={`${chipTextSize} tnum`}
+                    style={{
+                      color: 'var(--text-dim)',
+                      minWidth: valueChipColWidth,
+                      textAlign: 'right',
+                    }}
+                    title={
+                      r.perCapitaChangePct == null
+                        ? undefined
+                        : `${r.perCapitaChangePct >= 0 ? '+' : ''}${r.perCapitaChangePct.toFixed(2)}% per-capita vs. prior year`
+                    }
+                  >
+                    {r.perCapitaChangePct == null
+                      ? ''
+                      : `${r.perCapitaChangePct >= 0 ? '+' : ''}${r.perCapitaChangePct.toFixed(1)}%`}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
         <ul className={`flex flex-col ${large ? 'gap-1.5 mt-2' : 'gap-0.5 mt-0.5'}`}>
           {rows.map((r) => (
@@ -675,7 +919,7 @@ function TopicCard({
               className="flex items-baseline justify-between gap-2"
             >
               <span
-                className={`${large ? 'text-sm' : 'text-[11px]'} truncate`}
+                className={`${labelTextSize} truncate`}
                 style={{ color: 'var(--text-dim)' }}
                 title={r.label}
               >
@@ -683,7 +927,7 @@ function TopicCard({
               </span>
               <div className="flex items-baseline gap-2">
                 <span
-                  className={`${large ? 'text-lg font-semibold' : 'text-[12px]'} tnum`}
+                  className={`${valueTextSize} tnum`}
                   style={{
                     color: r.value ? 'var(--text-h)' : 'var(--text-dim)',
                   }}
@@ -692,13 +936,13 @@ function TopicCard({
                 </span>
                 {r.changePct != null && (
                   <span
-                    className={`${large ? 'text-xs' : 'text-[10px]'} tnum`}
+                    className={`${chipTextSize} tnum`}
                     style={{
                       // Match the dimmed grey used by the pie-chart legend's
                       // percentages so the YoY chip reads as secondary
                       // metadata rather than competing with the headline.
                       color: 'var(--text-dim)',
-                      minWidth: large ? 56 : 44,
+                      minWidth: valueChipColWidth,
                       textAlign: 'right',
                     }}
                     title={`${r.changePct >= 0 ? '+' : ''}${r.changePct.toFixed(2)}% vs. prior year`}

@@ -20,10 +20,13 @@ import type {
   FlowRow,
   Mode,
   SegmentFilter,
+  WorkforceCountyFilter,
 } from '../types/flow';
 import {
+  ANCHOR_COUNTY,
   applySegmentFilter,
   filterByDirection,
+  filterFlowsByAnchorCounty,
   filterForSelection,
   isAnchorZip,
 } from '../lib/flowQueries';
@@ -62,9 +65,9 @@ const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
 
 export function DashboardView({ data }: Props) {
   const {
-    flowsInbound,
-    flowsOutbound,
-    flowsRegional,
+    flowsInbound: rawFlowsInbound,
+    flowsOutbound: rawFlowsOutbound,
+    flowsRegional: rawFlowsRegional,
     zips,
     corridorIndex,
     flowIndex,
@@ -88,6 +91,28 @@ export function DashboardView({ data }: Props) {
     axis: 'all',
     buckets: [],
   });
+  // Workforce-section county filter. Scopes the anchor chip row and the
+  // flow data feeding all Workforce panels (StatsAggregated rankings,
+  // StatsForZip cards, RAC/WAC strip, Flow Data tables) to commutes
+  // whose anchor-side ZIP belongs to the selected county. 'all' = no
+  // filter (default).
+  const [workforceCounty, setWorkforceCounty] = useState<WorkforceCountyFilter>('all');
+
+  // Apply the county filter at the source so every downstream derivation
+  // (directionFiltered* memos, top-corridor calculations, Stats panels)
+  // sees the narrowed flow set automatically.
+  const flowsInbound = useMemo(
+    () => filterFlowsByAnchorCounty(rawFlowsInbound, workforceCounty),
+    [rawFlowsInbound, workforceCounty],
+  );
+  const flowsOutbound = useMemo(
+    () => filterFlowsByAnchorCounty(rawFlowsOutbound, workforceCounty),
+    [rawFlowsOutbound, workforceCounty],
+  );
+  const flowsRegional = useMemo(
+    () => filterFlowsByAnchorCounty(rawFlowsRegional, workforceCounty),
+    [rawFlowsRegional, workforceCounty],
+  );
 
   // Active menu item — driven by the IntersectionObserver below. Clicking
   // a menu item also sets this directly so the highlight responds before
@@ -249,6 +274,19 @@ export function DashboardView({ data }: Props) {
 
   const handleResetSelection = () => handleSelectZip(null);
 
+  // Auto-clear the selected anchor (and any partner / non-anchor bundle
+  // hanging off it) when the county filter no longer covers it. Keeps the
+  // chip row and downstream stats consistent with the visible chip set.
+  useEffect(() => {
+    if (workforceCounty === 'all') return;
+    if (!selectedZip || selectedZip === 'ALL_OTHER') return;
+    const anchorCounty = ANCHOR_COUNTY[selectedZip];
+    if (anchorCounty === workforceCounty) return;
+    setSelectedZip(null);
+    setSelectedPartner(null);
+    setNonAnchorBundle(null);
+  }, [workforceCounty, selectedZip]);
+
   // ----- Section refs + scroll-spy ----------------------------------------
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Record<SectionId, HTMLElement | null>>({
@@ -385,6 +423,8 @@ export function DashboardView({ data }: Props) {
                   zips={zips}
                   selectedZip={selectedZip}
                   onSelectZip={handleSelectZip}
+                  workforceCounty={workforceCounty}
+                  onWorkforceCountyChange={setWorkforceCounty}
                 />
               </div>
               {selectedZip == null || selectedZip === 'ALL_OTHER' ? (
@@ -617,7 +657,7 @@ export function DashboardView({ data }: Props) {
                 <div className="flex flex-wrap gap-3 min-w-0">
                   <ContextCards
                     bundle={contextBundle}
-                    selectedZip={selectedZip}
+                    selectedZip={commerceFocusZip ?? selectedZip}
                     racFile={racFile}
                     wacFile={wacFile}
                     odSummary={odSummary}
@@ -785,6 +825,8 @@ function WorkforceFiltersCard({
   zips,
   selectedZip,
   onSelectZip,
+  workforceCounty,
+  onWorkforceCountyChange,
 }: {
   mode: Mode;
   onModeChange: (m: Mode) => void;
@@ -795,6 +837,8 @@ function WorkforceFiltersCard({
   zips: FlowData['zips'];
   selectedZip: string | null;
   onSelectZip: (z: string | null) => void;
+  workforceCounty: WorkforceCountyFilter;
+  onWorkforceCountyChange: (c: WorkforceCountyFilter) => void;
 }) {
   return (
     <div
@@ -828,6 +872,8 @@ function WorkforceFiltersCard({
           selectedZip={selectedZip}
           onSelectZip={onSelectZip}
           hideSearch
+          selectedCounty={workforceCounty}
+          onSelectCounty={onWorkforceCountyChange}
         />
       </div>
     </div>
