@@ -47,6 +47,7 @@ import {
 } from '../components/BottomCardStrip';
 import { FlowDataTables } from '../components/dashboard/FlowDataTables';
 import { HousingMarketSection } from '../components/dashboard/HousingMarketSection';
+import { DemographicsSection } from '../components/dashboard/DemographicsSection';
 import { CommerceTimeSeriesChart } from '../components/dashboard/CommerceTimeSeriesChart';
 import { CommerceDataSetTile } from '../components/dashboard/CommerceDataSetTile';
 
@@ -595,7 +596,11 @@ export function DashboardView({ data }: Props) {
 
           </section>
 
-          {/* Section — Demographics: population + workforce flows + education. */}
+          {/* Section — Demographics: full ACS panel modeled on Housing.
+              Surfaces what `demographics.json` and `education.json` already
+              publish but the prior ContextCards row was hiding — population
+              + income trends, age cohort distribution + aging trajectory,
+              race composition + Hispanic share, household composition. */}
           <section
             id="demographics"
             ref={setSectionRef('demographics')}
@@ -611,16 +616,10 @@ export function DashboardView({ data }: Props) {
             >
               Demographics
             </h2>
-            <div className="flex flex-wrap gap-3">
-              <ContextCards
-                bundle={contextBundle}
-                selectedZip={selectedZip}
-                racFile={racFile}
-                wacFile={wacFile}
-                odSummary={odSummary}
-                topics={['demographics', 'employment', 'education']}
-              />
-            </div>
+            <DemographicsSection
+              bundle={contextBundle}
+              selectedZip={selectedZip}
+            />
           </section>
 
           {/* Section — Commerce: 2-column grid. Left = real timeseries chart
