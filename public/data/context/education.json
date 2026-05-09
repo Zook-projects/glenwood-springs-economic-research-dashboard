@@ -10,7 +10,7 @@
       "agency": "U.S. Census Bureau",
       "dataset": "ACS 5-Year Subject Tables (S1501)",
       "endpoint": "https://api.census.gov/data/2024/acs/acs5/subject",
-      "lastPulled": "2026-05-07"
+      "lastPulled": "2026-05-09"
     }
   ],
   "state": {

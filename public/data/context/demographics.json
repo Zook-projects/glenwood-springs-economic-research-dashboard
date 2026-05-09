@@ -10,7 +10,7 @@
       "agency": "U.S. Census Bureau",
       "dataset": "American Community Survey 5-Year Estimates",
       "endpoint": "https://api.census.gov/data/2024/acs/acs5",
-      "lastPulled": "2026-05-07"
+      "lastPulled": "2026-05-09"
     }
   ],
   "state": {

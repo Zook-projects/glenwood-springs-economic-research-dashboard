@@ -140,3 +140,107 @@ export const CONTEXT_TOPIC_LABELS: Record<ContextTopic, string> = {
   commerce: 'Commerce',
   tourism: 'Tourism',
 };
+
+// ---------------------------------------------------------------------------
+// Economic Research bundle — national-only, separate from ContextBundle.
+//
+// CES (and the future BLS/BEA national datasets that will share this section)
+// publish at the U.S. national tier only — no place / county / state triple.
+// Rather than warp ContextEnvelope, this section uses a parallel envelope.
+// ---------------------------------------------------------------------------
+
+// Age cohorts published by BLS CES Table 1300 (Age of reference person).
+export type CesAgeCohort =
+  | 'u25'
+  | 'a25_34'
+  | 'a35_44'
+  | 'a45_54'
+  | 'a55_64'
+  | 'a65_74'
+  | 'a75plus';
+
+export const CES_AGE_COHORT_ORDER: CesAgeCohort[] = [
+  'u25',
+  'a25_34',
+  'a35_44',
+  'a45_54',
+  'a55_64',
+  'a65_74',
+  'a75plus',
+];
+
+export const CES_AGE_LABELS: Record<CesAgeCohort, string> = {
+  u25: 'Under 25',
+  a25_34: '25 – 34',
+  a35_44: '35 – 44',
+  a45_54: '45 – 54',
+  a55_64: '55 – 64',
+  a65_74: '65 – 74',
+  a75plus: '75 +',
+};
+
+// One snapshot row for a single category × age-cohort cell. USD.
+export type CesCategoryValues = Record<CesAgeCohort, number | null>;
+
+// CES Table 1300 surfaces three category groups; we render them as three rows.
+export interface CesIncomeBlock {
+  wagesBusiness: CesCategoryValues;
+  socSecRetirement: CesCategoryValues;
+  dividendsInterestRent: CesCategoryValues;
+}
+
+export interface CesIncomeTaxBlock {
+  federal: CesCategoryValues;
+  stateLocal: CesCategoryValues;
+}
+
+export interface CesSpendingBlock {
+  food: CesCategoryValues;
+  housing: CesCategoryValues;
+  transportation: CesCategoryValues;
+  healthcare: CesCategoryValues;
+  entertainment: CesCategoryValues;
+  insurancePensions: CesCategoryValues;
+  other: CesCategoryValues;
+}
+
+export interface CesLatest {
+  year: number;
+  income: CesIncomeBlock;
+  incomeTax: CesIncomeTaxBlock;
+  spending: CesSpendingBlock;
+}
+
+// One trend point per category × cohort × year. Stored flat so the renderer
+// can pivot to per-cohort or per-category easily.
+export interface CesTrendPoint {
+  year: number;
+  cohort: CesAgeCohort;
+  value: number | null;
+}
+
+// Trend bag keyed by dotted category path, e.g. "income.wagesBusiness".
+export type CesTrend = Record<string, CesTrendPoint[]>;
+
+export interface CesBlock {
+  source: ContextSource;
+  vintageRange: { start: number; end: number };
+  latest: CesLatest;
+  trend: CesTrend;
+  // Set true when `latest` and `trend` are seeded illustrative values rather
+  // than parsed from a real BLS XLSX drop. Surfaces a UI badge on the about
+  // tile so readers know the values are placeholder until the real source
+  // file is dropped under data/context-cache/bls/cex/.
+  seeded?: boolean;
+}
+
+export interface EconomicEnvelope {
+  geography: 'us-national';
+  ces: CesBlock | null;
+  // Future siblings:
+  //   bea?: BeaPersonalIncomeBlock | null;
+  //   qcewNational?: QcewNationalBlock | null;
+  //   lausNational?: LausNationalBlock | null;
+}
+
+export type EconomicBundle = EconomicEnvelope;

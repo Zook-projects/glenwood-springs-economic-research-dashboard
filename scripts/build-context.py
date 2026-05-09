@@ -112,6 +112,27 @@ def main() -> int:
         print(coverage_table(env), file=sys.stderr)
         write_topic_json(env, OUT_DIR / f"{topic}.json")
 
+    # Extra topics that don't follow the place/county/state ContextEnvelope
+    # shape — national-only datasets that the dashboard's Economic Research
+    # section consumes via a separate wire format. Bypass validate_envelope
+    # because the schema deliberately omits state/counties/places arrays.
+    EXTRA_TOPICS: list[tuple[str, str]] = [("economic", "build_economic")]
+    for topic, builder_name in EXTRA_TOPICS:
+        try:
+            mod = __import__(
+                f"context_builders.{topic}",
+                fromlist=[builder_name],
+            )
+            env = getattr(mod, builder_name)()
+        except Exception as e:
+            print(
+                f"  {topic:<14} (skipped — {type(e).__name__}: {e})",
+                file=sys.stderr,
+            )
+            env = {"geography": "us-national", topic[:3] if topic == "economic" else topic: None}
+        write_topic_json(env, OUT_DIR / f"{topic}.json")
+        print(f"  {topic:<14} ✓ → {topic}.json", file=sys.stderr)
+
     print("", file=sys.stderr)
     if any(all_warnings.values()):
         print("Validation warnings:", file=sys.stderr)

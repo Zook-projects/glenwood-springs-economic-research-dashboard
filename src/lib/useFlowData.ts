@@ -14,7 +14,7 @@ import type {
   ZipMeta,
 } from '../types/flow';
 import type { OdBlocksFile, OdSummaryFile, RacFile, WacFile } from '../types/lodes';
-import type { ContextBundle, ContextEnvelope, ContextTopic } from '../types/context';
+import type { ContextBundle, ContextEnvelope, ContextTopic, EconomicBundle } from '../types/context';
 import {
   buildCorridorFlowIndex,
   indexCorridors,
@@ -46,6 +46,7 @@ export interface FlowData {
   passThrough: PassThroughFile | null;
   odBlocks: OdBlocksFile | null;
   contextBundle: ContextBundle | null;
+  economicBundle: EconomicBundle | null;
 }
 
 export interface UseFlowDataResult {
@@ -75,6 +76,7 @@ export function useFlowData(): UseFlowDataResult {
   const [passThrough, setPassThrough] = useState<PassThroughFile | null>(null);
   const [odBlocks, setOdBlocks] = useState<OdBlocksFile | null>(null);
   const [contextBundle, setContextBundle] = useState<ContextBundle | null>(null);
+  const [economicBundle, setEconomicBundle] = useState<EconomicBundle | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
   // Main bundle — flows, ZIP metadata, corridor graph, RAC/WAC/OD plus three
@@ -182,6 +184,23 @@ export function useFlowData(): UseFlowDataResult {
     };
   }, []);
 
+  // Economic Research bundle — national-only datasets (CES today; BEA /
+  // QCEW national / LAUS national in the future). Separate envelope shape
+  // from ContextBundle because there is no place/county/state triple.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${DATA_BASE}/context/economic.json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((env: EconomicBundle | null) => {
+        if (cancelled) return;
+        setEconomicBundle(env);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Regional flow union — deduped union of inbound + outbound. Powers the
   // synthetic 'regional' mode. Lifted out of CommuteView.tsx:491–494 so both
   // views consume the same precomputed array.
@@ -234,6 +253,7 @@ export function useFlowData(): UseFlowDataResult {
         passThrough,
         odBlocks,
         contextBundle,
+        economicBundle,
       }
     : null;
 

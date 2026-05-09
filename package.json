@@ -13,6 +13,7 @@
     "fetch:context:housing": "python3 scripts/fetch-context-housing.py",
     "fetch:context:tax": "python3 scripts/fetch-context-tax.py",
     "fetch:context:tourism": "python3 scripts/fetch-context-tourism.py",
+    "fetch:context:economic": "python3 scripts/fetch-context-economic.py",
     "build:context": "python3 scripts/build-context.py"
   },
   "dependencies": {

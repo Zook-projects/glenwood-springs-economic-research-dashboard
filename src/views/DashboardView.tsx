@@ -50,17 +50,24 @@ import { HousingMarketSection } from '../components/dashboard/HousingMarketSecti
 import { DemographicsSection } from '../components/dashboard/DemographicsSection';
 import { CommerceTimeSeriesChart } from '../components/dashboard/CommerceTimeSeriesChart';
 import { CommerceDataSetTile } from '../components/dashboard/CommerceDataSetTile';
+import { EconomicResearchSection } from '../components/dashboard/EconomicResearchSection';
 
 interface Props {
   data: FlowData;
 }
 
-type SectionId = 'workforce' | 'demographics' | 'commerce' | 'housing';
+type SectionId =
+  | 'workforce'
+  | 'demographics'
+  | 'commerce'
+  | 'economic'
+  | 'housing';
 
 const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
   { id: 'workforce', label: 'Workforce' },
   { id: 'demographics', label: 'Demographics' },
   { id: 'commerce', label: 'Commerce' },
+  { id: 'economic', label: 'Economic Research' },
   { id: 'housing', label: 'Housing' },
 ];
 
@@ -78,6 +85,7 @@ export function DashboardView({ data }: Props) {
     driveDistance,
     passThrough,
     contextBundle,
+    economicBundle,
   } = data;
 
   // ----- Filter state (independent of CommuteView) ------------------------
@@ -294,6 +302,7 @@ export function DashboardView({ data }: Props) {
     workforce: null,
     demographics: null,
     commerce: null,
+    economic: null,
     housing: null,
   });
 
@@ -692,6 +701,28 @@ export function DashboardView({ data }: Props) {
                 </div>
               </div>
             </div>
+          </section>
+
+          {/* Section — Economic Research: national-only datasets framing
+              the long-arc forces shaping local ED strategy. First sub-block
+              is BLS CES Table 1300 (income / income tax / spending by age
+              cohort) per the NWCCOG Economic Summit framing. */}
+          <section
+            id="economic"
+            ref={setSectionRef('economic')}
+            className="scroll-mt-4 rounded-md p-3"
+            style={{
+              background: 'var(--panel-surface)',
+              border: '1px solid var(--panel-border)',
+            }}
+          >
+            <h2
+              className="text-base font-semibold uppercase tracking-wider mb-3"
+              style={{ color: 'var(--text-h)' }}
+            >
+              Economic Research
+            </h2>
+            <EconomicResearchSection bundle={economicBundle} />
           </section>
 
           {/* Section — Housing Market: full Zillow ZHVI panel (headline stats,

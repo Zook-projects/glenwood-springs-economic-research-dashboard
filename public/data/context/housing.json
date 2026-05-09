@@ -10,21 +10,21 @@
       "agency": "U.S. Census Bureau",
       "dataset": "ACS 5-Year Estimates (B25 series)",
       "endpoint": "https://api.census.gov/data/2024/acs/acs5",
-      "lastPulled": "2026-05-07"
+      "lastPulled": "2026-05-09"
     },
     {
       "id": "ZILLOW",
       "agency": "Zillow Research",
       "dataset": "ZHVI / ZORI",
       "endpoint": "https://www.zillow.com/research/data/",
-      "lastPulled": "2026-05-07"
+      "lastPulled": "2026-05-09"
     },
     {
       "id": "HUD_FMR",
       "agency": "U.S. Department of Housing and Urban Development",
       "dataset": "Fair Market Rents",
       "endpoint": "https://www.huduser.gov/hudapi/public/fmr",
-      "lastPulled": "2026-05-07"
+      "lastPulled": "2026-05-09"
     }
   ],
   "state": {
