@@ -19,7 +19,7 @@
 
 import { useMemo, useState } from 'react';
 import { line as d3Line } from 'd3-shape';
-import { scaleLinear, scaleBand } from 'd3-scale';
+import { scaleLinear } from 'd3-scale';
 import type {
   ContextBundle,
   ContextEnvelope,
