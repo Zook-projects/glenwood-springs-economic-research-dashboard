@@ -20,18 +20,17 @@ STATE_FIPS: str = "08"
 STATE_NAME: str = "Colorado"
 
 # ---------------------------------------------------------------------------
-# Counties — 4 counties touching the 11 anchor places.
-# Garfield holds 7 anchors, Pitkin holds 4. Eagle and Mesa border the study
-# area (Eagle covers Basalt's eastern half, Mesa covers De Beque's western
-# tail). Both border counties are included so the regional context picks up
-# the full economic shed.
+# Counties — 3 counties touching the 11 anchor places.
+# Garfield holds 7 anchors, Pitkin holds 4. Eagle borders the study area and
+# covers Basalt's eastern half. Mesa County (which contains De Beque's
+# western tail) is intentionally excluded — its economic shed is dominated
+# by Grand Junction and pulls regional aggregates off-mission.
 # ---------------------------------------------------------------------------
 COUNTY_FIPS: dict[str, str] = {
     # FIPS → Name (3-digit county code; full GEOID is STATE_FIPS + this)
     "045": "Garfield County",
     "097": "Pitkin County",
     "037": "Eagle County",
-    "077": "Mesa County",
 }
 
 # Convenience: full 5-digit county GEOIDs
@@ -200,7 +199,7 @@ def supplementary_place_records() -> list[dict]:
 
 
 def all_county_records() -> list[dict]:
-    """All 4 county records in sorted-FIPS order."""
+    """All 3 county records in sorted-FIPS order."""
     return [
         {"fips": cfips, "geoid": f"{STATE_FIPS}{cfips}", "name": COUNTY_FIPS[cfips]}
         for cfips in sorted(COUNTY_FIPS.keys())

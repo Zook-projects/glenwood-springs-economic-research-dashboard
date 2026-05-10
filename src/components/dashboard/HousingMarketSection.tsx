@@ -77,8 +77,8 @@ function deriveGeographies(housing: ContextEnvelope | null): Geography[] {
 // ---------------------------------------------------------------------------
 // Visual tokens
 // ---------------------------------------------------------------------------
-// Palette tuned for the dashboard's near-black background. 16 colors covers
-// the ~10 places + 4 counties + state + US benchmark superset. Geographies
+// Palette tuned for the dashboard's near-black background. 15 colors covers
+// the ~10 places + 3 counties + state + US benchmark superset. Geographies
 // receive a stable color via index modulo palette length so the legend stays
 // consistent across renders.
 const GEO_PALETTE = [
@@ -95,7 +95,6 @@ const GEO_PALETTE = [
   '#FFB454', // amber accent — Garfield County
   '#A8A1C4', // lavender — Pitkin County
   '#A8C49C', // celadon — Eagle County
-  '#C4A87C', // tan — Mesa County
   '#6E7280', // dim grey — Colorado
   '#9CA0A8', // lighter grey — United States
 ];

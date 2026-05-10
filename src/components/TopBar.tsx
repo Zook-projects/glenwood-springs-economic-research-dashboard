@@ -1,55 +1,65 @@
-// TopBar — slim header strip with two view tabs (Map / Dashboard).
+// TopBar — slim header strip with two view tabs (Dashboard / Map).
 // Sticky to the top of the viewport. Active tab gets the warm-amber accent
 // underline + bright text; inactive tabs are dim. Keyboard-accessible per
 // the WAI-ARIA tabs pattern (left/right arrows + Home/End + Enter/Space).
+//
+// Active state is derived from the current URL: Dashboard is active on
+// /dashboard, Map is active on any /map/* path. Clicking Map always lands
+// on /map/workforce — keeps the URL as the single source of truth instead
+// of silently remembering the last visited map.
 
 import { useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
-export type AppView = 'map' | 'dashboard';
+type TabId = 'dashboard' | 'map';
 
-interface Props {
-  view: AppView;
-  onChange: (next: AppView) => void;
+interface Tab {
+  id: TabId;
+  label: string;
+  path: string;
 }
 
-const TABS: ReadonlyArray<{ id: AppView; label: string }> = [
-  { id: 'map', label: 'Map' },
-  { id: 'dashboard', label: 'Dashboard' },
+const TABS: ReadonlyArray<Tab> = [
+  { id: 'dashboard', label: 'Dashboard', path: '/dashboard' },
+  { id: 'map', label: 'Map', path: '/map/workforce' },
 ];
 
-export function TopBar({ view, onChange }: Props) {
-  const buttonRefs = useRef<Record<AppView, HTMLButtonElement | null>>({
-    map: null,
+export function TopBar() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const buttonRefs = useRef<Record<TabId, HTMLButtonElement | null>>({
     dashboard: null,
+    map: null,
   });
 
-  const focusTab = (id: AppView) => {
-    const btn = buttonRefs.current[id];
-    btn?.focus();
+  const activeId: TabId = location.pathname.startsWith('/map') ? 'map' : 'dashboard';
+
+  const focusTab = (id: TabId) => {
+    buttonRefs.current[id]?.focus();
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const order: AppView[] = TABS.map((t) => t.id);
-    const idx = order.indexOf(view);
+    const order: TabId[] = TABS.map((t) => t.id);
+    const idx = order.indexOf(activeId);
     if (e.key === 'ArrowRight') {
       e.preventDefault();
       const next = order[(idx + 1) % order.length];
-      onChange(next);
+      navigate(TABS[(idx + 1) % order.length].path);
       focusTab(next);
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      const next = order[(idx - 1 + order.length) % order.length];
-      onChange(next);
-      focusTab(next);
+      const prevIdx = (idx - 1 + order.length) % order.length;
+      navigate(TABS[prevIdx].path);
+      focusTab(order[prevIdx]);
     } else if (e.key === 'Home') {
       e.preventDefault();
-      onChange(order[0]);
+      navigate(TABS[0].path);
       focusTab(order[0]);
     } else if (e.key === 'End') {
       e.preventDefault();
-      const last = order[order.length - 1];
-      onChange(last);
-      focusTab(last);
+      const last = order.length - 1;
+      navigate(TABS[last].path);
+      focusTab(order[last]);
     }
   };
 
@@ -81,7 +91,7 @@ export function TopBar({ view, onChange }: Props) {
           onKeyDown={handleKey}
         >
           {TABS.map((tab) => {
-            const active = tab.id === view;
+            const active = tab.id === activeId;
             return (
               <button
                 key={tab.id}
@@ -90,7 +100,7 @@ export function TopBar({ view, onChange }: Props) {
                 role="tab"
                 aria-selected={active}
                 tabIndex={active ? 0 : -1}
-                onClick={() => onChange(tab.id)}
+                onClick={() => navigate(tab.path)}
                 className="relative px-3 md:px-4 text-[11px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
                 style={{
                   color: active ? 'var(--text-h)' : 'var(--text-dim)',

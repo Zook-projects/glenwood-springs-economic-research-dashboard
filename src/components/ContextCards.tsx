@@ -3,7 +3,7 @@
 //
 // Each card carries one topic, with stacked geography rows:
 //   - Per-anchor view  → selected place / containing county / Colorado
-//   - Aggregate view   → 4 counties / Colorado (no place rows)
+//   - Aggregate view   → 3 counties / Colorado (no place rows)
 //
 // No sparklines — text-only. Per the v2 spec the cards are a glanceable
 // snapshot, not a full data exploration.
@@ -61,8 +61,7 @@ interface Props {
   largeCommerce?: boolean;
 }
 
-// Aggregate-view county order (fixed editorial sequence). Mesa County is
-// intentionally omitted — see buildRows() comment for rationale.
+// Aggregate-view county order (fixed editorial sequence).
 const AGGREGATE_COUNTY_ORDER: string[] = [
   '08045', // Garfield
   '08037', // Eagle
@@ -534,9 +533,6 @@ function buildRows(
   }
 
   // Aggregate view: counties (in fixed editorial order) followed by state.
-  // Mesa County is intentionally hidden — it sits at the western edge of the
-  // study area (De Beque only) and reads as outlier context that distracts
-  // from the core Roaring Fork picture.
   const rows: Row[] = [];
   for (const fips of AGGREGATE_COUNTY_ORDER) {
     const c = env.counties.find((x) => x.geoid === fips);

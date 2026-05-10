@@ -3,13 +3,8 @@
 // share the active variant (Gross / Retail / Taxable) and react to the
 // same workplace selection as the rest of the dashboard.
 //
-//   1. Counties      — all 4 counties (Eagle, Garfield, Mesa, Pitkin) on
-//                      latest-year totals. Mesa is INCLUDED here even
-//                      though it's hidden from the Commerce card's
-//                      aggregate view (Mesa = De Beque only, distracting
-//                      noise in the headline rail). At the comparison
-//                      tier the user is asking for peer-county scale, so
-//                      the full set surfaces.
+//   1. Counties      — all 3 counties (Eagle, Garfield, Pitkin) on
+//                      latest-year totals.
 //   2. Anchor places — 11 anchor ZIPs ranked on the same variant. Bars
 //                      are tinted by their containing county for visual
 //                      grouping; the actively selected workplace ZIP is
@@ -55,12 +50,6 @@ interface Props {
   selectedCountyGeoid?: string | null;
   onSelectCounty?: (geoid: string | null) => void;
 }
-
-// Counties intentionally hidden from the Counties card. Mesa is the
-// western-edge county (De Beque sliver only) — including it skews the
-// bar chart and reads as outlier context that distracts from the core
-// Roaring Fork picture.
-const HIDDEN_COUNTY_GEOIDS = new Set(['08077']);
 
 // Value-driven gradient endpoints used across the three Commerce
 // comparison charts (Counties bar, Anchor places bar, Anchor place mix
@@ -486,11 +475,8 @@ export function CommerceComparisons({
 
     let latestYear: number | null = null;
 
-    // Counties — sorted descending on the active variant. Filter out
-    // counties on the editorial hide list (currently Mesa) before any
-    // value-domain math so the gradient + sort key off the visible set.
+    // Counties — sorted descending on the active variant.
     const countyData = env.counties
-      .filter((c) => !HIDDEN_COUNTY_GEOIDS.has(c.geoid))
       .map((c: ContextCountyEntry) => {
         const latest = pickAnnualLatest(c.trend as unknown as CommerceTrend | undefined, measure);
         return latest ? { county: c, ...latest } : null;

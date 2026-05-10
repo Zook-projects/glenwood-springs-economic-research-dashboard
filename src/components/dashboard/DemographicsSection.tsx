@@ -117,7 +117,6 @@ const GEO_PALETTE = [
   '#D4B0A0', // peach — Old Snowmass
   '#FFB454', // amber — Eagle County
   '#A8A1C4', // lavender — Garfield County
-  '#A8C49C', // celadon — Mesa County
   '#C4A87C', // tan — Pitkin County
   '#6E7280', // dim grey — Colorado
 ];

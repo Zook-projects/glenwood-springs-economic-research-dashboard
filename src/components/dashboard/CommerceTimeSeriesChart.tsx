@@ -118,9 +118,7 @@ function buildSeries(
     }
   }
   // Aggregate (no anchor selected) — compare Garfield, Eagle, and Pitkin
-  // counties as three lines on a shared y-axis. Mesa is excluded for the
-  // same reason it's hidden from the headline rail (De Beque-only sliver
-  // that distorts the Roaring Fork picture).
+  // counties as three lines on a shared y-axis.
   const env = bundle.commerce;
   if (!env) return { series: [], subtitleLabel: '', isMulti: false };
   const series: Series[] = [];

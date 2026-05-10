@@ -15,6 +15,10 @@
 // metaphors with no analogue in a tabular view.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
+import type { AppOutletContext } from '../App';
+import { SUBJECTS, type SubjectId } from '../config/subjects';
+import { MapLinkButton } from '../components/MapLinkButton';
 import type {
   DirectionFilter,
   FlowRow,
@@ -52,26 +56,14 @@ import { CommerceTimeSeriesChart } from '../components/dashboard/CommerceTimeSer
 import { CommerceDataSetTile } from '../components/dashboard/CommerceDataSetTile';
 import { EconomicResearchSection } from '../components/dashboard/EconomicResearchSection';
 
-interface Props {
-  data: FlowData;
-}
+// Section iteration order in the dashboard (sidebar nav + top-to-bottom
+// scroll order). Drives off the shared subjects config so any future
+// subject reordering/addition flows automatically into both surfaces.
+const SECTIONS = SUBJECTS;
+type SectionId = SubjectId;
 
-type SectionId =
-  | 'workforce'
-  | 'demographics'
-  | 'commerce'
-  | 'economic'
-  | 'housing';
-
-const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
-  { id: 'workforce', label: 'Workforce' },
-  { id: 'demographics', label: 'Demographics' },
-  { id: 'housing', label: 'Housing' },
-  { id: 'commerce', label: 'Commerce' },
-  { id: 'economic', label: 'Economic Research' },
-];
-
-export function DashboardView({ data }: Props) {
+export function DashboardView() {
+  const { data } = useOutletContext<AppOutletContext>();
   const {
     flowsInbound: rawFlowsInbound,
     flowsOutbound: rawFlowsOutbound,
@@ -415,12 +407,15 @@ export function DashboardView({ data }: Props) {
                 border: '1px solid var(--panel-border)',
               }}
             >
-              <h2
-                className="text-base font-semibold uppercase tracking-wider mb-3"
-                style={{ color: 'var(--text-h)' }}
-              >
-                Workforce
-              </h2>
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <h2
+                  className="text-base font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--text-h)' }}
+                >
+                  Workforce
+                </h2>
+                <MapLinkButton subjectId="workforce" />
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                 <WorkforceAboutCard />
                 <WorkforceFiltersCard
@@ -619,12 +614,15 @@ export function DashboardView({ data }: Props) {
               border: '1px solid var(--panel-border)',
             }}
           >
-            <h2
-              className="text-base font-semibold uppercase tracking-wider mb-3"
-              style={{ color: 'var(--text-h)' }}
-            >
-              Demographics
-            </h2>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <h2
+                className="text-base font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--text-h)' }}
+              >
+                Demographics
+              </h2>
+              <MapLinkButton subjectId="demographics" />
+            </div>
             <DemographicsSection
               bundle={contextBundle}
               selectedZip={selectedZip}
@@ -646,12 +644,15 @@ export function DashboardView({ data }: Props) {
               border: '1px solid var(--panel-border)',
             }}
           >
-            <h2
-              className="text-base font-semibold uppercase tracking-wider mb-3"
-              style={{ color: 'var(--text-h)' }}
-            >
-              Housing Market
-            </h2>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <h2
+                className="text-base font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--text-h)' }}
+              >
+                Housing Market
+              </h2>
+              <MapLinkButton subjectId="housing" />
+            </div>
             <HousingMarketSection bundle={contextBundle} selectedZip={selectedZip} />
           </section>
 
@@ -669,12 +670,15 @@ export function DashboardView({ data }: Props) {
               border: '1px solid var(--panel-border)',
             }}
           >
-            <h2
-              className="text-base font-semibold uppercase tracking-wider mb-3"
-              style={{ color: 'var(--text-h)' }}
-            >
-              Commerce
-            </h2>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <h2
+                className="text-base font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--text-h)' }}
+              >
+                Commerce
+              </h2>
+              <MapLinkButton subjectId="commerce" />
+            </div>
             {/* The section is split into two row-grids that share a column
                 template (1fr / 1.2fr — chart narrower so the comparison
                 cards on the right have more horizontal room). Row 1 pairs
