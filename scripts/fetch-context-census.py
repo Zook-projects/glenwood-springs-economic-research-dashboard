@@ -87,9 +87,25 @@ ACS5_HOUSING = {
     "renterOccupied": "B25003_003E",
     "homeownerVacancy": "B25004_001E",  # placeholder; B25004 is by-tenure detail
     "rentalVacancy": "B25004_001E",
+    # Total housing units (state + county HU current trend; SDO covers
+    # places, ACS B25001 covers state/county for the historical-augmented
+    # current trend).
+    "totalHousingUnits": "B25001_001E",
     # Cost-burden composites computed from B25070 (renters) + B25091 (owners)
     "costBurden30": "_compose:cost_burden_30",
     "costBurden50": "_compose:cost_burden_50",
+    # Year structure built — 10 cohorts (B25034). Surfaced individually so
+    # the housing characteristics tile can render the distribution.
+    "yearBuilt2020plus": "B25034_002E",
+    "yearBuilt2010to19":  "B25034_003E",
+    "yearBuilt2000to09":  "B25034_004E",
+    "yearBuilt1990to99":  "B25034_005E",
+    "yearBuilt1980to89":  "B25034_006E",
+    "yearBuilt1970to79":  "B25034_007E",
+    "yearBuilt1960to69":  "B25034_008E",
+    "yearBuilt1950to59":  "B25034_009E",
+    "yearBuilt1940to49":  "B25034_010E",
+    "yearBuiltPre1940":   "B25034_011E",
 }
 
 ACS_LATEST_YEAR = 2024

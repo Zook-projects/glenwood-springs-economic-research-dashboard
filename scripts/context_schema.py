@@ -104,15 +104,24 @@ def build_envelope(
             "latest": state_data.get("latest"),
             "trend": state_data.get("trend", {}),
         }
+        # Optional historicalTrend (decennial-cadence parallel series — used
+        # by demographics for population 1950→2020 and housing for housingUnits
+        # 1990→2020). Omitted from the JSON when absent so existing topics
+        # stay byte-stable.
+        if state_data.get("historicalTrend"):
+            state_block["historicalTrend"] = state_data["historicalTrend"]
 
     counties = []
     for rec in all_county_records():
         d = county_data.get(rec["geoid"], {})
-        counties.append({
+        county_entry = {
             **rec,
             "latest": d.get("latest"),
             "trend": d.get("trend", {}),
-        })
+        }
+        if d.get("historicalTrend"):
+            county_entry["historicalTrend"] = d["historicalTrend"]
+        counties.append(county_entry)
 
     places = []
     place_recs = list(all_place_records())
@@ -131,10 +140,12 @@ def build_envelope(
             "latest": d.get("latest"),
             "trend": d.get("trend", {}),
         }
+        if d.get("historicalTrend"):
+            place_entry["historicalTrend"] = d["historicalTrend"]
         # Pass through any topic-specific extras (e.g., commerce's
         # `shareOfCounty`) without coupling them to the shared schema.
         for k, v in d.items():
-            if k not in ("latest", "trend"):
+            if k not in ("latest", "trend", "historicalTrend"):
                 place_entry[k] = v
         places.append(place_entry)
 

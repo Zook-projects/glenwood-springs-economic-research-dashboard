@@ -49,7 +49,7 @@ function KeyTakeawaysCallout() {
         className="text-[10px] font-semibold uppercase tracking-wider"
         style={{ color: 'var(--accent)' }}
       >
-        Why this matters · NWCCOG Economic Summit framing
+        Why this matters
       </div>
       <ul className="flex flex-col gap-1.5 text-[11px]" style={{ color: 'var(--text)' }}>
         <li className="flex items-start gap-2">

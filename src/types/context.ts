@@ -95,6 +95,11 @@ export interface ContextStateEntry {
   name: string;
   latest: ContextLatest | null;
   trend: ContextTrend;
+  // Optional parallel trend for decennial (or otherwise low-cadence) historical
+  // series — used by demographics (population, 1950→2020) and housing
+  // (housingUnits, 1970→2020). Sibling to `trend` so the two cadences don't
+  // mix inside a single series and chart axis logic stays simple.
+  historicalTrend?: ContextTrend;
 }
 
 export interface ContextCountyEntry {
@@ -103,6 +108,7 @@ export interface ContextCountyEntry {
   name: string;
   latest: ContextLatest | null;
   trend: ContextTrend;
+  historicalTrend?: ContextTrend;
 }
 
 export interface ContextPlaceEntry {
@@ -114,6 +120,7 @@ export interface ContextPlaceEntry {
   countyName: string;
   latest: ContextLatest | null;
   trend: ContextTrend;
+  historicalTrend?: ContextTrend;
   // Commerce-specific extra. Present only on commerce place entries; other
   // topics omit this field. See CommerceShareOfCounty for shape.
   shareOfCounty?: CommerceShareOfCounty;

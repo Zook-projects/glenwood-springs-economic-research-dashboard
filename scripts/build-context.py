@@ -100,7 +100,10 @@ def main() -> int:
     # anchors so the pie chart can show municipal breakdowns when
     # Eagle is the active county scope. Other topics keep the
     # 11-anchor expectation.
-    EXPECTED_PLACES_BY_TOPIC = {"commerce": 17}
+    # Housing appends a synthetic 'United States' benchmark place (12 = 11 anchors
+    # + US). Commerce includes 6 Eagle County supplementary municipalities
+    # (17 = 11 anchors + 6 supplementary).
+    EXPECTED_PLACES_BY_TOPIC = {"commerce": 17, "housing": 12}
     all_warnings: dict[str, list[str]] = {}
     for topic in TOPICS:
         env = _try_build(topic)

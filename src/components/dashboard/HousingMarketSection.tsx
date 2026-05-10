@@ -17,7 +17,7 @@
 // the rest of the dashboard. No new dependencies.
 
 import { useEffect, useMemo, useState } from 'react';
-import { line as d3Line } from 'd3-shape';
+import { line as d3Line, area as d3Area } from 'd3-shape';
 import { scaleLinear, scaleBand } from 'd3-scale';
 import type {
   ContextBundle,
@@ -26,6 +26,7 @@ import type {
   ContextTrend,
   TrendPoint,
 } from '../../types/context';
+import { fmtInt } from '../../lib/format';
 
 // ---------------------------------------------------------------------------
 // Geography model
@@ -38,6 +39,7 @@ interface Geography {
   kind: GeoKind;
   latest: ContextLatest | null;
   trend: ContextTrend;
+  historicalTrend: ContextTrend;
 }
 
 function deriveGeographies(housing: ContextEnvelope | null): Geography[] {
@@ -45,16 +47,29 @@ function deriveGeographies(housing: ContextEnvelope | null): Geography[] {
   const out: Geography[] = [];
   for (const p of housing.places) {
     if (p.kind === 'national') {
-      out.push({ id: `national:${p.zip}`, label: p.name, kind: 'national', latest: p.latest, trend: p.trend });
+      out.push({
+        id: `national:${p.zip}`, label: p.name, kind: 'national',
+        latest: p.latest, trend: p.trend, historicalTrend: p.historicalTrend ?? {},
+      });
     } else {
-      out.push({ id: `place:${p.zip}`, label: p.name, kind: 'place', latest: p.latest, trend: p.trend });
+      out.push({
+        id: `place:${p.zip}`, label: p.name, kind: 'place',
+        latest: p.latest, trend: p.trend, historicalTrend: p.historicalTrend ?? {},
+      });
     }
   }
   for (const c of housing.counties) {
-    out.push({ id: `county:${c.geoid}`, label: c.name, kind: 'county', latest: c.latest, trend: c.trend });
+    out.push({
+      id: `county:${c.geoid}`, label: c.name, kind: 'county',
+      latest: c.latest, trend: c.trend, historicalTrend: c.historicalTrend ?? {},
+    });
   }
   if (housing.state) {
-    out.push({ id: `state:${housing.state.fips}`, label: housing.state.name, kind: 'state', latest: housing.state.latest, trend: housing.state.trend });
+    out.push({
+      id: `state:${housing.state.fips}`, label: housing.state.name, kind: 'state',
+      latest: housing.state.latest, trend: housing.state.trend,
+      historicalTrend: housing.state.historicalTrend ?? {},
+    });
   }
   return out;
 }
@@ -200,12 +215,169 @@ export function ChartFrame({
 }
 
 // ---------------------------------------------------------------------------
-// Data-set descriptor tile — anchors the left column of the Housing section
-// with a plain-language explanation of what Zillow ZHVI is and how to read
-// the rest of the panel. Mirrors the visual language of HeadlineStats so
-// the two cards balance across the row.
+// Housing-section "About" tile — describes the non-Zillow data sources that
+// drive the upper half of the section (SDO, ACS B25 series, NHGIS). Lives at
+// the very top of the section so a casual reader knows what they're looking
+// at. The Zillow subsection at the bottom of the section gets its own
+// dedicated About tile (ZillowDataSetTile below).
 // ---------------------------------------------------------------------------
 function HousingDataSetTile() {
+  return (
+    <div
+      className="rounded-md p-3 flex flex-col gap-2"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--panel-border)',
+      }}
+    >
+      <div>
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--text-h)' }}
+        >
+          About this data
+        </div>
+        <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+          CO SDO Vintage 2024 · U.S. Census ACS B25 · NHGIS decennial
+        </div>
+      </div>
+      <p className="text-[11px] leading-snug" style={{ color: 'var(--text)' }}>
+        This section synthesizes three authoritative sources to characterize
+        the housing stock at place, county, and state level. Annual unit
+        totals, occupancy, vacancy, and household size come from the Colorado
+        State Demography Office&rsquo;s Vintage 2024 estimates — calibrated
+        to local building permits, vital statistics, and migration. Median
+        home value, rent, tenure, year built (B25034), and cost burden
+        (B25070 / B25091) come from the U.S. Census ACS 5-Year Estimates.
+        Decennial housing-unit history (1970 → 2020) comes from IPUMS
+        NHGIS reconciled to current geographic boundaries.
+      </p>
+      <ul className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-1 mt-1">
+        <li className="flex flex-col">
+          <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            Sources
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>CO SDO · Census ACS · NHGIS</span>
+        </li>
+        <li className="flex flex-col">
+          <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            Geography
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>Place · County · State</span>
+        </li>
+        <li className="flex flex-col">
+          <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            Cadence
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>Annual + decennial</span>
+        </li>
+        <li className="flex flex-col">
+          <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            Coverage
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>1970 → latest</span>
+        </li>
+      </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Headline statistics — ACS-derived KPIs for the active geography. Surfaces
+// the affordability ratio (median home value ÷ median HH income),
+// owner-occupied share, and cost-burdened share so the section opens with
+// a three-metric snapshot independent of Zillow ZHVI (Zillow's own
+// headline lives in the dedicated Zillow subsection at the bottom).
+// ---------------------------------------------------------------------------
+function HeadlineStats({
+  geo,
+  vintageEnd,
+  medianHhIncome,
+}: {
+  geo: Geography | null;
+  vintageEnd: number | null;
+  // Active geography's median household income, joined from the
+  // demographics envelope by the parent section. Used to compute the
+  // affordability ratio inline; null when income data is unavailable for
+  // this geography.
+  medianHhIncome: number | null;
+}) {
+  const latest = geo?.latest ?? null;
+  const medValue = readNum(latest, 'medianHomeValueAcs');
+  const ratio = medValue != null && medianHhIncome != null && medianHhIncome > 0
+    ? medValue / medianHhIncome
+    : null;
+  const owner = readNum(latest, 'ownerOccupied') ?? 0;
+  const renter = readNum(latest, 'renterOccupied') ?? 0;
+  const tenureUniverse = owner + renter;
+  const ownerShare = tenureUniverse > 0 ? (owner / tenureUniverse) * 100 : null;
+  const cb30 = readNum(latest, 'costBurden30');
+  const burdenedShare = tenureUniverse > 0 && cb30 != null
+    ? (cb30 / tenureUniverse) * 100
+    : null;
+
+  const items: { label: string; value: string }[] = [
+    {
+      label: 'Affordability ratio',
+      value: ratio != null ? `${ratio.toFixed(1)}×` : '—',
+    },
+    {
+      label: 'Owner-occupied',
+      value: ownerShare != null ? `${ownerShare.toFixed(0)}%` : '—',
+    },
+    {
+      label: 'Cost-burdened',
+      value: burdenedShare != null ? `${burdenedShare.toFixed(0)}%` : '—',
+    },
+  ];
+
+  return (
+    <div
+      className="rounded-md p-3 flex flex-col gap-2"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--panel-border)',
+      }}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: 'var(--text-h)' }}
+          >
+            Housing Snapshot
+          </div>
+          <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+            {geo?.label ?? '—'} · ACS 5-Year{vintageEnd ? ` ${vintageEnd}` : ''}
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 flex items-center">
+        <div className="grid grid-cols-3 gap-3 w-full justify-items-center text-center">
+          {items.map((it) => (
+            <div key={it.label} className="flex flex-col items-center">
+              <div
+                className="text-xl font-semibold tabular-nums"
+                style={{ color: 'var(--text-h)' }}
+              >
+                {it.value}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                {it.label}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Zillow subsection — dedicated About tile + headline stats for the ZHVI /
+// type comparison block at the bottom of the section.
+// ---------------------------------------------------------------------------
+function ZillowDataSetTile() {
   return (
     <div
       className="rounded-md p-3 flex flex-col gap-2"
@@ -230,9 +402,12 @@ function HousingDataSetTile() {
         across a region and housing type. It reflects the 35th–65th percentile
         of homes — neither the cheapest nor the most expensive — so it tracks
         the value of a middle-of-the-market home rather than a sale-price
-        average skewed by listings at the extremes.
+        average skewed by listings at the extremes. Use ZHVI alongside the
+        ACS median home value (above) for cross-validation: ZHVI updates
+        monthly with ~1-month lag, while the ACS estimate uses a 5-year
+        rolling sample with ~2-year lag.
       </p>
-      <ul className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1">
+      <ul className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-1 mt-1">
         <li className="flex flex-col">
           <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
             Source
@@ -262,10 +437,7 @@ function HousingDataSetTile() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Headline statistics
-// ---------------------------------------------------------------------------
-function HeadlineStats({ geo }: { geo: Geography | null }) {
+function ZillowHeadlineStats({ geo }: { geo: Geography | null }) {
   const latest = geo?.latest ?? null;
   const items: { label: string; value: number | null }[] = [
     { label: 'Typical Home Value', value: typeValue(latest, 'zhviAvg') },
@@ -286,7 +458,7 @@ function HeadlineStats({ geo }: { geo: Geography | null }) {
             className="text-[10px] font-semibold uppercase tracking-wider"
             style={{ color: 'var(--text-h)' }}
           >
-            Housing Statistics
+            ZHVI Snapshot
           </div>
           <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
             {geo?.label ?? '—'} · Zillow ZHVI
@@ -1075,6 +1247,1274 @@ function CityComparisonBars({
 }
 
 // ---------------------------------------------------------------------------
+// Reusable segmented control (mirrors DemographicsSection)
+// ---------------------------------------------------------------------------
+interface SegmentedOption<T extends string> {
+  value: T;
+  label: string;
+}
+function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: ReadonlyArray<SegmentedOption<T>>;
+  value: T;
+  onChange: (next: T) => void;
+  ariaLabel?: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className="inline-flex gap-0.5 p-0.5 rounded-md border"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        borderColor: 'var(--panel-border)',
+      }}
+    >
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(opt.value)}
+            className="px-2 py-0.5 text-[10px] font-medium rounded transition-colors"
+            style={{
+              background: active ? 'var(--accent)' : 'transparent',
+              color: active ? '#1a1207' : 'var(--text-dim)',
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Number helpers (housing-section-local)
+// ---------------------------------------------------------------------------
+function readNum(latest: ContextLatest | null, key: string): number | null {
+  if (!latest) return null;
+  const v = latest[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+// ---------------------------------------------------------------------------
+// Housing Characteristics tile — surfaces SDO 2024 vintage characteristics
+// (units, occupancy, vacancy, household size) and the year-built cohort
+// distribution (B25034). Year-built data is gracefully absent until the
+// fetcher pulls B25034 with a Census API key.
+// ---------------------------------------------------------------------------
+const YEAR_BUILT_COHORTS: ReadonlyArray<{ key: string; label: string; short: string }> = [
+  { key: 'yearBuilt2020plus',  label: '2020 or later',  short: "'20+" },
+  { key: 'yearBuilt2010to19',  label: '2010 – 2019',    short: "'10s" },
+  { key: 'yearBuilt2000to09',  label: '2000 – 2009',    short: "'00s" },
+  { key: 'yearBuilt1990to99',  label: '1990 – 1999',    short: "'90s" },
+  { key: 'yearBuilt1980to89',  label: '1980 – 1989',    short: "'80s" },
+  { key: 'yearBuilt1970to79',  label: '1970 – 1979',    short: "'70s" },
+  { key: 'yearBuilt1960to69',  label: '1960 – 1969',    short: "'60s" },
+  { key: 'yearBuilt1950to59',  label: '1950 – 1959',    short: "'50s" },
+  { key: 'yearBuilt1940to49',  label: '1940 – 1949',    short: "'40s" },
+  { key: 'yearBuiltPre1940',   label: 'Pre-1940',       short: '<\'40' },
+];
+
+const YEAR_BUILT_PALETTE = [
+  '#7AC4D8', '#4FB3A9', '#94C4B7', '#9CC479',
+  '#C8B273', '#FFB454', '#C29479', '#C47979',
+  '#B79CC4', '#9FB3C8',
+];
+
+function HousingCharacteristicsTile({ geo }: { geo: Geography | null }) {
+  const latest = geo?.latest ?? null;
+  const total = readNum(latest, 'housingUnitsTotal');
+  const occ = readNum(latest, 'housingUnitsOccupied');
+  const vacPct = readNum(latest, 'vacancyPct');
+  const hhSize = readNum(latest, 'householdSize');
+
+  return (
+    <div
+      className="rounded-md p-3 flex flex-col gap-3"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--panel-border)',
+      }}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: 'var(--text-h)' }}
+          >
+            Housing Characteristics
+          </div>
+          <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+            {geo?.label ?? '—'} · CO SDO Vintage 2024
+          </div>
+        </div>
+      </div>
+
+      {/* Top metrics — 4 KPI tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 justify-items-center text-center">
+        <div className="flex flex-col items-center">
+          <div className="text-xl font-semibold tabular-nums" style={{ color: 'var(--text-h)' }}>
+            {total != null ? fmtInt(total) : '—'}
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            Total housing units
+          </div>
+        </div>
+        <div className="flex flex-col items-center">
+          <div className="text-xl font-semibold tabular-nums" style={{ color: 'var(--text-h)' }}>
+            {vacPct != null ? `${vacPct.toFixed(1)}%` : '—'}
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            Vacancy rate
+          </div>
+        </div>
+        <div className="flex flex-col items-center">
+          <div className="text-xl font-semibold tabular-nums" style={{ color: 'var(--text-h)' }}>
+            {hhSize != null ? hhSize.toFixed(2) : '—'}
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            Household size
+          </div>
+        </div>
+        <div className="flex flex-col items-center">
+          <div className="text-xl font-semibold tabular-nums" style={{ color: 'var(--text-h)' }}>
+            {occ != null ? fmtInt(occ) : '—'}
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            Occupied units
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HousingVintageCard — dedicated card for ACS B25034 year-built data.
+// Surfaces three derived KPIs (median stock age, share pre-1980, share built
+// since 2010) plus a vertical bar chart of units by decade with the peak
+// decade highlighted.
+//
+// "Median stock age" is computed as a weighted median across the 10 cohorts:
+// each cohort contributes its midpoint year × its unit count, then we find
+// the cohort containing the 50th-percentile cumulative unit count and
+// approximate stock age as (vintageEnd - midpoint of that cohort).
+//
+// "Pre-1980 share" is planner-relevant: pre-1980 housing typically carries
+// lead paint, knob-and-tube wiring, lower energy performance, and deferred
+// maintenance. A high share signals retrofit / weatherization opportunity.
+//
+// "Built since 2010" surfaces recent construction pace at a glance — useful
+// for tracking whether housing supply is keeping up with population growth.
+// ---------------------------------------------------------------------------
+function HousingVintageCard({
+  geo,
+  vintageEnd,
+}: {
+  geo: Geography | null;
+  vintageEnd: number | null;
+}) {
+  const latest = geo?.latest ?? null;
+  const cohorts = useMemo(() => {
+    return YEAR_BUILT_COHORTS.map((c, idx) => ({
+      ...c,
+      value: readNum(latest, c.key) ?? 0,
+      color: YEAR_BUILT_PALETTE[idx % YEAR_BUILT_PALETTE.length],
+    }));
+  }, [latest]);
+
+  const totalUnits = useMemo(
+    () => cohorts.reduce((a, c) => a + c.value, 0),
+    [cohorts],
+  );
+
+  // Cohort midpoints (approximate construction year). Used for weighted
+  // median age and any other midpoint-based stats.
+  const cohortMidpoints: Record<string, number> = {
+    yearBuiltPre1940:   1925,
+    yearBuilt1940to49:  1944,
+    yearBuilt1950to59:  1954,
+    yearBuilt1960to69:  1964,
+    yearBuilt1970to79:  1974,
+    yearBuilt1980to89:  1984,
+    yearBuilt1990to99:  1994,
+    yearBuilt2000to09:  2004,
+    yearBuilt2010to19:  2014,
+    yearBuilt2020plus:  vintageEnd != null ? Math.round((2020 + vintageEnd) / 2) : 2022,
+  };
+
+  // KPIs — only computed when there's data.
+  const kpis = useMemo(() => {
+    if (totalUnits <= 0) return null;
+    // Pre-1980 share
+    const pre1980Keys = [
+      'yearBuiltPre1940', 'yearBuilt1940to49', 'yearBuilt1950to59',
+      'yearBuilt1960to69', 'yearBuilt1970to79',
+    ];
+    const pre1980Units = cohorts
+      .filter((c) => pre1980Keys.includes(c.key))
+      .reduce((a, c) => a + c.value, 0);
+    const pre1980Share = (pre1980Units / totalUnits) * 100;
+
+    // Since-2010 share
+    const since2010Keys = ['yearBuilt2010to19', 'yearBuilt2020plus'];
+    const since2010Units = cohorts
+      .filter((c) => since2010Keys.includes(c.key))
+      .reduce((a, c) => a + c.value, 0);
+    const since2010Share = (since2010Units / totalUnits) * 100;
+
+    // Weighted median age — find the cohort containing the 50th-percentile
+    // cumulative unit count (oldest → newest), then return vintageEnd minus
+    // that cohort's midpoint year.
+    const sortedOldFirst = [...cohorts]; // YEAR_BUILT_COHORTS is newest-first
+    sortedOldFirst.reverse();
+    const halfTotal = totalUnits / 2;
+    let cum = 0;
+    let medianMidpoint = cohortMidpoints[sortedOldFirst[0].key] ?? 1980;
+    for (const c of sortedOldFirst) {
+      cum += c.value;
+      if (cum >= halfTotal) {
+        medianMidpoint = cohortMidpoints[c.key] ?? 1980;
+        break;
+      }
+    }
+    const referenceYear = vintageEnd ?? new Date().getFullYear();
+    const medianAge = referenceYear - medianMidpoint;
+
+    // Peak cohort (largest single decade)
+    const peak = cohorts.reduce(
+      (best, c) => (c.value > (best?.value ?? -1) ? c : best),
+      cohorts[0],
+    );
+
+    return { pre1980Share, since2010Share, medianAge, peak };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cohorts, totalUnits, vintageEnd]);
+
+  // Vertical bar chart — render even when totalUnits === 0 so the empty
+  // state shows the explanatory line.
+  // ---- Bar chart layout (oldest → newest left-to-right) ------------------
+  const chartCohorts = useMemo(() => [...cohorts].reverse(), [cohorts]);
+  const yMax = useMemo(
+    () => chartCohorts.reduce((m, c) => Math.max(m, c.value), 0),
+    [chartCohorts],
+  );
+
+  // Tooltip state
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Layout constants for the SVG bar chart. Wider-than-tall ratio so 10
+  // decade labels fit comfortably without rotation.
+  const W = 720;
+  const H = 220;
+  const M = { top: 16, right: 12, bottom: 32, left: 36 };
+  const innerW = W - M.left - M.right;
+  const innerH = H - M.top - M.bottom;
+  const barW = innerW / chartCohorts.length;
+
+  return (
+    <div
+      className="rounded-md p-3 flex flex-col gap-3"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--panel-border)',
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: 'var(--text-h)' }}
+          >
+            Housing Stock by Year Built
+          </div>
+          <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+            {geo?.label ?? '—'} · ACS 5-Year{vintageEnd ? ` ${vintageEnd}` : ''} · table B25034
+          </div>
+        </div>
+      </div>
+
+      {/* KPI strip */}
+      {kpis ? (
+        <div className="grid grid-cols-3 gap-3 justify-items-center text-center">
+          <div className="flex flex-col items-center">
+            <div
+              className="text-xl font-semibold tabular-nums"
+              style={{ color: 'var(--text-h)' }}
+            >
+              {kpis.medianAge.toFixed(0)} yrs
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              Median stock age
+            </div>
+          </div>
+          <div className="flex flex-col items-center">
+            <div
+              className="text-xl font-semibold tabular-nums"
+              style={{ color: 'var(--text-h)' }}
+            >
+              {kpis.pre1980Share.toFixed(0)}%
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              Built before 1980
+            </div>
+          </div>
+          <div className="flex flex-col items-center">
+            <div
+              className="text-xl font-semibold tabular-nums"
+              style={{ color: 'var(--text-h)' }}
+            >
+              {kpis.since2010Share.toFixed(0)}%
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              Built since 2010
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[10px] italic" style={{ color: 'var(--text-dim)' }}>
+          B25034 not yet in cache — re-run fetch-context-census.py with CENSUS_API_KEY.
+        </div>
+      )}
+
+      {/* Vertical bar chart by decade */}
+      {totalUnits > 0 && (
+        <div className="relative w-full">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="none"
+            className="w-full"
+            style={{ display: 'block', height: 220 }}
+            onMouseLeave={() => setHoverIdx(null)}
+          >
+            <g transform={`translate(${M.left}, ${M.top})`}>
+              {/* y-axis baseline */}
+              <line
+                x1={0}
+                x2={innerW}
+                y1={innerH}
+                y2={innerH}
+                stroke="var(--panel-border)"
+              />
+              {chartCohorts.map((c, idx) => {
+                const v = c.value;
+                const h = yMax > 0 ? (v / yMax) * innerH : 0;
+                const x = idx * barW;
+                const y = innerH - h;
+                const isPeak = kpis?.peak?.key === c.key;
+                const isHovered = hoverIdx === idx;
+                const pct = totalUnits > 0 ? (v / totalUnits) * 100 : 0;
+                return (
+                  <g
+                    key={c.key}
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={() => setHoverIdx(idx)}
+                    onMouseLeave={() => setHoverIdx((cur) => (cur === idx ? null : cur))}
+                  >
+                    {/* Hit-target — full column so hover doesn't require
+                        pixel-perfect aim on short bars. */}
+                    <rect
+                      x={x}
+                      y={0}
+                      width={barW}
+                      height={innerH}
+                      fill="transparent"
+                    />
+                    <rect
+                      x={x + 2}
+                      y={y}
+                      width={Math.max(0, barW - 4)}
+                      height={Math.max(0, h)}
+                      fill={isPeak ? 'var(--accent)' : c.color}
+                      stroke={isPeak ? 'var(--accent)' : 'none'}
+                      strokeWidth={isPeak ? 1 : 0}
+                      opacity={isHovered ? 1 : 0.92}
+                      rx={1}
+                    />
+                    {/* Value label on top of each bar (units count) */}
+                    {v > 0 && (
+                      <text
+                        x={x + barW / 2}
+                        y={y - 4}
+                        fontSize="9"
+                        textAnchor="middle"
+                        fill={isPeak ? 'var(--accent)' : 'var(--text)'}
+                      >
+                        {fmtInt(v)}
+                      </text>
+                    )}
+                    {/* Decade label below x-axis */}
+                    <text
+                      x={x + barW / 2}
+                      y={innerH + 12}
+                      fontSize="9"
+                      textAnchor="middle"
+                      fill={isPeak ? 'var(--accent)' : 'var(--text-dim)'}
+                    >
+                      {c.short}
+                    </text>
+                    {/* Share % below decade label */}
+                    <text
+                      x={x + barW / 2}
+                      y={innerH + 24}
+                      fontSize="8"
+                      textAnchor="middle"
+                      fill="var(--text-dim)"
+                    >
+                      {pct.toFixed(0)}%
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          </svg>
+          {/* Hover tooltip — anchors above the hovered bar with full
+              cohort label, exact unit count, and share. */}
+          {hoverIdx != null && chartCohorts[hoverIdx] && (
+            <div
+              className="pointer-events-none absolute rounded-md px-2 py-1.5 text-[10px]"
+              style={{
+                left: `${((M.left + hoverIdx * barW + barW / 2) / W) * 100}%`,
+                top: 4,
+                transform: 'translateX(-50%)',
+                background: 'rgba(11, 13, 16, 0.94)',
+                border: '1px solid var(--panel-border)',
+                color: 'var(--text-h)',
+                whiteSpace: 'nowrap',
+                lineHeight: 1.4,
+              }}
+            >
+              <div
+                className="text-[10px] mb-0.5 pb-0.5"
+                style={{
+                  color: 'var(--text-dim)',
+                  borderBottom: '1px solid var(--panel-border)',
+                }}
+              >
+                {chartCohorts[hoverIdx].label}
+              </div>
+              <div className="tnum">
+                <span style={{ color: 'var(--text-h)' }}>
+                  {fmtInt(chartCohorts[hoverIdx].value)}
+                </span>{' '}
+                units
+                <span style={{ color: 'var(--text-dim)' }}>
+                  {' '}·{' '}
+                  {totalUnits > 0
+                    ? `${((chartCohorts[hoverIdx].value / totalUnits) * 100).toFixed(1)}%`
+                    : '—'}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Peak-decade callout under the chart */}
+      {kpis?.peak && kpis.peak.value > 0 && (
+        <div
+          className="text-[10px] italic"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          Peak construction decade:{' '}
+          <span style={{ color: 'var(--accent)', fontStyle: 'normal', fontWeight: 600 }}>
+            {kpis.peak.label}
+          </span>{' '}
+          ·{' '}
+          <span style={{ color: 'var(--text-h)', fontStyle: 'normal' }}>
+            {fmtInt(kpis.peak.value)} units
+          </span>{' '}
+          (
+          {totalUnits > 0
+            ? `${((kpis.peak.value / totalUnits) * 100).toFixed(1)}%`
+            : '—'}
+          {' '}of stock)
+        </div>
+      )}
+
+      {/* About this data — methodology + analytical framing. Mirrors the
+          existing About-this-data tiles in the section: prose summary at
+          top, structured key/value grid below. Lives at the bottom of the
+          card so casual readers see the chart first, but analysts get the
+          source context they need to interpret the numbers. */}
+      <div
+        className="rounded-md p-3 flex flex-col gap-2 mt-1"
+        style={{
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid var(--panel-border)',
+        }}
+      >
+        <div>
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: 'var(--text-h)' }}
+          >
+            About this data
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            U.S. Census ACS 5-Year Estimates · table B25034 (Year Structure Built)
+          </div>
+        </div>
+        <p className="text-[11px] leading-snug" style={{ color: 'var(--text)' }}>
+          Year-built counts come from ACS table B25034, which records the year
+          construction was completed for every occupied or vacant housing unit
+          in the geography. The figure is self-reported by householders during
+          the rolling 5-year ACS sample window, then bucketed into 10
+          construction-decade cohorts (Pre-1940 through 2020+). Pre-1940 is a
+          single open-ended bucket — finer resolution isn&rsquo;t published.
+          Demolitions drop out naturally (only currently-existing units are
+          counted), and substantial renovations don&rsquo;t reset the year
+          built — a 1925 building gut-rehabbed in 2010 still counts as
+          Pre-1940.
+        </p>
+        <p className="text-[11px] leading-snug" style={{ color: 'var(--text)' }}>
+          The three KPIs are derived from the cohort distribution:{' '}
+          <strong style={{ color: 'var(--text-h)' }}>median stock age</strong>{' '}
+          uses a weighted median across cohort midpoints (a 1925 midpoint for
+          Pre-1940, a 2022 midpoint for 2020+, etc.) and is approximate at
+          decade resolution. <strong style={{ color: 'var(--text-h)' }}>Built before 1980</strong>{' '}
+          is a planner-relevant threshold — units built earlier carry a
+          materially higher risk of lead paint (banned 1978), knob-and-tube
+          wiring, asbestos, lower thermal envelope performance, and pre-modern
+          seismic / fire code.{' '}
+          <strong style={{ color: 'var(--text-h)' }}>Built since 2010</strong>{' '}
+          is a supply-side indicator — pair it with the Population Trend chart
+          to see whether construction pace is keeping up with population
+          growth.
+        </p>
+        <ul className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-1 mt-1">
+          <li className="flex flex-col">
+            <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+              Source
+            </span>
+            <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>
+              U.S. Census · ACS 5-Year
+            </span>
+          </li>
+          <li className="flex flex-col">
+            <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+              Table
+            </span>
+            <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>
+              B25034 (vars _002E – _011E)
+            </span>
+          </li>
+          <li className="flex flex-col">
+            <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+              Cadence
+            </span>
+            <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>
+              Annual · ~2-year lag
+            </span>
+          </li>
+          <li className="flex flex-col">
+            <span className="text-[9px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+              Vintage
+            </span>
+            <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>
+              {vintageEnd ? `5-Year ending ${vintageEnd}` : 'latest available'}
+            </span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-line trend chart — generic over Geography[] and a metric key. Used
+// for the new Housing Units Trend chart with current/historical toggle.
+// (Mirrors DemographicsSection.MultiLineTrendChart but reads from
+// Geography rather than DemoGeography.)
+// ---------------------------------------------------------------------------
+function HousingTrendChart({
+  geographies,
+  metricKey,
+  trendSource = 'current',
+  highlightId,
+  onActivate,
+  showGrowthAnnotations = false,
+}: {
+  geographies: Geography[];
+  metricKey: string;
+  trendSource?: 'current' | 'historical';
+  highlightId: string | null;
+  onActivate: (id: string) => void;
+  showGrowthAnnotations?: boolean;
+}) {
+  const series = useMemo(() => {
+    return geographies
+      .map((g, idx) => {
+        const src = trendSource === 'historical' ? g.historicalTrend : g.trend;
+        const trend = (src?.[metricKey] ?? []).filter(
+          (p): p is TrendPoint & { value: number } => p.value != null,
+        );
+        return { geo: g, color: geoColor(idx), trend };
+      })
+      .filter((s) => s.trend.length > 0);
+  }, [geographies, metricKey, trendSource]);
+
+  const { xMin, xMax, yMax } = useMemo(() => {
+    let xMin = Infinity, xMax = -Infinity, yMax = 0;
+    for (const s of series) {
+      for (const p of s.trend) {
+        if (p.year < xMin) xMin = p.year;
+        if (p.year > xMax) xMax = p.year;
+        if (p.value > yMax) yMax = p.value;
+      }
+    }
+    if (!Number.isFinite(xMin)) xMin = 2010;
+    if (!Number.isFinite(xMax)) xMax = 2024;
+    return { xMin, xMax, yMax };
+  }, [series]);
+
+  const W = 720;
+  const H = 260;
+  const M = { top: 8, right: 12, bottom: 24, left: 60 };
+  const innerW = W - M.left - M.right;
+  const innerH = H - M.top - M.bottom;
+
+  const sx = useMemo(() => scaleLinear().domain([xMin, xMax]).range([0, innerW]), [xMin, xMax, innerW]);
+  const sy = useMemo(() => scaleLinear().domain([0, yMax * 1.05 || 1]).range([innerH, 0]), [yMax, innerH]);
+
+  const lineGen = useMemo(
+    () =>
+      d3Line<TrendPoint & { value: number }>()
+        .x((d) => sx(d.year))
+        .y((d) => sy(d.value)),
+    [sx, sy],
+  );
+
+  // Ribbon area generator — filled area between the line and the x-axis
+  // baseline. Each series draws the area + line on top.
+  const areaGen = useMemo(
+    () =>
+      d3Area<TrendPoint & { value: number }>()
+        .x((d) => sx(d.year))
+        .y0(innerH)
+        .y1((d) => sy(d.value)),
+    [sx, sy, innerH],
+  );
+
+  const yTicks = useMemo(() => sy.ticks(4), [sy]);
+  const xTicks = useMemo(() => {
+    const span = xMax - xMin;
+    const step = span > 50 ? 10 : span > 20 ? 5 : span > 10 ? 2 : 1;
+    const out: number[] = [];
+    for (let y = Math.ceil(xMin / step) * step; y <= xMax; y += step) out.push(y);
+    return out;
+  }, [xMin, xMax]);
+
+  const growthAnnotations = useMemo(() => {
+    if (!showGrowthAnnotations) return new Map<string, string>();
+    const m = new Map<string, string>();
+    for (const s of series) {
+      if (s.trend.length < 2) continue;
+      const first = s.trend[0];
+      const last = s.trend[s.trend.length - 1];
+      if (!first.value) continue;
+      const pct = ((last.value - first.value) / first.value) * 100;
+      const sign = pct >= 0 ? '+' : '';
+      m.set(s.geo.id, `${sign}${pct.toFixed(0)}% since ${first.year}`);
+    }
+    return m;
+  }, [series, showGrowthAnnotations]);
+
+  const showMarkers = trendSource === 'historical';
+
+  // Year-snap hover for the value/% change tooltip.
+  const [hoverYear, setHoverYear] = useState<number | null>(null);
+  const allYears = useMemo(() => {
+    const set = new Set<number>();
+    for (const s of series) for (const p of s.trend) set.add(p.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [series]);
+
+  const xToYear = (xViewBox: number): number | null => {
+    if (allYears.length === 0) return null;
+    const xData = sx.invert(xViewBox);
+    let best = allYears[0];
+    let bestDist = Math.abs(allYears[0] - xData);
+    for (let i = 1; i < allYears.length; i++) {
+      const d = Math.abs(allYears[i] - xData);
+      if (d < bestDist) { bestDist = d; best = allYears[i]; }
+    }
+    return best;
+  };
+
+  const handleMove = (e: React.MouseEvent<SVGRectElement>) => {
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const local = pt.matrixTransform(ctm.inverse());
+    const xInPlot = local.x - M.left;
+    if (xInPlot < 0 || xInPlot > innerW) return;
+    const yr = xToYear(xInPlot);
+    if (yr != null) setHoverYear(yr);
+  };
+
+  const focused = useMemo(() => {
+    if (hoverYear == null) return null;
+    const rows = series
+      .map((s) => {
+        const ptIdx = s.trend.findIndex((p) => p.year === hoverYear);
+        if (ptIdx < 0) return null;
+        const pt = s.trend[ptIdx];
+        const prev = ptIdx > 0 ? s.trend[ptIdx - 1] : null;
+        const pctChange = prev && prev.value
+          ? ((pt.value - prev.value) / prev.value) * 100
+          : null;
+        return {
+          geo: s.geo,
+          color: s.color,
+          value: pt.value,
+          pctChange,
+          prevYear: prev?.year ?? null,
+        };
+      })
+      .filter((x): x is { geo: Geography; color: string; value: number; pctChange: number | null; prevYear: number | null } => x != null)
+      .sort((a, b) => b.value - a.value);
+    if (rows.length === 0) return null;
+    return { year: hoverYear, rows };
+  }, [hoverYear, series]);
+
+  const tooltipPct = useMemo(() => {
+    if (!focused) return null;
+    const cx = M.left + sx(focused.year);
+    return { left: (cx / W) * 100 };
+  }, [focused, sx, M.left]);
+
+  return (
+    <div className="flex flex-col gap-2 flex-1">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {series.map((s) => {
+          const isActive = highlightId === s.geo.id;
+          const ann = growthAnnotations.get(s.geo.id);
+          return (
+            <button
+              key={s.geo.id}
+              type="button"
+              onClick={() => onActivate(s.geo.id)}
+              className="flex items-center gap-1.5 text-[10px] tabular-nums"
+              style={{
+                color: isActive ? 'var(--accent)' : 'var(--text)',
+                opacity: isActive || highlightId == null ? 1 : 0.6,
+              }}
+            >
+              <span
+                className="inline-block rounded-full"
+                style={{ width: 8, height: 8, background: s.color }}
+              />
+              {s.geo.label}
+              {ann && <span style={{ color: 'var(--text-dim)' }}>· {ann}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="relative w-full flex-1 flex flex-col" style={{ minHeight: 240 }}>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          className="w-full h-full"
+          style={{ display: 'block', flex: 1, minHeight: 200 }}
+          onMouseLeave={() => setHoverYear(null)}
+        >
+          <g transform={`translate(${M.left}, ${M.top})`}>
+            {yTicks.map((t) => (
+              <g key={t}>
+                <line
+                  x1={0}
+                  x2={innerW}
+                  y1={sy(t)}
+                  y2={sy(t)}
+                  stroke="var(--panel-border)"
+                  strokeDasharray="2 3"
+                />
+                <text x={-6} y={sy(t)} fontSize="9" textAnchor="end" dominantBaseline="middle" fill="var(--text-dim)">
+                  {fmtInt(t)}
+                </text>
+              </g>
+            ))}
+            {xTicks.map((t) => (
+              <text key={t} x={sx(t)} y={innerH + 14} fontSize="9" textAnchor="middle" fill="var(--text-dim)">
+                {t}
+              </text>
+            ))}
+            {series.map((s) => {
+              const isActive = highlightId === s.geo.id;
+              const isDimmed = highlightId != null && !isActive;
+              const path = lineGen(s.trend) ?? '';
+              const areaPath = areaGen(s.trend) ?? '';
+              const baseAreaOpacity = isActive ? 0.32 : 0.18;
+              const areaOpacity = isDimmed ? 0.06 : baseAreaOpacity;
+              return (
+                <g key={s.geo.id}>
+                  <path
+                    d={areaPath}
+                    fill={isActive ? 'var(--accent)' : s.color}
+                    opacity={areaOpacity}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onActivate(s.geo.id)}
+                  />
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={isActive ? 'var(--accent)' : s.color}
+                    strokeWidth={isActive ? 2.4 : 1.4}
+                    opacity={isDimmed ? 0.32 : 0.95}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onActivate(s.geo.id)}
+                  />
+                  {showMarkers && s.trend.map((p) => (
+                    <circle
+                      key={p.year}
+                      cx={sx(p.year)}
+                      cy={sy(p.value)}
+                      r={isActive ? 3 : 2.2}
+                      fill={isActive ? 'var(--accent)' : s.color}
+                      opacity={isDimmed ? 0.32 : 0.95}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ))}
+                </g>
+              );
+            })}
+            {focused && (
+              <g>
+                <line
+                  x1={sx(focused.year)}
+                  x2={sx(focused.year)}
+                  y1={0}
+                  y2={innerH}
+                  stroke="var(--accent)"
+                  strokeOpacity={0.5}
+                  strokeDasharray="3 3"
+                  vectorEffect="non-scaling-stroke"
+                />
+                {focused.rows.map((r) => (
+                  <circle
+                    key={r.geo.id}
+                    cx={sx(focused.year)}
+                    cy={sy(r.value)}
+                    r={3}
+                    fill={highlightId === r.geo.id ? 'var(--accent)' : r.color}
+                    stroke="rgba(11,13,16,0.95)"
+                    strokeWidth={1}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+              </g>
+            )}
+            <rect
+              x={0}
+              y={0}
+              width={innerW}
+              height={innerH}
+              fill="transparent"
+              pointerEvents="all"
+              onMouseMove={handleMove}
+            />
+          </g>
+        </svg>
+        {focused && tooltipPct && (
+          <div
+            className="pointer-events-none absolute rounded-md px-2 py-1.5 text-[10px]"
+            style={{
+              left: `${Math.min(95, Math.max(5, tooltipPct.left))}%`,
+              top: 4,
+              transform: 'translateX(-50%)',
+              background: 'rgba(11, 13, 16, 0.94)',
+              border: '1px solid var(--panel-border)',
+              color: 'var(--text-h)',
+              whiteSpace: 'nowrap',
+              lineHeight: 1.4,
+              maxHeight: 'calc(100% - 8px)',
+              overflowY: 'auto',
+            }}
+          >
+            <div
+              className="text-[10px] mb-0.5 pb-0.5"
+              style={{
+                color: 'var(--text-dim)',
+                borderBottom: '1px solid var(--panel-border)',
+              }}
+            >
+              {focused.year}
+            </div>
+            <ul className="flex flex-col gap-0.5">
+              {focused.rows.slice(0, 8).map((r) => {
+                const isActive = highlightId === r.geo.id;
+                const pctText = r.pctChange != null
+                  ? `${r.pctChange >= 0 ? '+' : ''}${r.pctChange.toFixed(1)}%`
+                  : null;
+                const pctColor = r.pctChange == null
+                  ? 'var(--text-dim)'
+                  : r.pctChange >= 0
+                    ? '#9CC479'
+                    : '#C47979';
+                return (
+                  <li
+                    key={r.geo.id}
+                    className="flex items-center gap-2 justify-between"
+                    style={{ color: isActive ? 'var(--accent)' : 'var(--text)' }}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block rounded-full"
+                        style={{ width: 6, height: 6, background: r.color }}
+                      />
+                      {r.geo.label}
+                    </span>
+                    <span className="flex items-center gap-1.5 tnum">
+                      {pctText && (
+                        <span
+                          className="text-[9px]"
+                          style={{ color: pctColor }}
+                          title={r.prevYear != null ? `change since ${r.prevYear}` : undefined}
+                        >
+                          {pctText}
+                        </span>
+                      )}
+                      <span style={{ color: 'var(--text-h)' }}>
+                        {fmtInt(r.value)} units
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
+              {focused.rows.length > 8 && (
+                <li className="text-[9px]" style={{ color: 'var(--text-dim)' }}>
+                  + {focused.rows.length - 8} more
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cost Burden chart — 100%-normalized stacked bars across geographies.
+// Each bar shows three segments summing to 100% of total occupied housing
+// units (B25003: ownerOccupied + renterOccupied):
+//   - Affordable (< 30% of HHI on housing) — derived as universe − costBurden30
+//   - Cost-burdened (30 – 49% of HHI) — costBurden30 minus costBurden50
+//   - Severely cost-burdened (≥ 50% of HHI) — costBurden50
+//
+// Normalizing to share rather than absolute count makes Glenwood Springs
+// (~10K hh) directly comparable to Garfield County (~25K hh) and Colorado
+// (~2.4M hh). Sorted by combined burden share descending so the most
+// stressed geographies surface first.
+//
+// Universe note: ownerOccupied + renterOccupied is a slightly broader
+// denominator than the strict B25070 + B25091 cost-burden universe (which
+// excludes owners without mortgages). Owners-without-mortgage are
+// effectively never cost-burdened, so categorizing them inside Affordable
+// matches how HUD and most planners report this metric.
+// ---------------------------------------------------------------------------
+function CostBurdenChart({
+  geographies,
+  highlightId,
+  onActivate,
+}: {
+  geographies: Geography[];
+  highlightId: string | null;
+  onActivate: (id: string) => void;
+}) {
+  const rows = useMemo(() => {
+    return geographies
+      .map((g, idx) => {
+        const owner = readNum(g.latest, 'ownerOccupied') ?? 0;
+        const renter = readNum(g.latest, 'renterOccupied') ?? 0;
+        const universe = owner + renter;
+        const cb30 = readNum(g.latest, 'costBurden30'); // includes severe
+        const cb50 = readNum(g.latest, 'costBurden50');
+        if (universe <= 0 || cb30 == null) return null;
+        const severe = cb50 ?? 0;
+        const moderate = Math.max(0, cb30 - severe);
+        const affordable = Math.max(0, universe - cb30);
+        const totalBurdenShare = universe > 0 ? cb30 / universe : 0;
+        return {
+          geo: g,
+          color: geoColor(idx),
+          universe,
+          affordable,
+          moderate,
+          severe,
+          totalBurdenShare,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r != null)
+      .sort((a, b) => b.totalBurdenShare - a.totalBurdenShare);
+  }, [geographies]);
+
+  const labelW = 132;
+  const trailingW = 96;
+  const rowGap = 6;
+  // Rows fill available vertical space — bar height grows with the card.
+  const minRowHeight = 18;
+
+  return (
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text)' }}>
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: '#9CC479' }} />
+          Affordable (&lt; 30% of HHI)
+        </span>
+        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text)' }}>
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: '#C8B273' }} />
+          Cost-burdened (30 – 49% of HHI)
+        </span>
+        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text)' }}>
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: '#C47979' }} />
+          Severely cost-burdened (≥ 50% of HHI)
+        </span>
+      </div>
+      <div
+        className="relative grid flex-1 min-h-0"
+        style={{
+          gridTemplateRows: `repeat(${Math.max(1, rows.length)}, minmax(${minRowHeight}px, 1fr))`,
+          rowGap,
+          minHeight: rows.length * (minRowHeight + rowGap),
+        }}
+      >
+        {rows.map(({ geo, universe, affordable, moderate, severe, totalBurdenShare }) => {
+          const isActive = highlightId === geo.id;
+          const isDimmed = highlightId != null && !isActive;
+          const affordablePct = (affordable / universe) * 100;
+          const moderatePct = (moderate / universe) * 100;
+          const severePct = (severe / universe) * 100;
+          return (
+            <div
+              key={geo.id}
+              className="grid items-center gap-2"
+              style={{
+                gridTemplateColumns: `${labelW}px 1fr ${trailingW}px`,
+                opacity: isDimmed ? 0.55 : 1,
+                cursor: 'pointer',
+              }}
+              onClick={() => onActivate(geo.id)}
+            >
+              <div
+                className="text-[11px] truncate"
+                style={{
+                  color: isActive ? 'var(--accent)' : 'var(--text-h)',
+                  fontWeight: isActive ? 600 : 400,
+                }}
+                title={geo.label}
+              >
+                {geo.label}
+              </div>
+              <div
+                className="relative flex w-full overflow-hidden rounded-sm h-full"
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid var(--panel-border)',
+                  minHeight: minRowHeight,
+                }}
+              >
+                <div
+                  style={{
+                    width: `${affordablePct}%`,
+                    background: '#9CC479',
+                    opacity: 0.92,
+                  }}
+                  title={`${geo.label} · Affordable (<30% HHI): ${fmtInt(affordable)} units (${affordablePct.toFixed(1)}%)`}
+                />
+                <div
+                  style={{
+                    width: `${moderatePct}%`,
+                    background: '#C8B273',
+                    opacity: 0.92,
+                  }}
+                  title={`${geo.label} · Cost-burdened (30-49% HHI): ${fmtInt(moderate)} units (${moderatePct.toFixed(1)}%)`}
+                />
+                <div
+                  style={{
+                    width: `${severePct}%`,
+                    background: '#C47979',
+                    opacity: 0.92,
+                  }}
+                  title={`${geo.label} · Severely cost-burdened (≥50% HHI): ${fmtInt(severe)} units (${severePct.toFixed(1)}%)`}
+                />
+              </div>
+              <div className="text-[10px] tnum text-right" style={{ color: 'var(--text-dim)' }}>
+                <span style={{ color: isActive ? 'var(--accent)' : 'var(--text-h)' }}>
+                  {(totalBurdenShare * 100).toFixed(0)}%
+                </span>
+                {' burdened'}
+                <div className="text-[9px]" style={{ color: 'var(--text-dim)' }}>
+                  {fmtInt(universe)} units
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Affordability Ratio chart (F1) — median home value ÷ median HH income
+// across geographies. Demographics envelope supplies medianHhIncome; the
+// housing envelope supplies medianHomeValueAcs. Reference line at 5.0
+// marks the conventional "moderately unaffordable" threshold.
+// ---------------------------------------------------------------------------
+function AffordabilityRatioChart({
+  geographies,
+  highlightId,
+  onActivate,
+  incomeByGeoId,
+}: {
+  geographies: Geography[];
+  highlightId: string | null;
+  onActivate: (id: string) => void;
+  incomeByGeoId: Map<string, number>;
+}) {
+  const rows = useMemo(() => {
+    return geographies
+      .map((g, idx) => {
+        const value = readNum(g.latest, 'medianHomeValueAcs');
+        const income = incomeByGeoId.get(g.id);
+        if (value == null || income == null || income <= 0) return null;
+        const ratio = value / income;
+        return { geo: g, color: geoColor(idx), value, income, ratio };
+      })
+      .filter((r): r is NonNullable<typeof r> => r != null)
+      .sort((a, b) => b.ratio - a.ratio);
+  }, [geographies, incomeByGeoId]);
+
+  const xMax = useMemo(() => {
+    const m = rows.reduce((acc, r) => Math.max(acc, r.ratio), 0);
+    return Math.max(8, Math.ceil(m + 1));
+  }, [rows]);
+
+  // Match CostBurdenChart row geometry exactly so the two cards' rows
+  // line up vertically when rendered side-by-side.
+  const labelW = 132;
+  const trailingW = 96;
+  const rowGap = 6;
+  const minRowHeight = 18;
+
+  return (
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
+      {/* Match CostBurdenChart's 3-segment legend so the two cards have
+          identical above-grid header heights — guarantees row-by-row
+          vertical alignment when rendered side-by-side. */}
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text)' }}>
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: '#9CC479' }} />
+          Affordable (&lt; 4×)
+        </span>
+        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text)' }}>
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: '#C8B273' }} />
+          Strained (4 – 6×)
+        </span>
+        <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text)' }}>
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: '#C47979' }} />
+          Severely unaffordable (≥ 6×)
+        </span>
+      </div>
+      <div
+        className="relative grid flex-1 min-h-0"
+        style={{
+          gridTemplateRows: `repeat(${Math.max(1, rows.length)}, minmax(${minRowHeight}px, 1fr))`,
+          rowGap,
+          minHeight: rows.length * (minRowHeight + rowGap),
+        }}
+      >
+        {rows.map(({ geo, ratio, value, income }) => {
+          const isActive = highlightId === geo.id;
+          const isDimmed = highlightId != null && !isActive;
+          const widthPct = (ratio / xMax) * 100;
+          const refPct = (5 / xMax) * 100;
+          // Color-code by severity: < 4.0 sage; 4.0-6.0 wheat; ≥ 6.0 brick.
+          let barColor = '#9CC479';
+          if (ratio >= 6) barColor = '#C47979';
+          else if (ratio >= 4) barColor = '#C8B273';
+          return (
+            <div
+              key={geo.id}
+              className="grid items-center gap-2"
+              style={{
+                gridTemplateColumns: `${labelW}px 1fr ${trailingW}px`,
+                opacity: isDimmed ? 0.55 : 1,
+                cursor: 'pointer',
+              }}
+              onClick={() => onActivate(geo.id)}
+            >
+              <div
+                className="text-[11px] truncate"
+                style={{
+                  color: isActive ? 'var(--accent)' : 'var(--text-h)',
+                  fontWeight: isActive ? 600 : 400,
+                }}
+                title={geo.label}
+              >
+                {geo.label}
+              </div>
+              <div
+                className="relative w-full overflow-hidden rounded-sm h-full"
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid var(--panel-border)',
+                  minHeight: minRowHeight,
+                }}
+              >
+                <div
+                  className="h-full"
+                  style={{
+                    width: `${widthPct}%`,
+                    background: isActive ? 'var(--accent)' : barColor,
+                    opacity: 0.92,
+                  }}
+                  title={`${geo.label}: ${ratio.toFixed(2)}× ($${fmtInt(value)} ÷ $${fmtInt(income)})`}
+                />
+                {/* Reference line at 5× */}
+                <div
+                  className="absolute top-0 bottom-0"
+                  style={{
+                    left: `${refPct}%`,
+                    width: 1,
+                    background: 'rgba(255,255,255,0.4)',
+                  }}
+                />
+              </div>
+              <div className="text-[10px] tnum text-right" style={{ color: 'var(--text-h)' }}>
+                {ratio.toFixed(1)}×
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {rows.length === 0 && (
+        <div className="text-[10px] italic" style={{ color: 'var(--text-dim)' }}>
+          Affordability ratio unavailable — both medianHomeValueAcs and medianHhIncome required.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Top-level section
 // ---------------------------------------------------------------------------
 export function HousingMarketSection({
@@ -1126,6 +2566,41 @@ export function HousingMarketSection({
     setSelectedTypeKey((prev) => (prev === key ? null : key));
   };
 
+  // Housing Units Trend toggles (mirror Population Trend in DemographicsSection).
+  const [huPeriod, setHuPeriod] = useState<'current' | 'historical'>('current');
+  const [huGeoKind, setHuGeoKind] = useState<'place' | 'county' | 'state'>('place');
+  const huGeographies = useMemo(
+    () => geographies.filter((g) => g.kind === huGeoKind),
+    [geographies, huGeoKind],
+  );
+
+  // Median household income lookup for the Affordability Ratio chart —
+  // joined from the demographics envelope by geography ID. Each Geography in
+  // this section has the same id format ('place:81601', 'county:08045',
+  // 'state:08') used in DemographicsSection, so the join is direct.
+  const incomeByGeoId = useMemo(() => {
+    const m = new Map<string, number>();
+    const demo = bundle?.demographics;
+    if (!demo) return m;
+    for (const p of demo.places) {
+      const inc = typeof p.latest?.medianHhIncome === 'number' ? p.latest.medianHhIncome : null;
+      if (inc != null) {
+        m.set(`place:${p.zip}`, inc);
+        // Housing section also uses 'national:US' for the United States
+        // benchmark; demographics doesn't carry that geography. Skip cleanly.
+      }
+    }
+    for (const c of demo.counties) {
+      const inc = typeof c.latest?.medianHhIncome === 'number' ? c.latest.medianHhIncome : null;
+      if (inc != null) m.set(`county:${c.geoid}`, inc);
+    }
+    if (demo.state) {
+      const inc = typeof demo.state.latest?.medianHhIncome === 'number' ? demo.state.latest.medianHhIncome : null;
+      if (inc != null) m.set(`state:${demo.state.fips}`, inc);
+    }
+    return m;
+  }, [bundle?.demographics]);
+
   if (!housing) {
     return (
       <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
@@ -1134,16 +2609,134 @@ export function HousingMarketSection({
     );
   }
 
+  const vintageEnd = housing.vintageRange?.end ?? null;
+  const vintageStart = housing.vintageRange?.start ?? null;
+
   return (
     <div className="flex flex-col gap-3 w-full">
-      {/* Top section is split into two row-grids that share a column
-          template, so paired cards (About ↔ Stats, Chart ↔ Radar) match
-          heights via CSS grid's default stretch alignment. The 2nd row
-          uses items-stretch + flex-1 inside ChartFrame so the chart and
-          radar SVGs grow to fill the row. */}
+      {/* === Section opener: ACS/SDO/NHGIS-driven housing metrics ===
+          About-this-data tile + ACS-derived headline KPIs (median home
+          value, gross rent, owner-occupied %, cost-burdened %). The Zillow
+          ZHVI block is moved to its own dedicated subsection at the bottom
+          of the section so users see the authoritative public-source data
+          first and can use Zillow as a complementary higher-frequency
+          cross-check. */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1">
         <HousingDataSetTile />
-        <HeadlineStats geo={activeGeo} />
+        <HeadlineStats
+          geo={activeGeo}
+          vintageEnd={vintageEnd}
+          medianHhIncome={
+            activeGeo ? incomeByGeoId.get(activeGeo.id) ?? null : null
+          }
+        />
+      </div>
+
+      {/* Housing characteristics tile — SDO 2024 vintage characteristics. */}
+      <div className="grid gap-3 grid-cols-1">
+        <HousingCharacteristicsTile geo={activeGeo} />
+      </div>
+
+      {/* Housing stock by year built — derived KPI strip + decade bars
+          (ACS B25034). */}
+      <div className="grid gap-3 grid-cols-1">
+        <HousingVintageCard geo={activeGeo} vintageEnd={vintageEnd} />
+      </div>
+
+      {/* Housing Units Trend (current annual / historical decennial toggle).
+          Mirrors the Population Trend chart in DemographicsSection so users
+          have a consistent toggle pattern across both sections. */}
+      <div className="grid gap-3 grid-cols-1">
+        <ChartFrame
+          title="Housing Units Trend"
+          subtitle={
+            huPeriod === 'historical'
+              ? `Decennial 1970 → 2020 + ${vintageEnd ?? '2024'} anchor · NHGIS + CO SDO · click a line or legend item to highlight`
+              : `Annual ${vintageStart ?? 2010} → ${vintageEnd ?? 'latest'} · CO SDO (places) + ACS B25001 (county/state)`
+          }
+        >
+          <div className="flex items-center gap-2 flex-wrap">
+            <SegmentedControl<'place' | 'county' | 'state'>
+              ariaLabel="Geography level"
+              value={huGeoKind}
+              onChange={setHuGeoKind}
+              options={[
+                { value: 'place',  label: 'Place'  },
+                { value: 'county', label: 'County' },
+                { value: 'state',  label: 'State'  },
+              ]}
+            />
+            <SegmentedControl<'current' | 'historical'>
+              ariaLabel="Time period"
+              value={huPeriod}
+              onChange={setHuPeriod}
+              options={[
+                { value: 'current',    label: 'Current'    },
+                { value: 'historical', label: 'Historical' },
+              ]}
+            />
+          </div>
+          <HousingTrendChart
+            geographies={huGeographies}
+            metricKey="housingUnits"
+            trendSource={huPeriod}
+            highlightId={effectiveActiveId}
+            onActivate={handleSelectCity}
+            showGrowthAnnotations={huPeriod === 'historical'}
+          />
+        </ChartFrame>
+      </div>
+
+      {/* Cost Burden + Affordability Ratio — ACS-derived affordability
+          indicators across all geographies. Click a row to retarget the
+          active geography for the rest of the section. */}
+      <div className="grid gap-3 lg:grid-cols-2 grid-cols-1 items-stretch">
+        <ChartFrame
+          title="Housing Cost Burden"
+          subtitle={`Households paying 30%+ of HHI on housing · ACS 5-Year ${vintageEnd ?? 'latest'} (B25070 + B25091)`}
+        >
+          <CostBurdenChart
+            geographies={geographies}
+            highlightId={effectiveActiveId}
+            onActivate={handleSelectCity}
+          />
+        </ChartFrame>
+        <ChartFrame
+          title="Affordability Ratio"
+          subtitle={`Median home value ÷ median HH income · ACS 5-Year ${vintageEnd ?? 'latest'} · vertical line at 5×`}
+        >
+          <AffordabilityRatioChart
+            geographies={geographies}
+            highlightId={effectiveActiveId}
+            onActivate={handleSelectCity}
+            incomeByGeoId={incomeByGeoId}
+          />
+        </ChartFrame>
+      </div>
+
+      {/* === Zillow Home Value Index subsection ===
+          Dedicated subsection housing every ZHVI-driven visualization.
+          Sits at the bottom of the Housing section so the
+          authoritative-public-source content (ACS / SDO / NHGIS) leads
+          and Zillow's higher-frequency proprietary index follows as a
+          complementary cross-check. Visual divider + h3 header signal
+          the subsection break. */}
+      <div className="flex items-center gap-3 mt-2">
+        <h3
+          className="text-xs font-semibold uppercase tracking-wider whitespace-nowrap"
+          style={{ color: 'var(--text-h)' }}
+        >
+          Zillow Home Value Index
+        </h3>
+        <div
+          className="flex-1"
+          style={{ height: 1, background: 'var(--panel-border)' }}
+        />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1">
+        <ZillowDataSetTile />
+        <ZillowHeadlineStats geo={activeGeo} />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1 items-stretch">
@@ -1172,7 +2765,6 @@ export function HousingMarketSection({
         </ChartFrame>
       </div>
 
-      {/* Bottom row — city comparison + housing-type bars (unchanged) */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1">
         <ChartFrame
           title="Typical Home City Comparison"

@@ -66,9 +66,9 @@ type SectionId =
 const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
   { id: 'workforce', label: 'Workforce' },
   { id: 'demographics', label: 'Demographics' },
+  { id: 'housing', label: 'Housing' },
   { id: 'commerce', label: 'Commerce' },
   { id: 'economic', label: 'Economic Research' },
-  { id: 'housing', label: 'Housing' },
 ];
 
 export function DashboardView({ data }: Props) {
@@ -631,6 +631,30 @@ export function DashboardView({ data }: Props) {
             />
           </section>
 
+          {/* Section — Housing Market: full Zillow ZHVI panel (headline stats,
+              time series, radar, type bars, city comparison filter), plus
+              SDO/NHGIS housing-units trend, characteristics tile, cost
+              burden, and affordability ratio. Sits between Demographics and
+              Commerce so the residential picture is grouped with the
+              population picture before the economic-activity sections. */}
+          <section
+            id="housing"
+            ref={setSectionRef('housing')}
+            className="scroll-mt-4 rounded-md p-3"
+            style={{
+              background: 'var(--panel-surface)',
+              border: '1px solid var(--panel-border)',
+            }}
+          >
+            <h2
+              className="text-base font-semibold uppercase tracking-wider mb-3"
+              style={{ color: 'var(--text-h)' }}
+            >
+              Housing Market
+            </h2>
+            <HousingMarketSection bundle={contextBundle} selectedZip={selectedZip} />
+          </section>
+
           {/* Section — Commerce: 2-column grid. Left = real timeseries chart
               (zero y-axis baseline, hover tooltip). Right = headline KPI
               card on top, then Counties bar chart, then (Anchor places +
@@ -723,26 +747,6 @@ export function DashboardView({ data }: Props) {
               Economic Research
             </h2>
             <EconomicResearchSection bundle={economicBundle} />
-          </section>
-
-          {/* Section — Housing Market: full Zillow ZHVI panel (headline stats,
-              time series, radar, type bars, city comparison filter). */}
-          <section
-            id="housing"
-            ref={setSectionRef('housing')}
-            className="scroll-mt-4 rounded-md p-3"
-            style={{
-              background: 'var(--panel-surface)',
-              border: '1px solid var(--panel-border)',
-            }}
-          >
-            <h2
-              className="text-base font-semibold uppercase tracking-wider mb-3"
-              style={{ color: 'var(--text-h)' }}
-            >
-              Housing Market
-            </h2>
-            <HousingMarketSection bundle={contextBundle} selectedZip={selectedZip} />
           </section>
         </div>
       </div>

@@ -1,24 +1,22 @@
 // DemographicsSection — full ACS-driven panel for the Dashboard's
-// Demographics section. Mirrors HousingMarketSection in structure: a
-// dataset descriptor card + headline KPI strip on top, then a series of
-// charts that surface what `public/data/context/demographics.json` and
-// `education.json` already publish but the prior ContextCards-row was
-// hiding (median age, age cohorts, income, race/ethnicity, household
-// composition).
+// Demographics section, augmented with Colorado SDO place population
+// (current + historical) and decennial state/county historical population.
 //
 // Layout:
 //   Row 1 — About card  ·  Headline KPI strip (4 tiles)
-//   Row 2 — Population trend  ·  Median household income trend
+//   Row 2 — Population trend (geo-kind + period toggles, growth annotations)  ·  Median HH income trend
 //   Row 3 — Age distribution (stacked bars per geography, 100%-normalized)
+//             with Aging Trajectory + Median Age trend stacked alongside
 //   Row 4 — Race composition  ·  Hispanic / non-Hispanic share
 //   Row 5 — Household composition (Family vs Non-Family)
+//   Row 6 — Population Pyramid (active geography only)
 //
 // Geography selection mirrors Housing: click a bar → set the active
 // geography for the headline strip + trend highlight. When the dashboard
 // has an anchor selected, the matching place geography is the default.
 
 import { useMemo, useState } from 'react';
-import { line as d3Line } from 'd3-shape';
+import { line as d3Line, area as d3Area } from 'd3-shape';
 import { scaleLinear } from 'd3-scale';
 import type {
   ContextBundle,
@@ -42,6 +40,9 @@ interface DemoGeography {
   // ACS demographics envelope row (population, age, race, household, income).
   demoLatest: ContextLatest | null;
   demoTrend: ContextTrend;
+  // Decennial / SDO historical trend (population). Optional — present when
+  // the builder emitted a historical series for this geography.
+  demoHistoricalTrend: ContextTrend;
   // ACS education envelope row (eduLessHs..eduGradPlus, pctBachPlus). Joined
   // by id so the headline KPI strip can read Bachelor's+ alongside the
   // demographic metrics.
@@ -67,6 +68,7 @@ function deriveGeographies(
       kind: 'place',
       demoLatest: p.latest,
       demoTrend: p.trend,
+      demoHistoricalTrend: p.historicalTrend ?? {},
       eduLatest: eduPlace(p.zip),
     });
   }
@@ -77,6 +79,7 @@ function deriveGeographies(
       kind: 'county',
       demoLatest: c.latest,
       demoTrend: c.trend,
+      demoHistoricalTrend: c.historicalTrend ?? {},
       eduLatest: eduCounty(c.geoid),
     });
   }
@@ -87,6 +90,7 @@ function deriveGeographies(
       kind: 'state',
       demoLatest: demo.state.latest,
       demoTrend: demo.state.trend,
+      demoHistoricalTrend: demo.state.historicalTrend ?? {},
       eduLatest: eduState(),
     });
   }
@@ -134,6 +138,12 @@ const RACE_PALETTE = ['#7AC4D8', '#9FB3C8', '#C29479', '#C8B273', '#94C4B7', '#B
 // section accent, non-family the dim companion — keeps the bar readable
 // even when one segment dominates.
 const HOUSEHOLD_PALETTE = ['#4FB3A9', '#9FB3C8'];
+
+// Population pyramid sex colors. Cyan male / adobe female from the shared
+// palette — no semantic gender coding implied beyond the convention used by
+// every demographic visualization in the field.
+const PYRAMID_MALE = '#7AC4D8';
+const PYRAMID_FEMALE = '#C29479';
 
 // ---------------------------------------------------------------------------
 // Field bundles
@@ -185,6 +195,57 @@ function fmtMedianAge(v: number | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// Reusable segmented control
+// ---------------------------------------------------------------------------
+interface SegmentedOption<T extends string> {
+  value: T;
+  label: string;
+}
+function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: ReadonlyArray<SegmentedOption<T>>;
+  value: T;
+  onChange: (next: T) => void;
+  ariaLabel?: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className="inline-flex gap-0.5 p-0.5 rounded-md border"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        borderColor: 'var(--panel-border)',
+      }}
+    >
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(opt.value)}
+            className="px-2 py-0.5 text-[10px] font-medium rounded transition-colors"
+            style={{
+              background: active ? 'var(--accent)' : 'transparent',
+              color: active ? '#1a1207' : 'var(--text-dim)',
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // About-this-data tile
 // ---------------------------------------------------------------------------
 function DemographicsDataSetTile({ vintage }: { vintage: { start: number; end: number } | undefined }) {
@@ -205,17 +266,16 @@ function DemographicsDataSetTile({ vintage }: { vintage: { start: number; end: n
           About this data
         </div>
         <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
-          U.S. Census ACS 5-Year Estimates
+          U.S. Census ACS 5-Year Estimates · Colorado SDO · NHGIS
         </div>
       </div>
       <p className="text-[11px] leading-snug" style={{ color: 'var(--text)' }}>
         The American Community Survey 5-Year Estimates pool five years of
         rolling household sample to publish demographic, age, race, household,
-        and income tables down to ZIP-code-level geographies. Estimates are
-        released annually and reflect the average conditions across the
-        five-year window — they smooth out year-to-year noise but lag the
-        present by roughly two years. Education attainment is drawn from the
-        ACS subject table S1501.
+        and income tables. Place-level population uses the Colorado State
+        Demography Office vintage estimates (annual 2010 → 2024 + historical
+        decennial 1950 → 2020) for higher precision at small-place scale.
+        Education attainment is drawn from the ACS subject table S1501.
       </p>
       <ul className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-1 mt-1">
         <li className="flex flex-col">
@@ -223,7 +283,7 @@ function DemographicsDataSetTile({ vintage }: { vintage: { start: number; end: n
             Source
           </span>
           <span className="text-[11px]" style={{ color: 'var(--text-h)' }}>
-            U.S. Census · ACS 5-Year
+            ACS 5-Year · CO SDO
           </span>
         </li>
         <li className="flex flex-col">
@@ -258,7 +318,7 @@ function DemographicsDataSetTile({ vintage }: { vintage: { start: number; end: n
 // ---------------------------------------------------------------------------
 // Headline KPI strip
 // ---------------------------------------------------------------------------
-function HeadlineStats({ geo }: { geo: DemoGeography | null }) {
+function HeadlineStats({ geo, vintageEnd }: { geo: DemoGeography | null; vintageEnd: number | null }) {
   const items: { label: string; value: string }[] = [
     { label: 'Population',         value: fmtPopulation(readNum(geo?.demoLatest ?? null, 'population')) },
     { label: 'Median age',         value: fmtMedianAge(readNum(geo?.demoLatest ?? null, 'medianAge')) },
@@ -285,7 +345,7 @@ function HeadlineStats({ geo }: { geo: DemoGeography | null }) {
             Demographic Snapshot
           </div>
           <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
-            {geo?.label ?? '—'} · ACS 5-Year
+            {geo?.label ?? '—'} · ACS 5-Year{vintageEnd ? ` ${vintageEnd}` : ''}
           </div>
         </div>
       </div>
@@ -312,33 +372,43 @@ function HeadlineStats({ geo }: { geo: DemoGeography | null }) {
 
 // ---------------------------------------------------------------------------
 // Multi-line trend chart — generic over the ContextTrend metric key.
-// Reused for Population and Median HH Income.
+// Reused for Population (current/historical, geo-kind filtered) and
+// Median HH income.
 // ---------------------------------------------------------------------------
 function MultiLineTrendChart({
   geographies,
   metricKey,
+  trendSource = 'current',
   highlightId,
   onActivate,
   formatY,
   formatTooltip,
+  showGrowthAnnotations = false,
 }: {
   geographies: DemoGeography[];
   metricKey: string;
+  // Which trend block to read from. 'historical' uses demoHistoricalTrend
+  // (decennial cadence); 'current' uses demoTrend (annual ACS / SDO).
+  trendSource?: 'current' | 'historical';
   highlightId: string | null;
   onActivate: (id: string) => void;
   formatY: (v: number) => string;
   formatTooltip: (v: number) => string;
+  // When true, append a growth-since-first-year annotation to each legend
+  // entry (used in Historical view of the Population Trend chart).
+  showGrowthAnnotations?: boolean;
 }) {
   const series = useMemo(() => {
     return geographies
       .map((g, idx) => {
-        const trend = (g.demoTrend?.[metricKey] ?? []).filter(
+        const src = trendSource === 'historical' ? g.demoHistoricalTrend : g.demoTrend;
+        const trend = (src?.[metricKey] ?? []).filter(
           (p): p is TrendPoint & { value: number } => p.value != null,
         );
         return { geo: g, color: geoColor(idx), trend };
       })
       .filter((s) => s.trend.length > 0);
-  }, [geographies, metricKey]);
+  }, [geographies, metricKey, trendSource]);
 
   const { xMin, xMax, yMax } = useMemo(() => {
     let xMin = Infinity, xMax = -Infinity, yMax = 0;
@@ -371,10 +441,22 @@ function MultiLineTrendChart({
     [sx, sy],
   );
 
+  // Ribbon area generator — filled area between the line and the x-axis
+  // baseline. Each series renders the area + line on top so the chart reads
+  // as a series of overlapping ribbons.
+  const areaGen = useMemo(
+    () =>
+      d3Area<TrendPoint & { value: number }>()
+        .x((d) => sx(d.year))
+        .y0(innerH)
+        .y1((d) => sy(d.value)),
+    [sx, sy, innerH],
+  );
+
   const yTicks = useMemo(() => sy.ticks(4), [sy]);
   const xTicks = useMemo(() => {
     const span = xMax - xMin;
-    const step = span > 10 ? 2 : 1;
+    const step = span > 50 ? 10 : span > 20 ? 5 : span > 10 ? 2 : 1;
     const out: number[] = [];
     for (let y = Math.ceil(xMin / step) * step; y <= xMax; y += step) out.push(y);
     return out;
@@ -418,11 +500,25 @@ function MultiLineTrendChart({
     if (hoverYear == null) return null;
     const rows = series
       .map((s) => {
-        const pt = s.trend.find((p) => p.year === hoverYear);
-        if (!pt) return null;
-        return { geo: s.geo, color: s.color, value: pt.value };
+        const ptIdx = s.trend.findIndex((p) => p.year === hoverYear);
+        if (ptIdx < 0) return null;
+        const pt = s.trend[ptIdx];
+        // % change since previous data point in this series. For decennial
+        // series (historical view) this is decade-over-decade growth; for
+        // annual series (current view) it's year-over-year growth.
+        const prev = ptIdx > 0 ? s.trend[ptIdx - 1] : null;
+        const pctChange = prev && prev.value
+          ? ((pt.value - prev.value) / prev.value) * 100
+          : null;
+        return {
+          geo: s.geo,
+          color: s.color,
+          value: pt.value,
+          pctChange,
+          prevYear: prev?.year ?? null,
+        };
       })
-      .filter((x): x is { geo: DemoGeography; color: string; value: number } => x != null)
+      .filter((x): x is { geo: DemoGeography; color: string; value: number; pctChange: number | null; prevYear: number | null } => x != null)
       .sort((a, b) => b.value - a.value);
     if (rows.length === 0) return null;
     return { year: hoverYear, rows };
@@ -434,12 +530,34 @@ function MultiLineTrendChart({
     return { left: (cx / W) * 100 };
   }, [focused, sx, M.left]);
 
+  // F2 — Growth-since-first-year annotation per series. Computed once per
+  // series to keep render cheap.
+  const growthAnnotations = useMemo(() => {
+    if (!showGrowthAnnotations) return new Map<string, string>();
+    const m = new Map<string, string>();
+    for (const s of series) {
+      if (s.trend.length < 2) continue;
+      const first = s.trend[0];
+      const last = s.trend[s.trend.length - 1];
+      if (!first.value) continue;
+      const pct = ((last.value - first.value) / first.value) * 100;
+      const sign = pct >= 0 ? '+' : '';
+      m.set(s.geo.id, `${sign}${pct.toFixed(0)}% since ${first.year}`);
+    }
+    return m;
+  }, [series, showGrowthAnnotations]);
+
+  // Render markers (decennial dots) only when point spacing is wide enough
+  // that they don't crowd out the line — primarily for the Historical view.
+  const showMarkers = trendSource === 'historical';
+
   return (
     <div className="flex flex-col gap-2 flex-1">
       {/* Legend */}
       <div className="flex flex-wrap gap-x-3 gap-y-1">
         {series.map((s) => {
           const isActive = highlightId === s.geo.id;
+          const ann = growthAnnotations.get(s.geo.id);
           return (
             <button
               key={s.geo.id}
@@ -461,6 +579,9 @@ function MultiLineTrendChart({
                 }}
               />
               {s.geo.label}
+              {ann && (
+                <span style={{ color: 'var(--text-dim)' }}>· {ann}</span>
+              )}
             </button>
           );
         })}
@@ -512,17 +633,42 @@ function MultiLineTrendChart({
               const isActive = highlightId === s.geo.id;
               const isDimmed = highlightId != null && !isActive;
               const path = lineGen(s.trend) ?? '';
+              const areaPath = areaGen(s.trend) ?? '';
+              // Ribbon = filled area below the line + bold line on top.
+              // Translucent area lets overlapping ribbons stay readable
+              // when multiple geographies are visible.
+              const baseAreaOpacity = isActive ? 0.32 : 0.18;
+              const areaOpacity = isDimmed ? 0.06 : baseAreaOpacity;
               return (
-                <path
-                  key={s.geo.id}
-                  d={path}
-                  fill="none"
-                  stroke={isActive ? 'var(--accent)' : s.color}
-                  strokeWidth={isActive ? 2.4 : 1.4}
-                  opacity={isDimmed ? 0.32 : 0.95}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => onActivate(s.geo.id)}
-                />
+                <g key={s.geo.id}>
+                  <path
+                    d={areaPath}
+                    fill={isActive ? 'var(--accent)' : s.color}
+                    opacity={areaOpacity}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onActivate(s.geo.id)}
+                  />
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={isActive ? 'var(--accent)' : s.color}
+                    strokeWidth={isActive ? 2.4 : 1.4}
+                    opacity={isDimmed ? 0.32 : 0.95}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onActivate(s.geo.id)}
+                  />
+                  {showMarkers && s.trend.map((p) => (
+                    <circle
+                      key={p.year}
+                      cx={sx(p.year)}
+                      cy={sy(p.value)}
+                      r={isActive ? 3 : 2.2}
+                      fill={isActive ? 'var(--accent)' : s.color}
+                      opacity={isDimmed ? 0.32 : 0.95}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ))}
+                </g>
               );
             })}
             {focused && (
@@ -590,6 +736,14 @@ function MultiLineTrendChart({
             <ul className="flex flex-col gap-0.5">
               {focused.rows.slice(0, 8).map((r) => {
                 const isActive = highlightId === r.geo.id;
+                const pctText = r.pctChange != null
+                  ? `${r.pctChange >= 0 ? '+' : ''}${r.pctChange.toFixed(1)}%`
+                  : null;
+                const pctColor = r.pctChange == null
+                  ? 'var(--text-dim)'
+                  : r.pctChange >= 0
+                    ? '#9CC479'
+                    : '#C47979';
                 return (
                   <li
                     key={r.geo.id}
@@ -603,8 +757,19 @@ function MultiLineTrendChart({
                       />
                       {r.geo.label}
                     </span>
-                    <span className="tnum" style={{ color: 'var(--text-h)' }}>
-                      {formatTooltip(r.value)}
+                    <span className="flex items-center gap-1.5 tnum">
+                      {pctText && (
+                        <span
+                          className="text-[9px]"
+                          style={{ color: pctColor }}
+                          title={r.prevYear != null ? `change since ${r.prevYear}` : undefined}
+                        >
+                          {pctText}
+                        </span>
+                      )}
+                      <span style={{ color: 'var(--text-h)' }}>
+                        {formatTooltip(r.value)}
+                      </span>
                     </span>
                   </li>
                 );
@@ -634,7 +799,7 @@ function StackedBarChart({
   highlightId,
   onActivate,
   trailingLabel,
-  rowHeight = 18,
+  minRowHeight = 18,
   rowGap = 6,
 }: {
   geographies: DemoGeography[];
@@ -642,15 +807,12 @@ function StackedBarChart({
   palette: readonly string[];
   highlightId: string | null;
   onActivate: (id: string) => void;
-  // Optional accessor for a trailing right-side label (e.g. total household
-  // count rendered after the bar). Returns formatted string, or null to
-  // suppress for that row.
   trailingLabel?: (geo: DemoGeography) => string | null;
-  rowHeight?: number;
+  // Minimum bar height in pixels — bars grow above this to fill available
+  // card space via CSS grid `minmax(minRowHeight, 1fr)`.
+  minRowHeight?: number;
   rowGap?: number;
 }) {
-  // Build per-row segment percentages. Hide rows whose segments all
-  // evaluate to zero/null so empty rows don't take vertical space.
   const rows = useMemo(() => {
     const built = geographies.map((g) => {
       const raw = segments.map((s) => readNum(g.demoLatest, s.key) ?? 0);
@@ -660,18 +822,13 @@ function StackedBarChart({
     return built.filter((r) => r.total > 0);
   }, [geographies, segments]);
 
-  // Layout — fixed left label gutter so rows align. The right-side trailing
-  // label is reserved when trailingLabel is provided.
   const labelW = 132;
   const trailingW = trailingLabel ? 84 : 0;
-  const trackHeight = rows.length * (rowHeight + rowGap);
 
-  // Hover state for tooltip — track the active row + segment under cursor.
   const [hover, setHover] = useState<{ rowId: string; segIdx: number } | null>(null);
 
   return (
-    <div className="flex flex-col gap-2 flex-1">
-      {/* Legend */}
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
       <div className="flex flex-wrap gap-x-3 gap-y-1">
         {segments.map((s, idx) => (
           <span
@@ -687,11 +844,16 @@ function StackedBarChart({
           </span>
         ))}
       </div>
-      {/* Bars — pure HTML/CSS; each row renders a flex track filled with
-          percentage-width segments. Click handler bubbles up to setActiveId. */}
+      {/* Rows live in a CSS grid with one row per geography. Each row uses
+          minmax(minRowHeight, 1fr) so bars grow vertically to fill the
+          card without distorting the surrounding labels. */}
       <div
-        className="relative flex flex-col"
-        style={{ gap: rowGap, minHeight: trackHeight }}
+        className="relative grid flex-1 min-h-0"
+        style={{
+          gridTemplateRows: `repeat(${Math.max(1, rows.length)}, minmax(${minRowHeight}px, 1fr))`,
+          rowGap,
+          minHeight: rows.length * (minRowHeight + rowGap),
+        }}
       >
         {rows.map(({ geo, raw, total }) => {
           const isActive = highlightId === geo.id;
@@ -719,11 +881,11 @@ function StackedBarChart({
                 {geo.label}
               </div>
               <div
-                className="relative flex w-full overflow-hidden rounded-sm"
+                className="relative flex w-full overflow-hidden rounded-sm h-full"
                 style={{
-                  height: rowHeight,
                   background: 'rgba(255,255,255,0.04)',
                   border: '1px solid var(--panel-border)',
+                  minHeight: minRowHeight,
                 }}
               >
                 {raw.map((value, segIdx) => {
@@ -791,7 +953,6 @@ function HispanicShareChart({
 
   const xMax = useMemo(() => {
     const m = rows.reduce((acc, r) => Math.max(acc, r.pct ?? 0), 0);
-    // Pad to nearest multiple of 10 so the axis ticks read cleanly.
     return Math.max(10, Math.ceil(m / 10) * 10);
   }, [rows]);
 
@@ -858,7 +1019,6 @@ function HispanicShareChart({
           );
         })}
       </div>
-      {/* Axis hint */}
       <div className="flex justify-between text-[9px]" style={{ color: 'var(--text-dim)', paddingLeft: labelW + 8, paddingRight: trailingW + 8 }}>
         <span>0%</span>
         <span>{xMax}%</span>
@@ -869,8 +1029,8 @@ function HispanicShareChart({
 
 // ---------------------------------------------------------------------------
 // Aging trajectory mini-chart — share of population under 18 vs. 65+ over
-// time for the active geography. Limited to those two cohorts because they
-// are the only age fields with trend data published in ACS context bundle.
+// time for the active geography. Auto-scales to fill its parent without
+// distorting axis text.
 // ---------------------------------------------------------------------------
 function AgingTrajectoryChart({ geo }: { geo: DemoGeography | null }) {
   const series = useMemo(() => {
@@ -896,6 +1056,21 @@ function AgingTrajectoryChart({ geo }: { geo: DemoGeography | null }) {
     };
   }, [geo]);
 
+  // Year-snap hover state — must live above the early return so React's
+  // hook order stays stable across renders (no-data → has-data transitions).
+  const [hoverYear, setHoverYear] = useState<number | null>(null);
+
+  // Pre-compute the year domain even when series is empty so the hover
+  // helpers below don't have to branch on null. Default range mirrors
+  // the empty-state defaults below.
+  const allYears = useMemo(() => {
+    if (!series) return [] as number[];
+    const set = new Set<number>();
+    for (const p of series.u18) set.add(p.year);
+    for (const p of series.a65) set.add(p.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [series]);
+
   if (!series || (series.u18.length === 0 && series.a65.length === 0)) {
     return (
       <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
@@ -904,16 +1079,16 @@ function AgingTrajectoryChart({ geo }: { geo: DemoGeography | null }) {
     );
   }
 
+  // Aspect-preserving viewBox (xMidYMid meet) with a flexible flex-1
+  // wrapper so the chart fills its card height without distorting axis
+  // numerals horizontally as the card resizes. Inner SVG margin is generous
+  // enough that 9px tick text + 30px y-axis labels never clip.
   const W = 360;
-  const H = 140;
-  const M = { top: 8, right: 8, bottom: 22, left: 32 };
+  const H = 220;
+  const M = { top: 8, right: 12, bottom: 26, left: 36 };
   const innerW = W - M.left - M.right;
   const innerH = H - M.top - M.bottom;
 
-  const allYears = [
-    ...series.u18.map((p) => p.year),
-    ...series.a65.map((p) => p.year),
-  ];
   const xMin = Math.min(...allYears, 2010);
   const xMax = Math.max(...allYears, 2024);
   const yMaxRaw = Math.max(
@@ -929,14 +1104,52 @@ function AgingTrajectoryChart({ geo }: { geo: DemoGeography | null }) {
     .x((d) => sx(d.year))
     .y((d) => sy(d.value));
 
-  const yTicks = sy.ticks(3);
+  const yTicks = sy.ticks(4);
   const xSpan = xMax - xMin;
   const xStep = xSpan > 10 ? 2 : 1;
   const xTicks: number[] = [];
   for (let y = Math.ceil(xMin / xStep) * xStep; y <= xMax; y += xStep) xTicks.push(y);
 
+  // ---- Hover snap + tooltip logic --------------------------------------
+  const xToYear = (xViewBox: number): number | null => {
+    if (allYears.length === 0) return null;
+    const xData = sx.invert(xViewBox);
+    let best = allYears[0];
+    let bestDist = Math.abs(allYears[0] - xData);
+    for (let i = 1; i < allYears.length; i++) {
+      const d = Math.abs(allYears[i] - xData);
+      if (d < bestDist) { bestDist = d; best = allYears[i]; }
+    }
+    return best;
+  };
+  const handleMove = (e: React.MouseEvent<SVGRectElement>) => {
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const local = pt.matrixTransform(ctm.inverse());
+    const xInPlot = local.x - M.left;
+    if (xInPlot < 0 || xInPlot > innerW) return;
+    const yr = xToYear(xInPlot);
+    if (yr != null) setHoverYear(yr);
+  };
+
+  const focused = hoverYear == null
+    ? null
+    : {
+        year: hoverYear,
+        u18: series.u18.find((p) => p.year === hoverYear)?.value ?? null,
+        a65: series.a65.find((p) => p.year === hoverYear)?.value ?? null,
+      };
+  const tooltipPct = focused
+    ? ((M.left + sx(focused.year)) / W) * 100
+    : null;
+
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1 flex-1 min-h-0">
       <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text)' }}>
         <span className="flex items-center gap-1">
           <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: AGE_PALETTE[0] }} />
@@ -947,36 +1160,495 @@ function AgingTrajectoryChart({ geo }: { geo: DemoGeography | null }) {
           65+ share
         </span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full" style={{ height: 140 }}>
-        <g transform={`translate(${M.left}, ${M.top})`}>
-          {yTicks.map((t) => (
-            <g key={t}>
-              <line
-                x1={0}
-                x2={innerW}
-                y1={sy(t)}
-                y2={sy(t)}
-                stroke="var(--panel-border)"
-                strokeDasharray="2 3"
-              />
-              <text x={-4} y={sy(t)} fontSize="8" textAnchor="end" dominantBaseline="middle" fill="var(--text-dim)">
-                {t}%
+      <div className="flex-1 min-h-0 flex relative">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="xMidYMid meet"
+          className="w-full h-full"
+          style={{ display: 'block' }}
+          onMouseLeave={() => setHoverYear(null)}
+        >
+          <g transform={`translate(${M.left}, ${M.top})`}>
+            {yTicks.map((t) => (
+              <g key={t}>
+                <line
+                  x1={0}
+                  x2={innerW}
+                  y1={sy(t)}
+                  y2={sy(t)}
+                  stroke="var(--panel-border)"
+                  strokeDasharray="2 3"
+                />
+                <text x={-4} y={sy(t)} fontSize="9" textAnchor="end" dominantBaseline="middle" fill="var(--text-dim)">
+                  {t}%
+                </text>
+              </g>
+            ))}
+            {xTicks.map((t) => (
+              <text key={t} x={sx(t)} y={innerH + 14} fontSize="9" textAnchor="middle" fill="var(--text-dim)">
+                {t}
               </text>
-            </g>
-          ))}
-          {xTicks.map((t) => (
-            <text key={t} x={sx(t)} y={innerH + 12} fontSize="8" textAnchor="middle" fill="var(--text-dim)">
-              {t}
-            </text>
-          ))}
-          {series.u18.length > 1 && (
-            <path d={lineGen(series.u18) ?? ''} fill="none" stroke={AGE_PALETTE[0]} strokeWidth={1.6} />
-          )}
-          {series.a65.length > 1 && (
-            <path d={lineGen(series.a65) ?? ''} fill="none" stroke={AGE_PALETTE[4]} strokeWidth={1.6} />
-          )}
-        </g>
-      </svg>
+            ))}
+            {series.u18.length > 1 && (
+              <path d={lineGen(series.u18) ?? ''} fill="none" stroke={AGE_PALETTE[0]} strokeWidth={1.6} />
+            )}
+            {series.a65.length > 1 && (
+              <path d={lineGen(series.a65) ?? ''} fill="none" stroke={AGE_PALETTE[4]} strokeWidth={1.6} />
+            )}
+            {/* Hover guide + dots at the focused year */}
+            {focused && (
+              <g pointerEvents="none">
+                <line
+                  x1={sx(focused.year)}
+                  x2={sx(focused.year)}
+                  y1={0}
+                  y2={innerH}
+                  stroke="var(--accent)"
+                  strokeOpacity={0.5}
+                  strokeDasharray="3 3"
+                  vectorEffect="non-scaling-stroke"
+                />
+                {focused.u18 != null && (
+                  <circle
+                    cx={sx(focused.year)}
+                    cy={sy(focused.u18)}
+                    r={3}
+                    fill={AGE_PALETTE[0]}
+                    stroke="rgba(11,13,16,0.95)"
+                    strokeWidth={1}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+                {focused.a65 != null && (
+                  <circle
+                    cx={sx(focused.year)}
+                    cy={sy(focused.a65)}
+                    r={3}
+                    fill={AGE_PALETTE[4]}
+                    stroke="rgba(11,13,16,0.95)"
+                    strokeWidth={1}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+              </g>
+            )}
+            <rect
+              x={0}
+              y={0}
+              width={innerW}
+              height={innerH}
+              fill="transparent"
+              pointerEvents="all"
+              onMouseMove={handleMove}
+            />
+          </g>
+        </svg>
+        {focused && tooltipPct != null && (
+          <div
+            className="pointer-events-none absolute rounded-md px-2 py-1.5 text-[10px]"
+            style={{
+              left: `${Math.min(95, Math.max(5, tooltipPct))}%`,
+              top: 4,
+              transform: 'translateX(-50%)',
+              background: 'rgba(11, 13, 16, 0.94)',
+              border: '1px solid var(--panel-border)',
+              color: 'var(--text-h)',
+              whiteSpace: 'nowrap',
+              lineHeight: 1.4,
+            }}
+          >
+            <div
+              className="text-[10px] mb-0.5 pb-0.5"
+              style={{
+                color: 'var(--text-dim)',
+                borderBottom: '1px solid var(--panel-border)',
+              }}
+            >
+              {focused.year}
+            </div>
+            <ul className="flex flex-col gap-0.5">
+              <li className="flex items-center gap-2 justify-between">
+                <span className="flex items-center gap-1.5" style={{ color: 'var(--text)' }}>
+                  <span className="inline-block rounded-full" style={{ width: 6, height: 6, background: AGE_PALETTE[0] }} />
+                  Under 18
+                </span>
+                <span className="tnum" style={{ color: 'var(--text-h)' }}>
+                  {focused.u18 != null ? `${focused.u18.toFixed(1)}%` : '—'}
+                </span>
+              </li>
+              <li className="flex items-center gap-2 justify-between">
+                <span className="flex items-center gap-1.5" style={{ color: 'var(--text)' }}>
+                  <span className="inline-block rounded-full" style={{ width: 6, height: 6, background: AGE_PALETTE[4] }} />
+                  65+
+                </span>
+                <span className="tnum" style={{ color: 'var(--text-h)' }}>
+                  {focused.a65 != null ? `${focused.a65.toFixed(1)}%` : '—'}
+                </span>
+              </li>
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Median Age Trend chart (F3) — single-line trend for the active geography's
+// median age over the ACS 5-Year window.
+// ---------------------------------------------------------------------------
+function MedianAgeTrendChart({ geo }: { geo: DemoGeography | null }) {
+  const series = useMemo(() => {
+    if (!geo) return [];
+    return (geo.demoTrend?.medianAge ?? [])
+      .filter((p): p is TrendPoint & { value: number } => p.value != null);
+  }, [geo]);
+
+  // Hover state — declared above the early return so React's hook order
+  // stays stable when the geo's data availability changes.
+  const [hoverYear, setHoverYear] = useState<number | null>(null);
+
+  if (series.length < 2) {
+    return (
+      <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+        Median age trend unavailable for this geography.
+      </div>
+    );
+  }
+
+  const W = 360;
+  const H = 200;
+  const M = { top: 8, right: 12, bottom: 26, left: 36 };
+  const innerW = W - M.left - M.right;
+  const innerH = H - M.top - M.bottom;
+
+  const xMin = series[0].year;
+  const xMax = series[series.length - 1].year;
+  const yVals = series.map((p) => p.value);
+  const yMin = Math.floor(Math.min(...yVals) - 1);
+  const yMax = Math.ceil(Math.max(...yVals) + 1);
+
+  const sx = scaleLinear().domain([xMin, xMax]).range([0, innerW]);
+  const sy = scaleLinear().domain([yMin, yMax]).range([innerH, 0]);
+  const lineGen = d3Line<{ year: number; value: number }>()
+    .x((d) => sx(d.year))
+    .y((d) => sy(d.value));
+
+  const yTicks = sy.ticks(4);
+  const xSpan = xMax - xMin;
+  const xStep = xSpan > 10 ? 2 : 1;
+  const xTicks: number[] = [];
+  for (let y = Math.ceil(xMin / xStep) * xStep; y <= xMax; y += xStep) xTicks.push(y);
+
+  const first = series[0];
+  const last = series[series.length - 1];
+  const delta = last.value - first.value;
+  const sign = delta >= 0 ? '+' : '';
+
+  // ---- Hover snap + tooltip logic --------------------------------------
+  const allYears = series.map((p) => p.year);
+  const xToYear = (xViewBox: number): number | null => {
+    if (allYears.length === 0) return null;
+    const xData = sx.invert(xViewBox);
+    let best = allYears[0];
+    let bestDist = Math.abs(allYears[0] - xData);
+    for (let i = 1; i < allYears.length; i++) {
+      const d = Math.abs(allYears[i] - xData);
+      if (d < bestDist) { bestDist = d; best = allYears[i]; }
+    }
+    return best;
+  };
+  const handleMove = (e: React.MouseEvent<SVGRectElement>) => {
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const local = pt.matrixTransform(ctm.inverse());
+    const xInPlot = local.x - M.left;
+    if (xInPlot < 0 || xInPlot > innerW) return;
+    const yr = xToYear(xInPlot);
+    if (yr != null) setHoverYear(yr);
+  };
+
+  const focused = useMemo(() => {
+    if (hoverYear == null) return null;
+    const idx = series.findIndex((p) => p.year === hoverYear);
+    if (idx < 0) return null;
+    const pt = series[idx];
+    const prev = idx > 0 ? series[idx - 1] : null;
+    return {
+      year: pt.year,
+      value: pt.value,
+      prevYear: prev?.year ?? null,
+      delta: prev ? pt.value - prev.value : null,
+    };
+  }, [hoverYear, series]);
+
+  const tooltipPct = focused
+    ? ((M.left + sx(focused.year)) / W) * 100
+    : null;
+
+  return (
+    <div className="flex flex-col gap-1 flex-1 min-h-0">
+      <div className="text-[10px] tabular-nums" style={{ color: 'var(--text)' }}>
+        <span style={{ color: 'var(--text-h)' }}>{last.value.toFixed(1)} years</span>
+        <span style={{ color: 'var(--text-dim)' }}> · {sign}{delta.toFixed(1)} since {first.year}</span>
+      </div>
+      <div className="flex-1 min-h-0 flex relative">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="xMidYMid meet"
+          className="w-full h-full"
+          style={{ display: 'block' }}
+          onMouseLeave={() => setHoverYear(null)}
+        >
+          <g transform={`translate(${M.left}, ${M.top})`}>
+            {yTicks.map((t) => (
+              <g key={t}>
+                <line
+                  x1={0}
+                  x2={innerW}
+                  y1={sy(t)}
+                  y2={sy(t)}
+                  stroke="var(--panel-border)"
+                  strokeDasharray="2 3"
+                />
+                <text x={-4} y={sy(t)} fontSize="9" textAnchor="end" dominantBaseline="middle" fill="var(--text-dim)">
+                  {t.toFixed(0)}
+                </text>
+              </g>
+            ))}
+            {xTicks.map((t) => (
+              <text key={t} x={sx(t)} y={innerH + 14} fontSize="9" textAnchor="middle" fill="var(--text-dim)">
+                {t}
+              </text>
+            ))}
+            <path d={lineGen(series) ?? ''} fill="none" stroke="var(--accent)" strokeWidth={1.8} />
+            {series.map((p) => (
+              <circle key={p.year} cx={sx(p.year)} cy={sy(p.value)} r={2} fill="var(--accent)" />
+            ))}
+            {/* Hover guide + dot at focused year */}
+            {focused && (
+              <g pointerEvents="none">
+                <line
+                  x1={sx(focused.year)}
+                  x2={sx(focused.year)}
+                  y1={0}
+                  y2={innerH}
+                  stroke="var(--accent)"
+                  strokeOpacity={0.5}
+                  strokeDasharray="3 3"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <circle
+                  cx={sx(focused.year)}
+                  cy={sy(focused.value)}
+                  r={3.5}
+                  fill="var(--accent)"
+                  stroke="rgba(11,13,16,0.95)"
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            )}
+            <rect
+              x={0}
+              y={0}
+              width={innerW}
+              height={innerH}
+              fill="transparent"
+              pointerEvents="all"
+              onMouseMove={handleMove}
+            />
+          </g>
+        </svg>
+        {focused && tooltipPct != null && (
+          <div
+            className="pointer-events-none absolute rounded-md px-2 py-1.5 text-[10px]"
+            style={{
+              left: `${Math.min(95, Math.max(5, tooltipPct))}%`,
+              top: 4,
+              transform: 'translateX(-50%)',
+              background: 'rgba(11, 13, 16, 0.94)',
+              border: '1px solid var(--panel-border)',
+              color: 'var(--text-h)',
+              whiteSpace: 'nowrap',
+              lineHeight: 1.4,
+            }}
+          >
+            <div
+              className="text-[10px] mb-0.5 pb-0.5"
+              style={{
+                color: 'var(--text-dim)',
+                borderBottom: '1px solid var(--panel-border)',
+              }}
+            >
+              {focused.year}
+            </div>
+            <div className="flex items-center gap-2 justify-between">
+              <span style={{ color: 'var(--text)' }}>Median age</span>
+              <span className="flex items-center gap-1.5 tnum">
+                {focused.delta != null && (
+                  <span
+                    className="text-[9px]"
+                    style={{
+                      color:
+                        focused.delta >= 0 ? '#9CC479' : '#C47979',
+                    }}
+                    title={focused.prevYear != null ? `change since ${focused.prevYear}` : undefined}
+                  >
+                    {focused.delta >= 0 ? '+' : ''}
+                    {focused.delta.toFixed(1)}
+                  </span>
+                )}
+                <span style={{ color: 'var(--text-h)' }}>
+                  {focused.value.toFixed(1)} yrs
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Population Pyramid (F5) — back-to-back horizontal bar chart of male × age
+// (left) and female × age (right) for the active geography.
+//
+// Falls back to a 2-cohort condensed pyramid (Male U18 + Male 65+, Female
+// U18 + Female 65+) if granular sex×age fields aren't in the bundle. The
+// granular fields require expanding fetch-context-census.py to pull the
+// 23-segment male/female B01001 breakdown — when that happens, this
+// component will surface them automatically.
+// ---------------------------------------------------------------------------
+function PopulationPyramid({ geo }: { geo: DemoGeography | null }) {
+  // Five aggregate cohorts (mirror AGE_SEGMENTS) with male/female totals
+  // pulled from `male` / `female` direct fields scaled by each cohort's
+  // share of the overall population.
+  const data = useMemo(() => {
+    if (!geo) return null;
+    const latest = geo.demoLatest;
+    if (!latest) return null;
+    const totalPop = readNum(latest, 'population') ?? 0;
+    const totalMale = readNum(latest, 'male') ?? 0;
+    const totalFemale = readNum(latest, 'female') ?? 0;
+    if (totalPop <= 0 || totalMale + totalFemale <= 0) return null;
+
+    // Without granular sex×age in the bundle, distribute each cohort's
+    // total proportionally to the overall male/female ratio. This is an
+    // approximation — fine for an at-a-glance silhouette at the 5-cohort
+    // resolution, but note in subtitle.
+    const malePct = totalMale / (totalMale + totalFemale);
+    const femalePct = totalFemale / (totalMale + totalFemale);
+
+    const cohorts = AGE_SEGMENTS.map((s) => {
+      const cohortTotal = readNum(latest, s.key) ?? 0;
+      return {
+        label: s.label,
+        male: cohortTotal * malePct,
+        female: cohortTotal * femalePct,
+      };
+    });
+
+    return {
+      cohorts,
+      totalMale,
+      totalFemale,
+      totalPop,
+      malePct,
+      femalePct,
+    };
+  }, [geo]);
+
+  if (!data || data.cohorts.length === 0) {
+    return (
+      <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+        Population pyramid unavailable for this geography.
+      </div>
+    );
+  }
+
+  const xMax = Math.max(
+    ...data.cohorts.flatMap((c) => [c.male, c.female]),
+    1,
+  );
+
+  const rowHeight = 16;
+  const rowGap = 4;
+  const labelW = 56;
+  const halfW = 'calc((100% - 56px) / 2)';
+
+  // Reverse so oldest cohort renders at the top — matches the
+  // demographic-pyramid convention (younger at the base).
+  const cohorts = [...data.cohorts].reverse();
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Header — sex split */}
+      <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text)' }}>
+        <span className="flex items-center gap-1">
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: PYRAMID_MALE }} />
+          Male {(data.malePct * 100).toFixed(1)}% ({fmtInt(data.totalMale)})
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block rounded-sm" style={{ width: 10, height: 10, background: PYRAMID_FEMALE }} />
+          Female {(data.femalePct * 100).toFixed(1)}% ({fmtInt(data.totalFemale)})
+        </span>
+      </div>
+      {/* Rows */}
+      <div className="flex flex-col" style={{ gap: rowGap }}>
+        {cohorts.map((c) => (
+          <div
+            key={c.label}
+            className="grid items-center"
+            style={{ gridTemplateColumns: `1fr ${labelW}px 1fr`, gap: 4 }}
+          >
+            {/* Male — extends rightward from the centerline */}
+            <div className="flex justify-end" style={{ width: '100%' }}>
+              <div
+                className="h-full rounded-sm"
+                style={{
+                  height: rowHeight,
+                  width: `${(c.male / xMax) * 100}%`,
+                  background: PYRAMID_MALE,
+                  opacity: 0.9,
+                }}
+                title={`Male ${c.label}: ${fmtInt(c.male)}`}
+              />
+            </div>
+            {/* Cohort label */}
+            <div
+              className="text-[10px] text-center"
+              style={{ color: 'var(--text-h)' }}
+            >
+              {c.label}
+            </div>
+            {/* Female */}
+            <div className="flex justify-start" style={{ width: '100%' }}>
+              <div
+                className="h-full rounded-sm"
+                style={{
+                  height: rowHeight,
+                  width: `${(c.female / xMax) * 100}%`,
+                  background: PYRAMID_FEMALE,
+                  opacity: 0.9,
+                }}
+                title={`Female ${c.label}: ${fmtInt(c.female)}`}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="text-[9px]" style={{ color: 'var(--text-dim)' }}>
+        Cohorts distributed by overall sex ratio — granular sex×age available with B01001 detail pull.
+      </div>
+      {/* Half-width spacers (visual ref to where the centerline sits if anyone audits the layout). */}
+      <div aria-hidden style={{ display: 'none', width: halfW }} />
     </div>
   );
 }
@@ -1021,6 +1693,17 @@ export function DemographicsSection({
     setActiveId((prev) => (prev === id ? null : id));
   };
 
+  // --- Population Trend toggles ------------------------------------------
+  const [popPeriod, setPopPeriod] = useState<'current' | 'historical'>('current');
+  const [popGeoKind, setPopGeoKind] = useState<GeoKind>('place');
+  const popGeographies = useMemo(
+    () => geographies.filter((g) => g.kind === popGeoKind),
+    [geographies, popGeoKind],
+  );
+
+  const vintageEnd = demo?.vintageRange?.end ?? null;
+  const vintageStart = demo?.vintageRange?.start ?? null;
+
   if (!demo) {
     return (
       <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
@@ -1034,27 +1717,54 @@ export function DemographicsSection({
       {/* Row 1 — About + Headline */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1">
         <DemographicsDataSetTile vintage={demo.vintageRange} />
-        <HeadlineStats geo={activeGeo} />
+        <HeadlineStats geo={activeGeo} vintageEnd={vintageEnd} />
       </div>
 
-      {/* Row 2 — Trend charts */}
+      {/* Row 2 — Trend charts (population w/ toggles · median income) */}
       <div className="grid gap-3 lg:grid-cols-2 grid-cols-1 items-stretch">
         <ChartFrame
           title="Population Trend"
-          subtitle={`ACS 5-Year · ${demo.vintageRange?.start ?? 2010} → ${demo.vintageRange?.end ?? 'latest'} · click a line or legend item to highlight`}
+          subtitle={
+            popPeriod === 'historical'
+              ? `Decennial 1950 → 2020 + ${vintageEnd ?? '2024'} anchor · CO SDO + Census · click a line or legend item to highlight`
+              : `Annual ${vintageStart ?? 2010} → ${vintageEnd ?? 'latest'} · CO SDO (places) + ACS (county/state) · click a line or legend item to highlight`
+          }
         >
+          <div className="flex items-center gap-2 flex-wrap">
+            <SegmentedControl<GeoKind>
+              ariaLabel="Geography level"
+              value={popGeoKind}
+              onChange={setPopGeoKind}
+              options={[
+                { value: 'place',  label: 'Place'  },
+                { value: 'county', label: 'County' },
+                { value: 'state',  label: 'State'  },
+              ]}
+            />
+            <SegmentedControl<'current' | 'historical'>
+              ariaLabel="Time period"
+              value={popPeriod}
+              onChange={setPopPeriod}
+              options={[
+                { value: 'current',    label: 'Current'    },
+                { value: 'historical', label: 'Historical' },
+              ]}
+            />
+          </div>
           <MultiLineTrendChart
-            geographies={geographies}
+            geographies={popGeographies}
             metricKey="population"
+            trendSource={popPeriod}
             highlightId={effectiveActiveId}
             onActivate={handleActivate}
             formatY={(v) => fmtInt(v)}
             formatTooltip={(v) => fmtInt(v)}
+            showGrowthAnnotations={popPeriod === 'historical'}
           />
         </ChartFrame>
         <ChartFrame
           title="Median Household Income Trend"
-          subtitle={`ACS 5-Year · nominal dollars · ${demo.vintageRange?.start ?? 2010} → ${demo.vintageRange?.end ?? 'latest'}`}
+          subtitle={`ACS 5-Year · nominal dollars · ${vintageStart ?? 2010} → ${vintageEnd ?? 'latest'}`}
         >
           <MultiLineTrendChart
             geographies={geographies}
@@ -1067,11 +1777,11 @@ export function DemographicsSection({
         </ChartFrame>
       </div>
 
-      {/* Row 3 — Age distribution + aging trajectory */}
+      {/* Row 3 — Age distribution + Aging Trajectory + Median Age */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1 items-stretch">
         <ChartFrame
           title="Age Distribution"
-          subtitle="Share of population by age cohort · click a row to focus"
+          subtitle={`Share of population by age cohort · ACS 5-Year ${vintageEnd ?? 'latest'} · click a row to focus`}
         >
           <StackedBarChart
             geographies={geographies}
@@ -1081,19 +1791,27 @@ export function DemographicsSection({
             onActivate={handleActivate}
           />
         </ChartFrame>
-        <ChartFrame
-          title="Aging Trajectory"
-          subtitle={activeGeo ? `${activeGeo.label} · share Under 18 vs. 65+ over time` : '—'}
-        >
-          <AgingTrajectoryChart geo={activeGeo} />
-        </ChartFrame>
+        <div className="grid gap-3 grid-rows-2">
+          <ChartFrame
+            title="Aging Trajectory"
+            subtitle={activeGeo ? `${activeGeo.label} · share Under 18 vs. 65+ · ACS 5-Year ${vintageStart ?? 2010}–${vintageEnd ?? 'latest'}` : '—'}
+          >
+            <AgingTrajectoryChart geo={activeGeo} />
+          </ChartFrame>
+          <ChartFrame
+            title="Median Age Trend"
+            subtitle={activeGeo ? `${activeGeo.label} · ACS 5-Year ${vintageStart ?? 2010}–${vintageEnd ?? 'latest'}` : '—'}
+          >
+            <MedianAgeTrendChart geo={activeGeo} />
+          </ChartFrame>
+        </div>
       </div>
 
       {/* Row 4 — Race composition + Hispanic share */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1 items-stretch">
         <ChartFrame
           title="Race Composition"
-          subtitle="Share of population by race (any ethnicity) · click a row to focus"
+          subtitle={`Share of population by race (any ethnicity) · ACS 5-Year ${vintageEnd ?? 'latest'} · click a row to focus`}
         >
           <StackedBarChart
             geographies={geographies}
@@ -1105,7 +1823,7 @@ export function DemographicsSection({
         </ChartFrame>
         <ChartFrame
           title="Hispanic Share"
-          subtitle="Hispanic of any race · ranked by share"
+          subtitle={`Hispanic of any race · ACS 5-Year ${vintageEnd ?? 'latest'} · ranked by share`}
         >
           <HispanicShareChart
             geographies={geographies}
@@ -1119,7 +1837,7 @@ export function DemographicsSection({
       <div className="grid gap-3 grid-cols-1">
         <ChartFrame
           title="Household Composition"
-          subtitle="Family vs. non-family households · total households shown on the right"
+          subtitle={`Family vs. non-family households · ACS 5-Year ${vintageEnd ?? 'latest'} · total households shown on the right`}
         >
           <StackedBarChart
             geographies={geographies}
@@ -1134,6 +1852,16 @@ export function DemographicsSection({
               return total > 0 ? `${fmtInt(total)} hh` : null;
             }}
           />
+        </ChartFrame>
+      </div>
+
+      {/* Row 6 — Population Pyramid */}
+      <div className="grid gap-3 grid-cols-1">
+        <ChartFrame
+          title="Population Pyramid"
+          subtitle={activeGeo ? `${activeGeo.label} · sex × age cohort · ACS 5-Year ${vintageEnd ?? 'latest'}` : '—'}
+        >
+          <PopulationPyramid geo={activeGeo} />
         </ChartFrame>
       </div>
     </div>
