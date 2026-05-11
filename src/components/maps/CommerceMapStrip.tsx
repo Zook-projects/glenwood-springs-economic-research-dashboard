@@ -9,7 +9,6 @@ import type {
   CommerceTrend,
   ContextCountyEntry,
   ContextEnvelope,
-  ContextLatest,
   ContextPlaceEntry,
   TrendPoint,
 } from '../../types/context';

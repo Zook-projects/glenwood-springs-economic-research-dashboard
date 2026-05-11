@@ -207,7 +207,6 @@ export function HousingMapStrip({
             metric={metric}
             workforce={workforce}
             accent={accent}
-            regionUnits={regionAggregate.totalHousingUnits}
             regionWorkforce={regionAggregate.workforce}
             onClear={onClearSelections}
           />
@@ -440,7 +439,6 @@ function SingleEntityKpis({
   metric,
   workforce,
   accent,
-  regionUnits,
   regionWorkforce,
   onClear,
 }: {
@@ -448,7 +446,6 @@ function SingleEntityKpis({
   metric: HousingMetric;
   workforce: WorkforceTotals;
   accent: string;
-  regionUnits: number;
   regionWorkforce: number;
   onClear: () => void;
 }) {
@@ -457,8 +454,6 @@ function SingleEntityKpis({
   const wf = isPlace
     ? workforce.byZip.get(entity.zip) ?? null
     : workforce.byCountyGeoid.get(entity.geoid) ?? null;
-  const units = numOrNull(latest?.totalHousingUnits);
-  const pctOfRegion = units != null && regionUnits > 0 ? units / regionUnits : null;
   const wfPctOfRegion = wf != null && regionWorkforce > 0 ? wf / regionWorkforce : null;
 
   const ownPct = (() => {

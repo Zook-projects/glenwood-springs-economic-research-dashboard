@@ -300,12 +300,20 @@ export function MiniTrendChart({
         {/* Hover crosshair + per-series dots + label */}
         {hover && (() => {
           const x = xScale(hover.year);
-          const lookups = renderableSeries
-            .map((s) => {
-              const pt = s.points.find((p) => p.year === hover.year);
-              return pt ? { series: s, point: pt } : null;
-            })
-            .filter((v): v is { series: TrendSeries; point: { year: number; value: number } } => v !== null);
+          // Build the per-series lookups via push-on-match instead of a
+          // map+filter+type-predicate so the element type is concretely
+          // {series, point} (not | null) without needing a hand-rolled
+          // narrowing predicate that has to mirror renderableSeries's
+          // (post-filter, non-null-value) point shape exactly.
+          type Lookup = {
+            series: (typeof renderableSeries)[number];
+            point: { year: number; value: number };
+          };
+          const lookups: Lookup[] = [];
+          for (const s of renderableSeries) {
+            const pt = s.points.find((p) => p.year === hover.year);
+            if (pt) lookups.push({ series: s, point: pt });
+          }
           if (lookups.length === 0) return null;
           const labelAbove = lookups[0].point;
           return (
