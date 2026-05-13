@@ -20,10 +20,11 @@ export type Direction = 'east' | 'west' | 'neutral';
 // 'down-valley' is an alias for 'west' (valley-terminology label).
 export type DirectionFilter = 'all' | 'east' | 'west' | 'up-valley' | 'down-valley';
 
-// Workforce-section county filter. 'all' = no filter (default). 'garfield'
-// and 'pitkin' restrict the visible anchor chip row and the flow data feed
-// to commutes whose anchor-side ZIP belongs to that county.
-export type WorkforceCountyFilter = 'all' | 'garfield' | 'pitkin';
+// Workforce-section county filter. 'all' = no filter (default). 'garfield',
+// 'pitkin', and 'eagle' restrict the visible anchor chip row and the flow
+// data feed to commutes whose anchor-side ZIP belongs to that county. Now
+// also scopes Demographics + Housing → ZHVI sections.
+export type WorkforceCountyFilter = 'all' | 'garfield' | 'pitkin' | 'eagle';
 
 // Per-pair worker breakdowns LODES publishes on every OD row. Within an axis
 // the buckets sum to workerCount within ±2 (LODES noise infusion). LODES does

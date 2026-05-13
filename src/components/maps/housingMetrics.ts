@@ -7,6 +7,8 @@ import type { ContextLatest } from '../../types/context';
 
 export type HousingMetricId =
   | 'zhvi'
+  | 'zhviSfr'
+  | 'zhviCondo'
   | 'medianGrossRent'
   | 'pctOwnerOccupied'
   | 'pctCostBurdened30'
@@ -20,6 +22,14 @@ export interface HousingMetric {
   shortLabel: string;
   format: (v: number | null | undefined) => string;
   extract: (latest: ContextLatest | null) => number | null;
+  // Trend-key in the entity's `trend` block. When set, the map's trend card
+  // reads `entity.trend[trendKey]` for this metric. When undefined OR the
+  // resulting series is empty, the strip falls back to `trend.zhvi`.
+  trendKey?: string;
+  // Optional key in the entity's `historicalTrend` block. When set, the map
+  // strip prefers it over `trendKey` so metrics like Housing Units can show
+  // the decennial 1970→2024 series instead of the annual 2010→2024 window.
+  historicalTrendKey?: string;
 }
 
 const fmtInt = (v: number | null | undefined) =>
@@ -88,17 +98,35 @@ function medianStockAge(latest: ContextLatest | null, refYear = 2024): number | 
 export const HOUSING_METRICS: ReadonlyArray<HousingMetric> = [
   {
     id: 'zhvi',
-    label: 'ZHVI (Zillow)',
-    shortLabel: 'ZHVI',
+    label: 'ZHVI Average',
+    shortLabel: 'ZHVI Avg.',
     format: fmtMoneyK,
     extract: (l) => num(l?.zhvi),
+    trendKey: 'zhvi',
+  },
+  {
+    id: 'zhviSfr',
+    label: 'ZHVI Single Family',
+    shortLabel: 'ZHVI · SFR',
+    format: fmtMoneyK,
+    extract: (l) => num(l?.zhviSfr),
+    trendKey: 'zhviSfr',
+  },
+  {
+    id: 'zhviCondo',
+    label: 'ZHVI Condo',
+    shortLabel: 'ZHVI · Condo',
+    format: fmtMoneyK,
+    extract: (l) => num(l?.zhviCondo),
+    trendKey: 'zhviCondo',
   },
   {
     id: 'medianGrossRent',
     label: 'Median Rent',
-    shortLabel: 'Med. Rent',
+    shortLabel: 'Median Rent',
     format: fmtMoney,
     extract: (l) => num(l?.medianGrossRent),
+    trendKey: 'medianGrossRent',
   },
   {
     id: 'pctOwnerOccupied',
@@ -111,6 +139,7 @@ export const HOUSING_METRICS: ReadonlyArray<HousingMetric> = [
       if (own == null || rent == null || own + rent === 0) return null;
       return own / (own + rent);
     },
+    trendKey: 'pctOwnerOccupied',
   },
   {
     id: 'pctCostBurdened30',
@@ -118,6 +147,7 @@ export const HOUSING_METRICS: ReadonlyArray<HousingMetric> = [
     shortLabel: 'Burden %',
     format: fmtPct,
     extract: (l) => ratio(l?.costBurden30, sumOwnerRenter(l)),
+    trendKey: 'pctCostBurdened30',
   },
   {
     id: 'vacancyPct',
@@ -125,13 +155,22 @@ export const HOUSING_METRICS: ReadonlyArray<HousingMetric> = [
     shortLabel: 'Vacancy',
     format: (v) => (v == null ? '—' : `${v.toFixed(1)}%`),
     extract: (l) => num(l?.vacancyPct),
+    trendKey: 'vacancyPct',
   },
   {
     id: 'totalHousingUnits',
     label: 'Housing Units',
     shortLabel: 'Units',
     format: fmtInt,
-    extract: (l) => num(l?.totalHousingUnits) ?? num(l?.housingUnitsTotal),
+    // Prefer the SDO 2024 vintage (housingUnitsTotal) so the KPI matches
+    // the latest point on the historical chart. Falls back to ACS B25001
+    // (totalHousingUnits) for ZCTAs where SDO has no municipal coverage.
+    extract: (l) => num(l?.housingUnitsTotal) ?? num(l?.totalHousingUnits),
+    trendKey: 'housingUnits',
+    // Prefer the decennial 1970→2020 series (anchored to the latest SDO
+    // value) so users see the long-arc growth picture instead of just the
+    // annual ACS/SDO 2010→2024 window.
+    historicalTrendKey: 'housingUnits',
   },
   {
     id: 'medianStockAge',

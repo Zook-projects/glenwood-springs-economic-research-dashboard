@@ -21,7 +21,8 @@ import type {
   TrendPoint,
   WacFile,
 } from '../../types/lodes';
-import type { ZipMeta } from '../../types/flow';
+import type { WorkforceCountyFilter, ZipMeta } from '../../types/flow';
+import { isAnchorInCounty } from '../../lib/flowQueries';
 import { SubjectKpiCard } from './SubjectKpiCard';
 import { MiniTrendChart } from './MiniTrendChart';
 
@@ -33,6 +34,11 @@ interface Props {
   selectedZip: string | null;
   industrySector: Naics20Key | 'all';
   onIndustrySectorChange: (next: Naics20Key | 'all') => void;
+  // County filter sourced from the DashboardTile chip row above this strip.
+  // 'all' = unscoped (default). Narrowing restricts the anchor rankings,
+  // region totals, and the bottom-row map overlay to anchors in the named
+  // county. Optional so legacy callers remain compatible.
+  industryCounty?: WorkforceCountyFilter;
   onSelectZip: (zip: string | null) => void;
 }
 
@@ -50,6 +56,7 @@ export function IndustryMapStrip({
   selectedZip,
   industrySector,
   onIndustrySectorChange,
+  industryCounty = 'all',
   onSelectZip,
 }: Props) {
   const sectorMeta =
@@ -58,11 +65,13 @@ export function IndustryMapStrip({
 
   // Per-anchor totals across every workplace ZIP. Used by the rankings card
   // and the headline "% of region" denominator. Recomputed only when the
-  // active sector changes — anchor list is static for a given wacFile.
+  // active sector OR the county filter changes — the latter narrows the
+  // anchor universe.
   const anchorRows = useMemo(() => {
     const rows: { zip: string; place: string; value: number }[] = [];
     for (const z of zips) {
       if (!z.isAnchor) continue;
+      if (!isAnchorInCounty(z.zip, industryCounty)) continue;
       const entry = wacFile.entries.find((e) => e.zip === z.zip);
       if (!entry) continue;
       const v =
@@ -73,7 +82,7 @@ export function IndustryMapStrip({
     }
     rows.sort((a, b) => b.value - a.value);
     return rows;
-  }, [zips, wacFile, industrySector]);
+  }, [zips, wacFile, industrySector, industryCounty]);
 
   const regionTotal = useMemo(
     () => anchorRows.reduce((s, r) => s + r.value, 0),

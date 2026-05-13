@@ -50,7 +50,10 @@ interface RegionAggregate {
   renterOccupied: number;
   costBurden30: number;
   zhvi: number | null;
+  zhviSfr: number | null;
+  zhviCondo: number | null;
   medianGrossRent: number | null;
+  vacancyPct: number | null;
   workforce: number;
 }
 
@@ -120,14 +123,30 @@ export function HousingMapStrip({
       .sort((a, b) => (b.value as number) - (a.value as number));
   }, [filteredCounties, filteredPlaces, geoLevel, metric]);
 
+  const trendKey = metric.trendKey ?? 'zhvi';
+  const histKey = metric.historicalTrendKey;
   const trendSeries = useMemo<TrendSeries[]>(() => {
+    const scopeEntities = geoLevel === 'county' ? filteredCounties : filteredPlaces;
     if (totalSelected === 0) {
+      // Prefer the metric's historical series (decennial + anchor) when
+      // available — gives a longer time horizon. Falls through to the
+      // annual `trend` block, then to the canonical ZHVI trend.
+      let points: TrendPoint[] = [];
+      if (histKey) {
+        points = aggregatedHistoricalTrend(scopeEntities, histKey);
+      }
+      if (points.length === 0) {
+        points = weightedTrend(scopeEntities, trendKey);
+      }
+      if (points.length === 0 && trendKey !== 'zhvi') {
+        points = weightedTrend(scopeEntities, 'zhvi');
+      }
       return [
         {
           key: 'region',
           label: 'Region',
           color: accent,
-          points: weightedZhviTrend(geoLevel === 'county' ? filteredCounties : filteredPlaces),
+          points,
         },
       ];
     }
@@ -135,13 +154,26 @@ export function HousingMapStrip({
       ...activePlaces,
       ...activeCounties,
     ];
-    return entities.map((e, i) => ({
-      key: 'zip' in e ? e.zip : e.geoid,
-      label: e.name,
-      color: seriesColor(i),
-      points: e.trend?.zhvi ?? [],
-    }));
-  }, [totalSelected, activePlaces, activeCounties, filteredCounties, filteredPlaces, geoLevel, accent]);
+    return entities.map((e, i) => {
+      // Per-entity series uses historicalTrend first if the metric prefers
+      // it; falls back to annual trend, then to ZHVI as a last resort.
+      const histSeries = histKey ? e.historicalTrend?.[histKey] ?? [] : [];
+      const annualSeries = e.trend?.[trendKey] ?? [];
+      const fallback = e.trend?.zhvi ?? [];
+      const points =
+        histSeries.length > 0
+          ? histSeries
+          : annualSeries.length > 0
+          ? annualSeries
+          : fallback;
+      return {
+        key: 'zip' in e ? e.zip : e.geoid,
+        label: e.name,
+        color: seriesColor(i),
+        points,
+      };
+    });
+  }, [totalSelected, activePlaces, activeCounties, filteredCounties, filteredPlaces, geoLevel, accent, trendKey, histKey]);
 
   const useMultiSeries = totalSelected > 0;
 
@@ -182,13 +214,16 @@ export function HousingMapStrip({
           workforcePctOfRegion={workforcePctOfRegion}
         />
         <TrendCard
-          title={
-            useMultiSeries
-              ? 'ZHVI trend · selected'
-              : countyFilter
-              ? `${filterLabel} ZHVI trend`
-              : 'Regional ZHVI trend'
-          }
+          title={(() => {
+            // Title pivots to whichever metric's trend is actually rendered
+            // — for metrics without their own trend series, the chart falls
+            // back to ZHVI so the label follows.
+            const trendLabel = housingTrendLabel(metric, trendKey);
+            if (useMultiSeries) return `${trendLabel} · selected`;
+            return countyFilter
+              ? `${filterLabel} ${trendLabel.toLowerCase()}`
+              : `Regional ${trendLabel.toLowerCase()}`;
+          })()}
           subtitle={
             useMultiSeries
               ? `${totalSelected} series`
@@ -199,7 +234,7 @@ export function HousingMapStrip({
           series={useMultiSeries ? trendSeries : undefined}
           singlePoints={useMultiSeries ? undefined : trendSeries[0]?.points}
           color={accent}
-          valueFormat={(v) => `$${Math.round(v / 1000)}k`}
+          valueFormat={housingValueFormat(metric, trendKey)}
         />
         <RankedListCard
           rows={rankedRows}
@@ -239,11 +274,18 @@ function RegionKpis({
 }) {
   const synthLatest: ContextLatest = {
     totalHousingUnits: region.totalHousingUnits,
+    // Mirror the aggregate into the SDO field so the metric extract's
+    // SDO-first preference resolves to the same total regardless of which
+    // field name it reads.
+    housingUnitsTotal: region.totalHousingUnits,
     ownerOccupied: region.ownerOccupied,
     renterOccupied: region.renterOccupied,
     costBurden30: region.costBurden30,
     zhvi: region.zhvi,
+    zhviSfr: region.zhviSfr,
+    zhviCondo: region.zhviCondo,
     medianGrossRent: region.medianGrossRent,
+    vacancyPct: region.vacancyPct,
   };
   const headline = metric.extract(synthLatest);
   const ownPct =
@@ -437,13 +479,23 @@ function aggregateHousing(
   let burden = 0;
   let weightedZhvi = 0;
   let weightedZhviDenom = 0;
+  let weightedZhviSfr = 0;
+  let weightedZhviSfrDenom = 0;
+  let weightedZhviCondo = 0;
+  let weightedZhviCondoDenom = 0;
   let weightedRent = 0;
   let weightedRentDenom = 0;
+  let weightedVacancy = 0;
+  let weightedVacancyDenom = 0;
   let wf = 0;
   for (const e of entities) {
     const l = e.latest;
     if (!l) continue;
-    const u = numOrNull(l.totalHousingUnits) ?? 0;
+    // Prefer the SDO 2024 housing-unit total (more current and matches the
+    // latest point on the historical chart); fall back to ACS B25001 for
+    // ZCTAs that have no SDO coverage.
+    const u =
+      numOrNull(l.housingUnitsTotal) ?? numOrNull(l.totalHousingUnits) ?? 0;
     units += u;
     owner += numOrNull(l.ownerOccupied) ?? 0;
     renter += numOrNull(l.renterOccupied) ?? 0;
@@ -453,10 +505,25 @@ function aggregateHousing(
       weightedZhvi += z * u;
       weightedZhviDenom += u;
     }
+    const zSfr = numOrNull(l.zhviSfr);
+    if (zSfr != null && u > 0) {
+      weightedZhviSfr += zSfr * u;
+      weightedZhviSfrDenom += u;
+    }
+    const zCondo = numOrNull(l.zhviCondo);
+    if (zCondo != null && u > 0) {
+      weightedZhviCondo += zCondo * u;
+      weightedZhviCondoDenom += u;
+    }
     const rent = numOrNull(l.medianGrossRent);
     if (rent != null && u > 0) {
       weightedRent += rent * u;
       weightedRentDenom += u;
+    }
+    const vac = numOrNull(l.vacancyPct);
+    if (vac != null && u > 0) {
+      weightedVacancy += vac * u;
+      weightedVacancyDenom += u;
     }
     if (level === 'county' && 'geoid' in e) {
       wf += workforce.byCountyGeoid.get(e.geoid) ?? 0;
@@ -470,17 +537,45 @@ function aggregateHousing(
     renterOccupied: renter,
     costBurden30: burden,
     zhvi: weightedZhviDenom > 0 ? weightedZhvi / weightedZhviDenom : null,
+    zhviSfr: weightedZhviSfrDenom > 0 ? weightedZhviSfr / weightedZhviSfrDenom : null,
+    zhviCondo: weightedZhviCondoDenom > 0 ? weightedZhviCondo / weightedZhviCondoDenom : null,
     medianGrossRent: weightedRentDenom > 0 ? weightedRent / weightedRentDenom : null,
+    vacancyPct: weightedVacancyDenom > 0 ? weightedVacancy / weightedVacancyDenom : null,
     workforce: wf,
   };
 }
 
-function weightedZhviTrend(
+// Decennial historical trend aggregated by simple sum across entities.
+// Used for `historicalTrend.housingUnits` (NHGIS 1970→2020 + present-day
+// SDO anchor) so the regional line plots stock growth over half a century.
+// Unit counts are additive, not unit-weighted means.
+function aggregatedHistoricalTrend(
   entities: Array<ContextPlaceEntry | ContextCountyEntry>,
+  metricKey: string,
+): TrendPoint[] {
+  const yearMap = new Map<number, number>();
+  for (const e of entities) {
+    const trend = e.historicalTrend?.[metricKey] ?? [];
+    for (const tp of trend) {
+      if (tp.value == null) continue;
+      yearMap.set(tp.year, (yearMap.get(tp.year) ?? 0) + tp.value);
+    }
+  }
+  return Array.from(yearMap.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([year, value]) => ({ year, value }));
+}
+
+// Unit-weighted aggregate trend across a list of entities, keyed by metric.
+// Each entity's per-year value is weighted by its current totalHousingUnits
+// so the regional line tracks place-size, not place-count.
+function weightedTrend(
+  entities: Array<ContextPlaceEntry | ContextCountyEntry>,
+  metricKey: string,
 ): TrendPoint[] {
   const yearAcc = new Map<number, { weighted: number; denom: number }>();
   for (const e of entities) {
-    const trend = e.trend?.zhvi ?? [];
+    const trend = e.trend?.[metricKey] ?? [];
     const u = numOrNull(e.latest?.totalHousingUnits) ?? 1;
     for (const tp of trend) {
       if (tp.value == null) continue;
@@ -501,4 +596,44 @@ function weightedZhviTrend(
 function numOrNull(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   return null;
+}
+
+// Trend-card title for the active metric. When the metric has no trendKey
+// or the trend falls back to ZHVI, the title stays "ZHVI Average trend" so
+// the caption matches what the chart actually renders.
+function housingTrendLabel(metric: HousingMetric, trendKey: string): string {
+  if (!metric.trendKey) return 'ZHVI Average trend';
+  if (trendKey === 'zhvi') return 'ZHVI Average trend';
+  return `${metric.label} trend`;
+}
+
+// Y-axis formatter chosen to match the trend metric's units. Dollar metrics
+// keep the $K formatter; housing-unit and percentage metrics get formatters
+// that read correctly at their own magnitude.
+function housingValueFormat(
+  metric: HousingMetric,
+  trendKey: string,
+): ((v: number) => string) | undefined {
+  // Fallback to ZHVI trend → keep dollar formatter.
+  if (!metric.trendKey || trendKey === 'zhvi') {
+    return (v) => `$${Math.round(v / 1000)}k`;
+  }
+  if (trendKey === 'medianGrossRent') {
+    return (v) => `$${Math.round(v).toLocaleString()}`;
+  }
+  if (trendKey === 'housingUnits') {
+    return (v) => Math.round(v).toLocaleString();
+  }
+  if (trendKey === 'zhviSfr' || trendKey === 'zhviCondo') {
+    return (v) => `$${Math.round(v / 1000)}k`;
+  }
+  // Fractional percentages (0–1) — owner-occupied + cost-burdened shares.
+  if (trendKey === 'pctOwnerOccupied' || trendKey === 'pctCostBurdened30') {
+    return (v) => `${(v * 100).toFixed(0)}%`;
+  }
+  // SDO vacancy is already expressed as a percentage (8.4 → "8.4%").
+  if (trendKey === 'vacancyPct') {
+    return (v) => `${v.toFixed(1)}%`;
+  }
+  return undefined;
 }

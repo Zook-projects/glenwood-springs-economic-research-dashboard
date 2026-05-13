@@ -26,6 +26,7 @@ const COUNTY_OPTIONS: ReadonlyArray<{ key: WorkforceCountyFilter; label: string 
   { key: 'all', label: 'All' },
   { key: 'garfield', label: 'Garfield' },
   { key: 'pitkin', label: 'Pitkin' },
+  { key: 'eagle', label: 'Eagle' },
 ];
 
 export function ZipSelector({

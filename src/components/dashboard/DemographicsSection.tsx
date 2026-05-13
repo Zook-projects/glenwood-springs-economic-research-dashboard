@@ -28,6 +28,7 @@ import type {
 import { ChartFrame } from './HousingMarketSection';
 import { fmtInt, fmtCompactUSD } from '../../lib/format';
 import type { WorkforceCountyFilter } from '../../types/flow';
+import { scopeGeographies } from '../../lib/workforceCountyScopes';
 
 // ---------------------------------------------------------------------------
 // Geography model
@@ -1774,9 +1775,10 @@ function buildRegionGeo(geographies: DemoGeography[]): DemoGeography | null {
   };
 }
 
-const WORKFORCE_COUNTY_TO_GEOID: Record<'garfield' | 'pitkin', string> = {
+const WORKFORCE_COUNTY_TO_GEOID: Record<Exclude<WorkforceCountyFilter, 'all'>, string> = {
   garfield: '08045',
   pitkin: '08097',
+  eagle: '08037',
 };
 
 // Sink for click handlers in the collapsed composition cards. The synthetic
@@ -1823,14 +1825,26 @@ export function DemographicsSection({
     setActiveId((prev) => (prev === id ? null : id));
   };
 
+  // County-scoped geographies — narrowed by the sidebar's County chip when
+  // the user picks Garfield/Pitkin/Eagle. Drives the trend charts, age and
+  // race distributions, household composition, and the ranking lists. The
+  // headline KPI strip continues to read from the active geography directly
+  // so it can show a single anchor place even when the county filter is set.
+  // Eagle-graceful: if Eagle yields no place/county matches inside the
+  // demographics envelope, the helper falls back to the unscoped list.
+  const countyScopedGeographies = useMemo(
+    () => scopeGeographies(geographies, workforceCounty),
+    [geographies, workforceCounty],
+  );
+
   // --- Population Trend toggles ------------------------------------------
   // Historical is the default and only view per the v3 dashboard refresh.
   // Geo-kind toggle still ships, now hosted in the ChartFrame's top-right
   // rightSlot so the chart canvas reclaims that vertical real estate.
   const [popGeoKind, setPopGeoKind] = useState<GeoKind>('place');
   const popGeographies = useMemo(
-    () => geographies.filter((g) => g.kind === popGeoKind),
-    [geographies, popGeoKind],
+    () => countyScopedGeographies.filter((g) => g.kind === popGeoKind),
+    [countyScopedGeographies, popGeoKind],
   );
 
   // --- Composition cards: expand/collapse + Region aggregate ------------
@@ -1922,7 +1936,7 @@ export function DemographicsSection({
           subtitle={`ACS 5-Year · nominal dollars · ${vintageStart ?? 2010} → ${vintageEnd ?? 'latest'}`}
         >
           <MultiLineTrendChart
-            geographies={geographies}
+            geographies={countyScopedGeographies}
             metricKey="medianHhIncome"
             highlightId={effectiveActiveId}
             onActivate={handleActivate}
@@ -1939,7 +1953,7 @@ export function DemographicsSection({
           subtitle={`Share of population by age cohort · ACS 5-Year ${vintageEnd ?? 'latest'} · click a row to focus`}
         >
           <StackedBarChart
-            geographies={geographies}
+            geographies={countyScopedGeographies}
             segments={AGE_SEGMENTS}
             palette={AGE_PALETTE}
             highlightId={effectiveActiveId}
@@ -1984,7 +1998,7 @@ export function DemographicsSection({
           }
         >
           <StackedBarChart
-            geographies={racePairExpanded ? geographies : collapsedGeos}
+            geographies={racePairExpanded ? countyScopedGeographies : collapsedGeos}
             segments={RACE_SEGMENTS}
             palette={RACE_PALETTE}
             highlightId={racePairExpanded ? effectiveActiveId : collapsedGeo?.id ?? null}
@@ -2009,7 +2023,7 @@ export function DemographicsSection({
           }
         >
           <HispanicShareChart
-            geographies={racePairExpanded ? geographies : collapsedGeos}
+            geographies={racePairExpanded ? countyScopedGeographies : collapsedGeos}
             highlightId={racePairExpanded ? effectiveActiveId : collapsedGeo?.id ?? null}
             onActivate={racePairExpanded ? handleActivate : noopActivate}
             rowHeight={racePairExpanded ? undefined : 32}
@@ -2035,7 +2049,7 @@ export function DemographicsSection({
           }
         >
           <StackedBarChart
-            geographies={householdExpanded ? geographies : collapsedGeos}
+            geographies={householdExpanded ? countyScopedGeographies : collapsedGeos}
             segments={HOUSEHOLD_SEGMENTS}
             palette={HOUSEHOLD_PALETTE}
             highlightId={householdExpanded ? effectiveActiveId : collapsedGeo?.id ?? null}

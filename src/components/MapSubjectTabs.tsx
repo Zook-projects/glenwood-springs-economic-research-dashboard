@@ -69,7 +69,7 @@ export function MapSubjectTabs() {
               aria-selected={active}
               tabIndex={active || (!activeId && s.id === MAP_SUBJECTS[0].id) ? 0 : -1}
               onClick={() => navigate(s.mapPath)}
-              className="relative px-3 md:px-4 py-2 text-[11px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1 shrink-0"
+              className="relative px-3 md:px-4 py-3 text-[11px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1 shrink-0"
               style={{
                 color: active ? 'var(--text-h)' : 'var(--text-dim)',
               }}

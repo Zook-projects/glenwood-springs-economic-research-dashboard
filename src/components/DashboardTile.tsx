@@ -1,12 +1,13 @@
 // Frosted-glass left dashboard tile. Composes header, mode toggle, ZIP selector,
 // stats, and methodology footer. Accepts the global selection state via props.
 
-import type { DirectionFilter, FlowRow, Mode, SegmentFilter, ZipMeta } from '../types/flow';
+import type { DirectionFilter, FlowRow, Mode, SegmentFilter, WorkforceCountyFilter, ZipMeta } from '../types/flow';
 import type { DriveDistanceMap } from '../lib/flowQueries';
 import { ModeToggle } from './ModeToggle';
 import { DirectionToggle } from './DirectionToggle';
 import { ViewLayerToggle, type ViewLayer } from './ViewLayerToggle';
 import { IndustryChipRow } from './IndustryChipRow';
+import { IndustryCountyChipRow } from './IndustryCountyChipRow';
 import type { Naics20Key } from '../types/lodes';
 import { HeatmapModeToggle, type HeatmapSide } from './HeatmapModeToggle';
 import { BlockSelectionToggle } from './BlockSelectionToggle';
@@ -79,6 +80,10 @@ interface Props {
   // NAICS-20 sector. No effect on the corridor / heatmap modes.
   industrySector: Naics20Key | 'all';
   onIndustrySectorChange: (next: Naics20Key | 'all') => void;
+  // Industry-mode county filter — restricts the workplace-anchor bubble
+  // overlay and the bottom Industry strip to anchors in the named county.
+  industryCounty: WorkforceCountyFilter;
+  onIndustryCountyChange: (next: WorkforceCountyFilter) => void;
   // Quantile breaks for the corridor width × luminance legend. Recomputed
   // upstream when mode/visible flows change.
   bucketBreaks: [number, number, number, number];
@@ -160,6 +165,8 @@ export function DashboardTile({
   onViewLayerChange,
   industrySector,
   onIndustrySectorChange,
+  industryCounty,
+  onIndustryCountyChange,
   bucketBreaks,
   topCorridorInbound,
   topCorridorOutbound,
@@ -258,6 +265,16 @@ export function DashboardTile({
         {/* Metric toggle (sits below direction — picks corridor flow arcs,
             block-level heatmap, or the Industry bubble visualization). */}
         <ViewLayerToggle value={viewLayer} onChange={onViewLayerChange} />
+
+        {/* Industry-mode county sub-row — sits between the Metric toggle and
+            the NAICS-20 Sector chips per user spec. Filters anchors to a
+            single county; 'All' restores the regional view. */}
+        {viewLayer === 'industry' && (
+          <IndustryCountyChipRow
+            value={industryCounty}
+            onChange={onIndustryCountyChange}
+          />
+        )}
 
         {/* Industry-mode sub-row — only visible when viewLayer === 'industry'.
             Chips select one of the 20 NAICS sectors or "All Sectors" to

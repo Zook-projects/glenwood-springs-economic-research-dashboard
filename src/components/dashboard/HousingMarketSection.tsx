@@ -29,6 +29,11 @@ import type {
 import { fmtInt } from '../../lib/format';
 import { MapLinkButton } from '../MapLinkButton';
 import type { WorkforceCountyFilter } from '../../types/flow';
+import {
+  COUNTY_GEOID_BY_FILTER as ZHVI_COUNTY_FIPS_BY_FILTER,
+  COUNTY_LABEL_BY_FILTER,
+  PLACE_ZIPS_BY_FILTER as ZHVI_PLACE_ZIPS_BY_FILTER,
+} from '../../lib/workforceCountyScopes';
 
 // ---------------------------------------------------------------------------
 // Geography model
@@ -309,7 +314,11 @@ function HeadlineStats({
   medianHhIncome: number | null;
 }) {
   const latest = geo?.latest ?? null;
-  const medValue = readNum(latest, 'medianHomeValueAcs');
+  // Prefer Zillow ZHVI (more current, market-priced) over ACS B25077 self-
+  // reported home values. Falls back to ACS when ZHVI is unavailable for the
+  // active place (e.g., Old Snowmass ZCTA has no Zillow coverage).
+  const medValue =
+    readNum(latest, 'zhvi') ?? readNum(latest, 'medianHomeValueAcs');
   const ratio = medValue != null && medianHhIncome != null && medianHhIncome > 0
     ? medValue / medianHhIncome
     : null;
@@ -1586,9 +1595,27 @@ function HousingVintageCard({
         </button>
       </div>
 
-      {/* KPI strip */}
+      {/* KPI strip — adds an SDO total-units KPI alongside the three
+          ACS-derived cohort indicators. SDO Vintage 2024 publishes a single
+          authoritative current-stock figure per place that pairs naturally
+          with the year-built distribution shown below. Renders '—' for
+          geographies SDO doesn't cover (ZCTAs like Old Snowmass). */}
       {kpis ? (
-        <div className="grid grid-cols-3 gap-3 justify-items-center text-center">
+        <div className="grid grid-cols-4 gap-3 justify-items-center text-center">
+          <div className="flex flex-col items-center">
+            <div
+              className="text-xl font-semibold tabular-nums"
+              style={{ color: 'var(--text-h)' }}
+            >
+              {(() => {
+                const sdo = readNum(latest, 'housingUnitsTotal');
+                return sdo != null ? fmtInt(sdo) : '—';
+              })()}
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              SDO total units{vintageEnd ? ` (${vintageEnd})` : ''}
+            </div>
+          </div>
           <div className="flex flex-col items-center">
             <div
               className="text-xl font-semibold tabular-nums"
@@ -1684,37 +1711,30 @@ function HousingVintageCard({
                       opacity={isHovered ? 1 : 0.92}
                       rx={1}
                     />
-                    {/* Value label on top of each bar (units count) */}
+                    {/* Percentage label on top of each bar — the primary
+                        readout. Exact unit count remains accessible via the
+                        hover tooltip below. */}
                     {v > 0 && (
                       <text
                         x={x + barW / 2}
                         y={y - 4}
-                        fontSize="9"
+                        fontSize="11"
+                        fontWeight={600}
                         textAnchor="middle"
-                        fill={isPeak ? 'var(--accent)' : 'var(--text)'}
+                        fill={isPeak ? 'var(--accent)' : 'var(--text-h)'}
                       >
-                        {fmtInt(v)}
+                        {pct.toFixed(0)}%
                       </text>
                     )}
                     {/* Decade label below x-axis */}
                     <text
                       x={x + barW / 2}
-                      y={innerH + 12}
+                      y={innerH + 14}
                       fontSize="9"
                       textAnchor="middle"
                       fill={isPeak ? 'var(--accent)' : 'var(--text-dim)'}
                     >
                       {c.short}
-                    </text>
-                    {/* Share % below decade label */}
-                    <text
-                      x={x + barW / 2}
-                      y={innerH + 24}
-                      fontSize="8"
-                      textAnchor="middle"
-                      fill="var(--text-dim)"
-                    >
-                      {pct.toFixed(0)}%
                     </text>
                   </g>
                 );
@@ -2437,7 +2457,11 @@ function AffordabilityRatioChart({
   const rows = useMemo(() => {
     return geographies
       .map((g, idx) => {
-        const value = readNum(g.latest, 'medianHomeValueAcs');
+        // Prefer Zillow ZHVI per place; fall back to ACS B25077 self-
+        // reported home value when Zillow has no coverage (e.g., ZCTAs
+        // like Old Snowmass).
+        const value =
+          readNum(g.latest, 'zhvi') ?? readNum(g.latest, 'medianHomeValueAcs');
         const income = incomeByGeoId.get(g.id);
         if (value == null || income == null || income <= 0) return null;
         const ratio = value / income;
@@ -2552,7 +2576,7 @@ function AffordabilityRatioChart({
       </div>
       {rows.length === 0 && (
         <div className="text-[10px] italic" style={{ color: 'var(--text-dim)' }}>
-          Affordability ratio unavailable — both medianHomeValueAcs and medianHhIncome required.
+          Affordability ratio unavailable — typical home value (ZHVI / ACS B25077) and medianHhIncome required.
         </div>
       )}
     </div>
@@ -2562,20 +2586,8 @@ function AffordabilityRatioChart({
 // ---------------------------------------------------------------------------
 // Top-level section
 // ---------------------------------------------------------------------------
-// Anchor ZIP → county-FIPS index for the Zillow time-series narrowing.
-// 'all' = no narrowing. Keeps the comparison bar chart untouched so the
-// user can still see every place across the dashboard's filter state.
-const ZHVI_COUNTY_FIPS_BY_FILTER: Record<Exclude<WorkforceCountyFilter, 'all'>, string> = {
-  garfield: '08045',
-  pitkin: '08097',
-};
-
-// Anchor ZIP membership per county filter — used to scope places shown in
-// the Zillow time series. Mirrors the chip-row narrowing on the sidebar.
-const ZHVI_PLACE_ZIPS_BY_FILTER: Record<Exclude<WorkforceCountyFilter, 'all'>, ReadonlyArray<string>> = {
-  garfield: ['81601', '81623', '81635', '81647', '81650', '81652'],
-  pitkin: ['81611', '81615', '81654'],
-};
+// Anchor ZIP → county-FIPS lookups live in src/lib/workforceCountyScopes.ts
+// so DemographicsSection + HousingMarketSection share one source of truth.
 
 export function HousingMarketSection({
   bundle,
@@ -2756,7 +2768,7 @@ export function HousingMarketSection({
       {/* Housing Units Trend (current annual / historical decennial toggle).
           Mirrors the Population Trend chart in DemographicsSection so users
           have a consistent toggle pattern across both sections. */}
-      <div className="grid gap-3 grid-cols-1">
+      <div id="housing-unit-trend" className="grid gap-3 grid-cols-1 scroll-mt-4">
         <ChartFrame
           title="Housing Units Trend"
           subtitle={
@@ -2802,7 +2814,7 @@ export function HousingMarketSection({
       {/* Cost Burden + Affordability Ratio — ACS-derived affordability
           indicators across all geographies. Click a row to retarget the
           active geography for the rest of the section. */}
-      <div className="grid gap-3 lg:grid-cols-2 grid-cols-1 items-stretch">
+      <div id="housing-affordability" className="grid gap-3 lg:grid-cols-2 grid-cols-1 items-stretch scroll-mt-4">
         <ChartFrame
           title="Housing Cost Burden"
           subtitle={`Households paying 30%+ of HHI on housing · ACS 5-Year ${vintageEnd ?? 'latest'} (B25070 + B25091)`}
@@ -2829,7 +2841,7 @@ export function HousingMarketSection({
       {/* Housing stock by year built — derived KPI strip + decade bars
           (ACS B25034). Moved below the affordability pair so the trend +
           cost-burden indicators (the higher-impact KPIs) lead. */}
-      <div className="grid gap-3 grid-cols-1">
+      <div id="housing-stock" className="grid gap-3 grid-cols-1 scroll-mt-4">
         <HousingVintageCard geo={activeGeo} vintageEnd={vintageEnd} />
       </div>
 
@@ -2840,7 +2852,7 @@ export function HousingMarketSection({
           and Zillow's higher-frequency proprietary index follows as a
           complementary cross-check. Visual divider + h3 header signal
           the subsection break. */}
-      <div className="flex items-center gap-3 mt-2">
+      <div id="housing-zhvi" className="flex items-center gap-3 mt-2 scroll-mt-4">
         <h3
           className="text-xs font-semibold uppercase tracking-wider whitespace-nowrap"
           style={{ color: 'var(--text-h)' }}
@@ -2862,7 +2874,7 @@ export function HousingMarketSection({
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1 items-stretch">
         <ChartFrame
           title="Typical Home Value by City"
-          subtitle={`Zillow ZHVI · ${typeLabel} · annual, 2000 → latest · hover for values${selectedZip && zillowTimeSeriesGeographies.length === 1 ? ` · scoped to ${zillowTimeSeriesGeographies[0].label}` : activeId ? ` · filtered to ${activeGeo?.label ?? ''}` : workforceCounty !== 'all' ? ` · scoped to ${workforceCounty === 'garfield' ? 'Garfield' : 'Pitkin'} County` : ''}`}
+          subtitle={`Zillow ZHVI · ${typeLabel} · annual, 2000 → latest · hover for values${selectedZip && zillowTimeSeriesGeographies.length === 1 ? ` · scoped to ${zillowTimeSeriesGeographies[0].label}` : activeId ? ` · filtered to ${activeGeo?.label ?? ''}` : workforceCounty !== 'all' ? ` · scoped to ${COUNTY_LABEL_BY_FILTER[workforceCounty]} County` : ''}`}
         >
           <TimeSeriesChart
             geographies={zillowTimeSeriesGeographies}
@@ -2888,10 +2900,10 @@ export function HousingMarketSection({
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1">
         <ChartFrame
           title="Typical Home City Comparison"
-          subtitle={`Click a bar to filter the time series · metric: ${typeLabel}`}
+          subtitle={`Click a bar to filter the time series · metric: ${typeLabel}${workforceCounty !== 'all' ? ` · scoped to ${COUNTY_LABEL_BY_FILTER[workforceCounty]} County` : ''}`}
         >
           <CityComparisonBars
-            geographies={geographies}
+            geographies={zillowTimeSeriesGeographies}
             activeId={effectiveActiveId}
             onActivate={handleSelectCity}
             typeKey={typeKey}

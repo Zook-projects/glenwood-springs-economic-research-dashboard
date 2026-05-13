@@ -10,13 +10,14 @@ import maplibregl, {
 } from 'maplibre-gl';
 import { CORRIDOR_BUCKET_SEMANTIC, corridorStyle } from '../lib/arcMath';
 import { flowIdOf } from '../lib/corridors';
-import { ANCHOR_ZIPS } from '../lib/flowQueries';
+import { ANCHOR_ZIPS, isAnchorInCounty } from '../lib/flowQueries';
 import type {
   ActiveCorridorAggregation,
   CorridorId,
   CorridorRecord,
   FlowRow,
   Mode,
+  WorkforceCountyFilter,
   ZipMeta,
 } from '../types/flow';
 import type { Naics20Key, OdBlocksFile, WacFile } from '../types/lodes';
@@ -96,6 +97,9 @@ interface Props {
   // (equivalent to totalJobs); otherwise scales bubbles by jobs in that one
   // sector. Ignored unless viewLayer === 'industry'.
   industrySector: Naics20Key | 'all';
+  // Industry-mode county filter — narrows the bubble overlay to anchors in
+  // the named county. 'all' = no narrowing. Ignored unless viewLayer === 'industry'.
+  industryCounty?: WorkforceCountyFilter;
   // Per-ZIP WAC totals + per-sector breakdown. Drives the Industry bubble
   // layer; ignored in corridor / heatmap mode.
   wacFile: WacFile | null;
@@ -158,6 +162,7 @@ export function MapCanvas({
   selectionData,
   viewLayer,
   industrySector,
+  industryCounty = 'all',
   wacFile,
   blockSelectionActive,
   selectedBlocks,
@@ -1507,6 +1512,8 @@ export function MapCanvas({
         let maxValue = 0;
         for (const z of zips) {
           if (!z.isAnchor) continue;
+          // County filter — drop anchors outside the selected county.
+          if (!isAnchorInCounty(z.zip, industryCounty)) continue;
           const entry = wacFile.entries.find((e) => e.zip === z.zip);
           if (!entry) continue;
           const value =
@@ -1811,6 +1818,7 @@ export function MapCanvas({
     odBlocks,
     viewLayer,
     industrySector,
+    industryCounty,
     wacFile,
   ]);
 

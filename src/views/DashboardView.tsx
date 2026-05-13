@@ -384,20 +384,54 @@ export function DashboardView() {
           {SECTIONS.map((s) => {
             const active = s.id === activeSection;
             return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => handleMenuClick(s.id)}
-                aria-current={active ? 'true' : undefined}
-                className="text-left px-3 py-2 rounded-md text-[11px] font-medium uppercase tracking-wider transition-colors shrink-0 focus:outline-none focus-visible:ring-1"
-                style={{
-                  color: active ? 'var(--accent)' : 'var(--text-h)',
-                  background: active ? 'rgba(245, 158, 11, 0.16)' : 'transparent',
-                  border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`,
-                }}
-              >
-                {s.label}
-              </button>
+              <div key={s.id} className="flex flex-col gap-0.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleMenuClick(s.id)}
+                  aria-current={active ? 'true' : undefined}
+                  className="text-left px-3 py-2 rounded-md text-[11px] font-medium uppercase tracking-wider transition-colors shrink-0 focus:outline-none focus-visible:ring-1"
+                  style={{
+                    color: active ? 'var(--accent)' : 'var(--text-h)',
+                    background: active ? 'rgba(245, 158, 11, 0.16)' : 'transparent',
+                    border: `1px solid ${active ? 'var(--accent)' : 'transparent'}`,
+                  }}
+                >
+                  {s.label}
+                </button>
+                {/* Nested sub-section anchors — only visible on desktop and
+                    only when the parent section is active, to keep the nav
+                    column quiet at rest. Each click smooth-scrolls to the
+                    sub-section's DOM id, which lives on a wrapper div inside
+                    the section component. */}
+                {s.subSections && active && (
+                  <ul
+                    className="hidden md:flex flex-col pl-3 gap-0.5"
+                    aria-label={`${s.label} sub-sections`}
+                  >
+                    {s.subSections.map((sub) => (
+                      <li key={sub.id}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const el = document.getElementById(sub.id);
+                            if (el) {
+                              el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }
+                          }}
+                          className="text-left w-full px-3 py-1 rounded-md text-[10px] font-medium tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
+                          style={{
+                            color: 'var(--text-h)',
+                            background: 'transparent',
+                            border: '1px solid transparent',
+                          }}
+                        >
+                          {sub.label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             );
           })}
         </nav>
@@ -432,7 +466,8 @@ export function DashboardView() {
             className="scroll-mt-4 flex flex-col gap-4"
           >
             <div
-              className="rounded-md p-3"
+              id="workforce-overview"
+              className="rounded-md p-3 scroll-mt-4"
               style={{
                 background: 'var(--panel-surface)',
                 border: '1px solid var(--panel-border)',
@@ -615,14 +650,17 @@ export function DashboardView() {
                 glanceable 3-bucket NAICS cards and the FlowDataTables so the
                 user reads "what does this workplace area look like" before
                 "where do its workers come from / go to". */}
-            <WorkAreaProfileSection
-              wacFile={wacFile}
-              selectedZip={selectedZip}
-              selectionKind={selectionKind}
-              workforceCounty={workforceCounty}
-            />
+            <div id="workforce-wap" className="scroll-mt-4">
+              <WorkAreaProfileSection
+                wacFile={wacFile}
+                selectedZip={selectedZip}
+                selectionKind={selectionKind}
+                workforceCounty={workforceCounty}
+              />
+            </div>
 
             {/* Flow data tables. */}
+            <div id="workforce-od" className="scroll-mt-4">
             <FlowDataTables
               flowsInbound={flowsInbound}
               flowsOutbound={flowsOutbound}
@@ -636,6 +674,7 @@ export function DashboardView() {
               onSelectZip={handleSelectZip}
               onSelectPartner={setSelectedPartner}
             />
+            </div>
 
           </section>
 
@@ -662,11 +701,13 @@ export function DashboardView() {
               </h2>
               <MapLinkButton subjectId="demographics" />
             </div>
-            <DemographicsSection
-              bundle={contextBundle}
-              selectedZip={selectedZip}
-              workforceCounty={workforceCounty}
-            />
+            <div id="demographics-us-census" className="scroll-mt-4">
+              <DemographicsSection
+                bundle={contextBundle}
+                selectedZip={selectedZip}
+                workforceCounty={workforceCounty}
+              />
+            </div>
           </section>
 
           {/* Section — Housing Market: full Zillow ZHVI panel (headline stats,
@@ -731,7 +772,7 @@ export function DashboardView() {
                 two cards visually match. Row 2 pairs the timeseries chart
                 with the comparison stack; the chart card flex-grows its
                 inner SVG so it fills the comparison stack's height. */}
-            <div className="flex flex-col gap-3">
+            <div id="commerce-cdor" className="flex flex-col gap-3 scroll-mt-4">
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] grid-cols-1">
                 <CommerceDataSetTile />
                 <div className="flex flex-wrap gap-3 min-w-0">
@@ -794,7 +835,9 @@ export function DashboardView() {
             >
               Economic Research
             </h2>
-            <EconomicResearchSection bundle={economicBundle} />
+            <div id="economic-ces" className="scroll-mt-4">
+              <EconomicResearchSection bundle={economicBundle} />
+            </div>
           </section>
         </div>
       </div>
@@ -956,6 +999,7 @@ const SIDEBAR_COUNTY_OPTIONS: ReadonlyArray<{ key: WorkforceCountyFilter; label:
   { key: 'all', label: 'All' },
   { key: 'garfield', label: 'Garfield' },
   { key: 'pitkin', label: 'Pitkin' },
+  { key: 'eagle', label: 'Eagle' },
 ];
 
 function SidebarFiltersCard({

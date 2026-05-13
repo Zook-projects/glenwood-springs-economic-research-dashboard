@@ -219,6 +219,60 @@ def _zillow_trend(geo_kind: str, key: str, *, kind: str = "all") -> list[dict]:
     return trend_series([(int(p["year"]), float(p["value"])) for p in z["trend"]])
 
 
+def _annual_cost_burden_30(
+    rows_by_year: dict[int, list[dict]],
+    row_lookup,
+) -> list[dict]:
+    """Per-year cost-burden-30 composite series. `row_lookup(rows, year)` must
+    return the matching ACS row for the geography. Sums the renter (B25070_007–
+    010) and owner (B25091_008–011) >=30%-of-income buckets, mirroring
+    `_acs_block`'s latest-year composite."""
+    pairs: list[tuple[int, float | None]] = []
+    for y in sorted(rows_by_year):
+        row = row_lookup(rows_by_year[y])
+        cb = cs.sum_vars(row, COST_BURDEN_30_VARS)
+        pairs.append((y, cb))
+    return trend_series(pairs)
+
+
+def _annual_pct_owner_occupied(trend_block: dict) -> list[dict]:
+    """Per-year owner-occupied share, computed from the already-built
+    ownerOccupied + renterOccupied trends. Skips years where either side is
+    missing or the denominator is zero so the share never reads as 0%."""
+    owner = {p["year"]: p["value"] for p in trend_block.get("ownerOccupied", []) if p.get("value") is not None}
+    renter = {p["year"]: p["value"] for p in trend_block.get("renterOccupied", []) if p.get("value") is not None}
+    out: list[dict] = []
+    for year in sorted(set(owner) & set(renter)):
+        denom = owner[year] + renter[year]
+        if denom <= 0:
+            continue
+        out.append({"year": year, "value": owner[year] / denom})
+    return out
+
+
+def _annual_pct_cost_burdened(trend_block: dict) -> list[dict]:
+    """Per-year cost-burdened share. Numerator = costBurden30 series;
+    denominator = ownerOccupied + renterOccupied (tenure universe). Skips
+    years where either side is missing."""
+    burden = {p["year"]: p["value"] for p in trend_block.get("costBurden30", []) if p.get("value") is not None}
+    owner = {p["year"]: p["value"] for p in trend_block.get("ownerOccupied", []) if p.get("value") is not None}
+    renter = {p["year"]: p["value"] for p in trend_block.get("renterOccupied", []) if p.get("value") is not None}
+    out: list[dict] = []
+    for year in sorted(set(burden) & set(owner) & set(renter)):
+        denom = owner[year] + renter[year]
+        if denom <= 0:
+            continue
+        out.append({"year": year, "value": burden[year] / denom})
+    return out
+
+
+def _vacancy_pct_from_sdo(sdo_metrics: dict) -> list[dict]:
+    """Annual vacancy-rate series from SDO. SDO publishes the rate as a
+    percentage (e.g. 8.4), not a fraction. The UI's HousingMetric formatter
+    treats vacancyPct the same way, so the series is passed through as-is."""
+    return list(sdo_metrics.get("vacancyPct", []))
+
+
 def build_housing() -> dict:
     rows_by_year: dict[int, list[dict]] = {}
     for year in range(ACS_TREND_START, ACS_LATEST_YEAR + 1):
@@ -247,6 +301,15 @@ def build_housing() -> dict:
     # Alias housingUnits = ACS B25001 totals at the state/county level for
     # the Current view of the Housing Units Trend chart (SDO covers places).
     state_trend["housingUnits"] = state_trend.get("totalHousingUnits", [])
+    # Affordability time series: cost-burden composite (ACS B25070+B25091),
+    # owner-occupied share, and cost-burdened share. SDO publishes vacancy
+    # as a percentage for places only — state/county vacancyPct stays empty.
+    state_trend["costBurden30"] = _annual_cost_burden_30(
+        rows_by_year,
+        lambda rows: cs.state_row(rows, STATE_FIPS),
+    )
+    state_trend["pctOwnerOccupied"] = _annual_pct_owner_occupied(state_trend)
+    state_trend["pctCostBurdened30"] = _annual_pct_cost_burdened(state_trend)
 
     # Anchor most-recent non-null ACS B25001 state HU point onto the historical
     # series (mirrors the place + county anchoring below).
@@ -283,6 +346,13 @@ def build_housing() -> dict:
                 pairs.append((y, cs.number_or_none(row, var)))
             ctrend[tk] = trend_series(pairs)
         ctrend["housingUnits"] = ctrend.get("totalHousingUnits", [])
+        # Affordability time series — see _annual_* helpers above.
+        ctrend["costBurden30"] = _annual_cost_burden_30(
+            rows_by_year,
+            lambda rows, cf=cfips: cs.county_row(rows, STATE_FIPS, cf),
+        )
+        ctrend["pctOwnerOccupied"] = _annual_pct_owner_occupied(ctrend)
+        ctrend["pctCostBurdened30"] = _annual_pct_cost_burdened(ctrend)
 
         # Historical decennial housing units (1970 → 2020 from NHGIS).
         # Anchor most-recent non-null ACS B25001 point so the historical line
@@ -320,6 +390,10 @@ def build_housing() -> dict:
                     row = cs.place_row(rows_by_year[y], STATE_FIPS, pc)
                     pairs.append((y, cs.number_or_none(row, var)))
                 ptrend[tk] = trend_series(pairs)
+            ptrend["costBurden30"] = _annual_cost_burden_30(
+                rows_by_year,
+                lambda rows, pc=pc: cs.place_row(rows, STATE_FIPS, pc),
+            )
         else:
             latest_place = cs.zcta_row(latest_rows, rec["zip"])
             block = _acs_block(latest_place)
@@ -330,6 +404,14 @@ def build_housing() -> dict:
                     row = cs.zcta_row(rows_by_year[y], rec["zip"])
                     pairs.append((y, cs.number_or_none(row, var)))
                 ptrend[tk] = trend_series(pairs)
+            ptrend["costBurden30"] = _annual_cost_burden_30(
+                rows_by_year,
+                lambda rows, z=rec["zip"]: cs.zcta_row(rows, z),
+            )
+        # Owner-occupied + cost-burdened shares depend on the raw counts +
+        # cost-burden composites above; compute after both have been built.
+        ptrend["pctOwnerOccupied"] = _annual_pct_owner_occupied(ptrend)
+        ptrend["pctCostBurdened30"] = _annual_pct_cost_burdened(ptrend)
 
         # Zillow ZIP-level — merge all eight ZHVI variants + trend block
         _merge_zillow(block, "zip", rec["zip"])
@@ -359,6 +441,8 @@ def build_housing() -> dict:
                     block[sdo_key] = series[-1]["value"]
             # Annual 2010 → 2024 housing units trend (SDO).
             ptrend["housingUnits"] = sdo_metrics.get("housingUnitsTotal", [])
+            # Annual vacancy-rate trend (SDO publishes as a percentage).
+            ptrend["vacancyPct"] = _vacancy_pct_from_sdo(sdo_metrics)
             sdo_pop_trend = sdo_metrics.get("population", [])
         else:
             # ZCTA fallbacks (Old Snowmass) — no SDO coverage. Use ACS B25001

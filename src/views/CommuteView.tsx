@@ -24,11 +24,13 @@ import type {
   FlowRow,
   Mode,
   SegmentFilter,
+  WorkforceCountyFilter,
   ZipMeta,
 } from '../types/flow';
 import { buildHeatmapGeoJson } from '../lib/heatmapPoints';
 import type { HeatmapSide } from '../components/HeatmapModeToggle';
 import {
+  ANCHOR_COUNTY,
   applySegmentFilter,
   detailForNonAnchorOrigin,
   detailForZip,
@@ -293,6 +295,15 @@ export function CommuteView({ data }: CommuteViewProps) {
   // Reset to 'all' when the user leaves Industry mode so re-entering lands
   // in the canonical no-filter state.
   const [industrySector, setIndustrySector] = useState<Naics20Key | 'all'>(
+    'all',
+  );
+  // Industry-mode county filter — restricts the workplace-anchor bubbles
+  // and the bottom Industry strip to anchors whose ZIP centroid sits in
+  // the selected county. Mirrors the Workforce dashboard's county chip
+  // row. Only visible when viewLayer === 'industry'; reset to 'all' when
+  // leaving Industry view so re-entering lands in the canonical no-filter
+  // state.
+  const [industryCounty, setIndustryCounty] = useState<WorkforceCountyFilter>(
     'all',
   );
   // Independent heatmap-side toggle — drives the Workplace / Residence tab
@@ -776,10 +787,28 @@ export function CommuteView({ data }: CommuteViewProps) {
 
   // Reset the industry-sector chip back to 'all' whenever the user leaves
   // Industry mode. Re-entering Industry lands them on the unfiltered total
-  // bubble layer rather than a stale per-sector filter.
+  // bubble layer rather than a stale per-sector filter. The county chip
+  // resets the same way for consistency.
   useEffect(() => {
-    if (viewLayer !== 'industry') setIndustrySector('all');
+    if (viewLayer !== 'industry') {
+      setIndustrySector('all');
+      setIndustryCounty('all');
+    }
   }, [viewLayer]);
+
+  // Clear the active anchor if the Industry county filter no longer covers
+  // it, so the bottom strip and rankings always reflect a consistent set.
+  // Mirrors the DashboardView pattern for the sidebar's county filter.
+  useEffect(() => {
+    if (viewLayer !== 'industry') return;
+    if (industryCounty === 'all') return;
+    if (!selectedZip || selectedZip === 'ALL_OTHER') return;
+    if (ANCHOR_COUNTY[selectedZip] === industryCounty) return;
+    handleSelectZip(null);
+    // handleSelectZip is stable for this purpose — it routes through the
+    // canonical handler that resets partner + non-anchor bundle as well.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [industryCounty, viewLayer, selectedZip]);
 
   // Reference distribution for the corridor width buckets — built from the
   // active mode's unfiltered flow set (ignoring direction filter and
@@ -1101,6 +1130,8 @@ export function CommuteView({ data }: CommuteViewProps) {
         onViewLayerChange={setViewLayer}
         industrySector={industrySector}
         onIndustrySectorChange={setIndustrySector}
+        industryCounty={industryCounty}
+        onIndustryCountyChange={setIndustryCounty}
         bucketBreaks={bucketBreaks}
         topCorridorInbound={topCorridorInbound}
         topCorridorOutbound={topCorridorOutbound}
@@ -1168,6 +1199,7 @@ export function CommuteView({ data }: CommuteViewProps) {
           selectionData={selectionData}
           viewLayer={viewLayer}
           industrySector={industrySector}
+          industryCounty={industryCounty}
           wacFile={wacFile}
           blockSelectionActive={blockSelectionActive}
           selectedBlocks={selectedBlocks}
@@ -1499,6 +1531,7 @@ export function CommuteView({ data }: CommuteViewProps) {
               selectedZip={selectedZip}
               industrySector={industrySector}
               onIndustrySectorChange={setIndustrySector}
+              industryCounty={industryCounty}
               onSelectZip={handleSelectZip}
             />
           </div>

@@ -168,7 +168,15 @@ def county_name(zip_code: str) -> str | None:
     rec = PLACE_CODES.get(zip_code)
     if rec is None:
         return None
-    return COUNTY_FIPS[rec["county_fips"]]
+    # De Beque sits in Mesa County (FIPS 085), which is intentionally absent
+    # from COUNTY_FIPS so it stays out of county-filter chip rows. Return a
+    # human-readable name regardless so build artifacts retain the label.
+    fips = rec["county_fips"]
+    if fips not in COUNTY_FIPS:
+        # Known supplementary mappings (keep this list small — anchors in
+        # other counties should still be added to COUNTY_FIPS explicitly).
+        return {"085": "Mesa County"}.get(fips)
+    return COUNTY_FIPS[fips]
 
 
 def all_place_records() -> list[dict]:

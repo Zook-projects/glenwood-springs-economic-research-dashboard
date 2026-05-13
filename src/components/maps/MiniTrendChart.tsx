@@ -35,13 +35,18 @@ interface Props {
   highlightedKey?: string | null;
 }
 
+// Module-level identity formatter so the rendering code can compare against
+// the default. Lets the y-axis-tick branch decide whether to apply the
+// abbreviator (default) or the caller's custom formatter (percentages, $K).
+const defaultValueFormat = (v: number) => v.toLocaleString();
+
 export function MiniTrendChart({
   data,
   series,
   height = 110,
   color = 'var(--accent)',
   yMin = 'zero',
-  valueFormat = (v) => v.toLocaleString(),
+  valueFormat = defaultValueFormat,
   highlightedKey = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -246,7 +251,16 @@ export function MiniTrendChart({
                 fill="var(--text-dim)"
                 textAnchor="end"
               >
-                {abbreviateNumber(t)}
+                {/*
+                  Use the caller's `valueFormat` when supplied (percentage /
+                  currency formatters need to apply to y-axis ticks, not just
+                  tooltips). Fall back to the abbreviator for the default
+                  identity formatter so existing large-number axes still
+                  read as 50k / 1.2M.
+                */}
+                {valueFormat === defaultValueFormat
+                  ? abbreviateNumber(t)
+                  : valueFormat(t)}
               </text>
             </g>
           );

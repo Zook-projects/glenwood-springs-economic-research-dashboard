@@ -6,7 +6,7 @@
       "agency": "U.S. Bureau of Labor Statistics",
       "dataset": "Consumer Expenditure Survey · Table 1300 (Age of reference person)",
       "endpoint": "https://www.bls.gov/cex/tables.htm",
-      "lastPulled": "2026-05-09"
+      "lastPulled": "2026-05-13"
     },
     "vintageRange": {
       "start": 2014,

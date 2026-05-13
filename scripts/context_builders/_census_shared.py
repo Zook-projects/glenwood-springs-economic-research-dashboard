@@ -16,16 +16,28 @@ CACHE_DIR = PROJECT_ROOT / "data" / "context-cache" / "census"
 
 
 def _coerce(value):
-    """Census API returns strings — coerce to int/float when possible, else None."""
+    """Census API returns strings — coerce to int/float when possible, else None.
+
+    Filters Census Bureau's missing-value sentinels. ACS Detailed Tables return
+    a family of large-negative codes when an estimate cannot be published:
+    -666666666 (suppressed), -555555555 (median open-ended), -333333333 (zero
+    sample), -222222222 (median falls outside published range), -888888888
+    (estimate cannot be calculated), -999999999. Any of these would otherwise
+    leak into time series and skew unit-weighted aggregates wildly negative.
+    """
     if value is None or value == "" or value == "null":
         return None
     try:
         s = str(value)
         if "." in s:
-            return float(s)
-        return int(s)
+            n = float(s)
+        else:
+            n = int(s)
     except (ValueError, TypeError):
         return None
+    if n <= -100_000_000:
+        return None
+    return n
 
 
 def _to_dicts(rows):

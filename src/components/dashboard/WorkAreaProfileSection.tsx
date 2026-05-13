@@ -235,7 +235,15 @@ function StackedRow({
 // Jobs by NAICS-20 — sorted horizontal bars (Latest) or small-multiples
 // trend sparklines (Trend).
 // ---------------------------------------------------------------------------
-function NaicsBarChart({ naics20 }: { naics20: Naics20Block }) {
+function NaicsBarChart({
+  naics20,
+  onSelectSector,
+}: {
+  naics20: Naics20Block;
+  // Click handler — set in the parent so a click swaps the chart over to
+  // the 22-year trend view with only that industry's series visible.
+  onSelectSector?: (key: Naics20Key) => void;
+}) {
   const rows = useMemo(() => {
     const sorted = NAICS20_SECTORS.map((s) => ({
       sector: s,
@@ -251,12 +259,23 @@ function NaicsBarChart({ naics20 }: { naics20: Naics20Block }) {
       {rows.sorted.map(({ sector, value }) => {
         const w = (value / rows.maxVal) * 100;
         const share = rows.total > 0 ? value / rows.total : 0;
+        const clickable = !!onSelectSector;
         return (
-          <div
+          <button
             key={sector.key}
-            className="grid items-center gap-2"
-            style={{ gridTemplateColumns: '128px 1fr 96px' }}
-            title={`${sector.label}: ${fmtInt(value)} jobs (${fmtPct(share)})`}
+            type="button"
+            disabled={!clickable}
+            onClick={() => onSelectSector?.(sector.key)}
+            className="grid items-center gap-2 w-full text-left rounded-sm transition-colors focus:outline-none focus-visible:ring-1"
+            style={{
+              gridTemplateColumns: '128px 1fr 96px',
+              cursor: clickable ? 'pointer' : 'default',
+              background: 'transparent',
+              padding: '2px 4px',
+            }}
+            title={clickable
+              ? `${sector.label}: ${fmtInt(value)} jobs (${fmtPct(share)}) — click to open 22-yr trend`
+              : `${sector.label}: ${fmtInt(value)} jobs (${fmtPct(share)})`}
           >
             <div className="text-[11px] truncate" style={{ color: 'var(--text-h)' }}>
               {sector.shortLabel}
@@ -277,7 +296,7 @@ function NaicsBarChart({ naics20 }: { naics20: Naics20Block }) {
             <div className="text-[10px] tnum text-right" style={{ color: 'var(--text-dim)' }}>
               {fmtInt(value)} · {fmtPct(share)}
             </div>
-          </div>
+          </button>
         );
       })}
     </div>
@@ -298,33 +317,34 @@ function defaultVisibleKeys(latest: Naics20Block): Set<Naics20Key> {
   return new Set(ranked);
 }
 
-// NAICS trend — single multi-line chart with a chip-row selector. Chips
-// toggle individual sectors on/off; the chart redraws against the visible
-// set. Tooltip + axis ticks come from MiniTrendChart.
+// NAICS trend — single multi-line chart with a chip-row selector. The
+// `visible` state is owned by the parent so the latest-view bar chart can
+// drive single-select transitions (click a bar → swap to Trend view with
+// only that industry's series). Chip-row clicks single-select to the new
+// industry; re-clicking the currently-active solo industry restores the
+// default top-5 view per spec.
 function NaicsTrendChart({
   trend,
   latest,
+  visible,
+  setVisible,
 }: {
   trend: RacWacTrend;
   latest: Naics20Block;
+  visible: Set<Naics20Key>;
+  setVisible: (next: Set<Naics20Key>) => void;
 }) {
-  const [visible, setVisible] = useState<Set<Naics20Key>>(() =>
-    defaultVisibleKeys(latest),
-  );
-
-  // Recompute the default visible set if the scope changes underfoot
-  // (e.g. user switches anchor) and the previously-selected sector no
-  // longer has meaningful data. We only reseed when nothing is visible
-  // to avoid clobbering user toggles mid-session.
   const visibleArr = useMemo(() => Array.from(visible), [visible]);
 
   const toggleSector = (key: Naics20Key) => {
-    setVisible((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    // Re-clicking the lone active sector restores the top-5 default so the
+    // user has a one-click path back to the overview. Otherwise the click
+    // narrows to that single sector.
+    if (visible.size === 1 && visible.has(key)) {
+      setVisible(defaultVisibleKeys(latest));
+      return;
+    }
+    setVisible(new Set([key]));
   };
 
   const series: TrendSeries[] = useMemo(() => {
@@ -414,6 +434,11 @@ export function WorkAreaProfileSection({
   workforceCounty: WorkforceCountyFilter;
 }) {
   const [naicsView, setNaicsView] = useState<'latest' | 'trend'>('latest');
+  // Visible NAICS-20 sectors in the trend chart. Lifted from
+  // NaicsTrendChart so the latest-view bar chart can drive the
+  // "click an industry → open the 22-year trend with only that industry"
+  // affordance. Seed lazily once the scope's latest block is available.
+  const [naicsVisible, setNaicsVisible] = useState<Set<Naics20Key> | null>(null);
   // Click-to-highlight state for the Age and Earnings sub-sections. Clicking
   // a segment in the stacked bar sets the matching key here; clicking the
   // same segment again clears it. The selected key drives both the bar's
@@ -538,9 +563,22 @@ export function WorkAreaProfileSection({
           </div>
         </div>
         {naicsView === 'latest' ? (
-          <NaicsBarChart naics20={latest.naics20} />
+          <NaicsBarChart
+            naics20={latest.naics20}
+            onSelectSector={(key) => {
+              // Single-industry trend view: narrow `visible` to that one
+              // sector and swap the chart over to the 22-year trend.
+              setNaicsVisible(new Set([key]));
+              setNaicsView('trend');
+            }}
+          />
         ) : (
-          <NaicsTrendChart trend={trend} latest={latest.naics20} />
+          <NaicsTrendChart
+            trend={trend}
+            latest={latest.naics20}
+            visible={naicsVisible ?? defaultVisibleKeys(latest.naics20)}
+            setVisible={setNaicsVisible}
+          />
         )}
       </ChartFrame>
 

@@ -18,6 +18,7 @@ import type {
   ContextEnvelope,
   ContextLatest,
   ContextPlaceEntry,
+  ContextTrend,
   TrendPoint,
 } from '../../types/context';
 import {
@@ -122,11 +123,16 @@ export function DemographicsMapStrip({
   }, [totalSelected, activePlaces, activeCounties, workforce]);
 
   // Ranked entities for the right-side list, scoped to the active geoLevel.
+  // Prefers metric.extractFromTrend() when present (composite metrics like
+  // Population 10-yr % that need a multi-year computation); falls back to
+  // metric.extract() for everyday single-year latest reads.
   const rankedRows = useMemo(() => {
     const rows = (geoLevel === 'county' ? filteredCounties : filteredPlaces).map((e) => ({
       id: 'zip' in e ? e.zip : e.geoid,
       name: e.name,
-      value: metric.extract(e.latest),
+      value: metric.extractFromTrend
+        ? metric.extractFromTrend(e.trend)
+        : metric.extract(e.latest),
     }));
     return rows
       .filter((r) => r.value != null)
@@ -134,18 +140,30 @@ export function DemographicsMapStrip({
   }, [filteredCounties, filteredPlaces, geoLevel, metric]);
 
   // Trend series — multi-series when ≥1 entity selected, otherwise the
-  // single regional aggregate line.
+  // single regional aggregate line. Uses the active metric's trendKey
+  // (falling back to 'population' when the metric has no per-metric series
+  // available in the bundle).
+  const trendKey = metric.trendKey ?? 'population';
   const trendSeries = useMemo<TrendSeries[]>(() => {
     if (totalSelected === 0) {
+      let points = aggregatedTrend(
+        geoLevel === 'county' ? filteredCounties : filteredPlaces,
+        trendKey,
+      );
+      // Fallback — if the selected metric has no data, render the canonical
+      // population trend instead so the chart slot is never blank.
+      if (points.length === 0 && trendKey !== 'population') {
+        points = aggregatedTrend(
+          geoLevel === 'county' ? filteredCounties : filteredPlaces,
+          'population',
+        );
+      }
       return [
         {
           key: 'region',
           label: 'Region',
           color: accent,
-          points: aggregatedTrend(
-            geoLevel === 'county' ? filteredCounties : filteredPlaces,
-            'population',
-          ),
+          points,
         },
       ];
     }
@@ -153,13 +171,17 @@ export function DemographicsMapStrip({
       ...activePlaces,
       ...activeCounties,
     ];
-    return entities.map((e, i) => ({
-      key: 'zip' in e ? e.zip : e.geoid,
-      label: e.name,
-      color: seriesColor(i),
-      points: e.trend?.population ?? [],
-    }));
-  }, [totalSelected, activePlaces, activeCounties, filteredCounties, filteredPlaces, geoLevel, accent]);
+    return entities.map((e, i) => {
+      const primary = e.trend?.[trendKey] ?? [];
+      const points = primary.length > 0 ? primary : (e.trend?.population ?? []);
+      return {
+        key: 'zip' in e ? e.zip : e.geoid,
+        label: e.name,
+        color: seriesColor(i),
+        points,
+      };
+    });
+  }, [totalSelected, activePlaces, activeCounties, filteredCounties, filteredPlaces, geoLevel, accent, trendKey]);
 
   // Use multi-series mode (with legend) whenever the user has selections.
   const useMultiSeries = totalSelected > 0;
@@ -191,6 +213,21 @@ export function DemographicsMapStrip({
       ? headlineAggregate.workforce / regionAggregate.workforce
       : null;
 
+  // Headline override for composite metrics (Population 10-yr %) that
+  // require the aggregated trend, not a single-year latest. Synthesizes a
+  // ContextTrend from the active geo level so metric.extractFromTrend() can
+  // run against it.
+  const headlineOverride = useMemo<number | null>(() => {
+    if (!metric.extractFromTrend) return null;
+    const entities = totalSelected === 0
+      ? (geoLevel === 'county' ? filteredCounties : filteredPlaces)
+      : [...activePlaces, ...activeCounties];
+    const synthTrend: ContextTrend = {
+      population: aggregatedTrend(entities, 'population'),
+    };
+    return metric.extractFromTrend(synthTrend);
+  }, [metric, totalSelected, geoLevel, filteredCounties, filteredPlaces, activePlaces, activeCounties]);
+
   return (
     <div className="px-3 flex flex-col gap-2">
       <MultiSelectToolbar
@@ -213,15 +250,20 @@ export function DemographicsMapStrip({
             metric.id === 'population' ? populationPctOfRegion : null
           }
           workforcePctOfRegion={workforcePctOfRegion}
+          headlineOverride={headlineOverride}
         />
         <TrendCard
-          title={
-            useMultiSeries
-              ? 'Population trend · selected'
-              : countyFilter
-              ? `${filterLabel} population trend`
-              : 'Regional population trend'
-          }
+          title={(() => {
+            // The trend card mirrors the active metric where possible, but
+            // composite/derived metrics (e.g. Population 10-yr %) still
+            // show the underlying population series — so we phrase the
+            // title from the trendKey rather than the metric label.
+            const trendLabel = trendCardLabel(metric, trendKey);
+            if (useMultiSeries) return `${trendLabel} · selected`;
+            return countyFilter
+              ? `${filterLabel} ${trendLabel.toLowerCase()}`
+              : `Regional ${trendLabel.toLowerCase()}`;
+          })()}
           subtitle={
             useMultiSeries
               ? `${totalSelected} series`
@@ -263,6 +305,7 @@ function RegionKpis({
   accent,
   headlinePctOfRegion,
   workforcePctOfRegion,
+  headlineOverride,
 }: {
   region: RegionAggregate;
   metric: DemographicsMetric;
@@ -270,6 +313,10 @@ function RegionKpis({
   accent?: string;
   headlinePctOfRegion: number | null;
   workforcePctOfRegion: number | null;
+  // For composite metrics that don't read from a single ContextLatest
+  // (e.g. Population 10-yr %), the parent computes the headline from the
+  // aggregated trend and threads it in here.
+  headlineOverride: number | null;
 }) {
   const synthLatest: ContextLatest = {
     population: region.population,
@@ -279,7 +326,7 @@ function RegionKpis({
     age65plus: region.over65,
     hispanic: region.hispanic,
   };
-  const headline = metric.extract(synthLatest);
+  const headline = headlineOverride ?? metric.extract(synthLatest);
 
   return (
     <div
@@ -521,4 +568,16 @@ function aggregatedTrend(
 function numOrNull(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   return null;
+}
+
+// Friendly trend-card title. Composite metrics (no trendKey, or trendKey
+// falling back to 'population') retain "Population trend" wording so the
+// chart caption matches what the user sees rendered.
+function trendCardLabel(metric: DemographicsMetric, trendKey: string): string {
+  if (!metric.trendKey) return 'Population trend';
+  // Population 10-yr % keeps the population trend chart; phrase as the
+  // underlying chart, not the metric.
+  if (metric.id === 'population10yrPct') return 'Population trend';
+  if (trendKey === 'population') return 'Population trend';
+  return `${metric.label} trend`;
 }
