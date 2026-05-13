@@ -8,15 +8,24 @@ import { SUBJECT_BY_ID, type SubjectId } from '../config/subjects';
 
 interface Props {
   subjectId: SubjectId;
+  // When set, appended to the map path as `?metric=<value>` so the linked
+  // map view boots with that metric pre-selected. Each map view is
+  // responsible for reading the param via useSearchParams and using it as
+  // its initial state.
+  metricParam?: string;
 }
 
-export function MapLinkButton({ subjectId }: Props) {
+export function MapLinkButton({ subjectId, metricParam }: Props) {
   const subject = SUBJECT_BY_ID[subjectId];
   if (!subject.hasMap || !subject.mapPath) return null;
 
+  const href = metricParam
+    ? `${subject.mapPath}?metric=${encodeURIComponent(metricParam)}`
+    : subject.mapPath;
+
   return (
     <Link
-      to={subject.mapPath}
+      to={href}
       aria-label={`View ${subject.label} map`}
       className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-1 shrink-0"
       style={{

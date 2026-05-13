@@ -34,12 +34,13 @@ interface Props {
   bundle: ContextBundle | null;
   selectedZip: string | null;
   variant: CommerceVariant;
-  // Section-local focus ZIP for the Anchor Places bar + Pie. Clicking
-  // a place sets this state on the parent; it never propagates to the
-  // dashboard-wide `selectedZip`. Used so Commerce can show a within-
-  // section highlight without affecting Workforce, Demographics, etc.
-  commerceFocusZip?: string | null;
-  onCommerceFocusZip?: (zip: string | null) => void;
+  // Section-local focus ZIPs for the Anchor Places bar + Pie. Multi-select:
+  // clicking a row toggles its membership in the set. The set never
+  // propagates to the dashboard-wide `selectedZip`. Used so Commerce can
+  // show a within-section highlight without affecting Workforce,
+  // Demographics, etc.
+  commerceFocusZips?: ReadonlySet<string>;
+  onToggleCommerceFocus?: (zip: string) => void;
   // Active county filter (FIPS GEOID, e.g. "08045"). Drives:
   //   - the Counties card highlight (selected county shows in amber)
   //   - the Anchor Places bar (filtered to that county's anchors)
@@ -325,7 +326,7 @@ function PiePlaces({
   const isInteractive = (s: PieSlice) => clickEnabled && s.interactive !== false;
 
   return (
-    <div className="flex justify-center min-w-0">
+    <div className="flex flex-col items-center gap-2 min-w-0">
       <div className="relative shrink-0" style={{ width: VB, height: VB }}>
         <svg
           viewBox={`0 0 ${VB} ${VB}`}
@@ -366,39 +367,34 @@ function PiePlaces({
                 />
               );
             })}
-            {/* Center label: total or hovered slice. */}
-            <text
-              textAnchor="middle"
-              dominantBaseline="central"
-              y={-6}
-              style={{ fill: 'var(--text-dim)', fontSize: 8, letterSpacing: 0.5 }}
-            >
-              {hovered ? hovered.label.toUpperCase() : centerLabel}
-            </text>
-            <text
-              textAnchor="middle"
-              dominantBaseline="central"
-              y={6}
-              style={{
-                fill: hovered ? 'var(--accent)' : 'var(--text-h)',
-                fontSize: 11,
-                fontWeight: 600,
-              }}
-            >
-              {hovered ? formatValue(hovered.value) : formatValue(total)}
-            </text>
-            {hovered && (
-              <text
-                textAnchor="middle"
-                dominantBaseline="central"
-                y={18}
-                style={{ fill: 'var(--text-dim)', fontSize: 9 }}
-              >
-                {((hovered.value / total) * 100).toFixed(1)}% of total
-              </text>
-            )}
           </g>
         </svg>
+      </div>
+      {/* Callout block — total when idle, hovered slice label / value / %
+          of total when hovering. Replaces the in-SVG center text per the
+          v3 design refresh so the donut stays clean and the callout sits
+          beneath the chart where labels read naturally. */}
+      <div className="flex flex-col items-center text-center">
+        <div
+          className="text-[9px] uppercase tracking-wider"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          {hovered ? hovered.label.toUpperCase() : centerLabel}
+        </div>
+        <div
+          className="text-[14px] font-semibold tabular-nums"
+          style={{ color: hovered ? 'var(--accent)' : 'var(--text-h)' }}
+        >
+          {hovered ? formatValue(hovered.value) : formatValue(total)}
+        </div>
+        {hovered && (
+          <div
+            className="text-[10px]"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            {((hovered.value / total) * 100).toFixed(1)}% of total
+          </div>
+        )}
       </div>
     </div>
   );
@@ -442,23 +438,24 @@ export function CommerceComparisons({
   bundle,
   selectedZip,
   variant,
-  commerceFocusZip = null,
-  onCommerceFocusZip,
+  commerceFocusZips,
+  onToggleCommerceFocus,
   selectedCountyGeoid = null,
   onSelectCounty,
 }: Props) {
-  // A place is highlighted if it matches either the dashboard-wide
-  // workforce selection (so the section still scopes when a workplace
-  // anchor is clicked in the Workforce section above) or the section-
-  // local focus state (Anchor Places / Pie click). The focus state
-  // never leaves Commerce.
-  const focusZip = commerceFocusZip ?? selectedZip;
-  // Toggle helper: clicking the currently focused anchor clears the
-  // local highlight; clicking any other anchor sets it. Never mutates
-  // the dashboard-wide `selectedZip`.
-  const handleRowClick = onCommerceFocusZip
-    ? (zip: string) =>
-        onCommerceFocusZip(zip === commerceFocusZip ? null : zip)
+  // The effective highlight set merges the dashboard-wide workforce
+  // selection (so the section still scopes when a workplace anchor is
+  // clicked in the Workforce section above) with the multi-select set
+  // from Commerce-local clicks. The local set never leaves Commerce.
+  const focusZips = useMemo(() => {
+    const next = new Set<string>(commerceFocusZips ?? []);
+    if (selectedZip) next.add(selectedZip);
+    return next;
+  }, [commerceFocusZips, selectedZip]);
+  // Toggle helper: clicking a row flips its membership in the local set.
+  // Never mutates the dashboard-wide `selectedZip`.
+  const handleRowClick = onToggleCommerceFocus
+    ? (zip: string) => onToggleCommerceFocus(zip)
     : undefined;
   const handleCountyClick = onSelectCounty
     ? (geoid: string) =>
@@ -529,7 +526,7 @@ export function CommerceComparisons({
       label: d.place.name,
       value: d.value,
       fill: '#ffffff',
-      highlight: d.place.zip === focusZip,
+      highlight: focusZips.has(d.place.zip),
     }));
 
     // Append synthetic "Unincorporated {county}" rows so the municipalities
@@ -635,12 +632,12 @@ export function CommerceComparisons({
         countyName: e.countyName,
         value: e.value,
         fill: colorForValue(e.value, pieMin, pieMax),
-        highlight: e.zip != null && e.zip === focusZip,
+        highlight: e.zip != null && focusZips.has(e.zip),
         interactive: !e.isUnincorporated,
       }));
 
     return { countyRows, placeRows, pieSlices, latestYear };
-  }, [bundle, measure, focusZip, selectedCountyGeoid]);
+  }, [bundle, measure, focusZips, selectedCountyGeoid]);
 
   const variantLabel =
     variant === 'gross' ? 'Gross Sales' : variant === 'retail' ? 'Retail Sales' : 'Net Taxable Sales';

@@ -27,6 +27,7 @@ import type {
 } from '../../types/context';
 import { ChartFrame } from './HousingMarketSection';
 import { fmtInt, fmtCompactUSD } from '../../lib/format';
+import type { WorkforceCountyFilter } from '../../types/flow';
 
 // ---------------------------------------------------------------------------
 // Geography model
@@ -191,6 +192,56 @@ function fmtPercent1(v: number | null | undefined): string {
 function fmtMedianAge(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
   return v.toFixed(1);
+}
+
+// ---------------------------------------------------------------------------
+// ExpandToggle — small chevron button used in the Race / Hispanic /
+// Household ChartFrame rightSlot to flip between the single-row "Region"
+// collapsed view and the full geographies expanded view.
+// ---------------------------------------------------------------------------
+function ExpandToggle({
+  expanded,
+  onToggle,
+  ariaLabel,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={expanded}
+      aria-label={ariaLabel}
+      title={expanded ? 'Collapse to single row' : 'Expand to all geographies'}
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-1"
+      style={{
+        color: 'var(--text-h)',
+        border: '1px solid var(--panel-border)',
+        background: 'transparent',
+      }}
+    >
+      <svg
+        width="9"
+        height="9"
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        style={{
+          transform: expanded ? 'rotate(180deg)' : 'none',
+          transition: 'transform 120ms ease',
+        }}
+      >
+        <path d="M2.5 4.5L6 8l3.5-3.5" />
+      </svg>
+      {expanded ? 'Collapse' : 'Expand'}
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -800,6 +851,7 @@ function StackedBarChart({
   trailingLabel,
   minRowHeight = 18,
   rowGap = 6,
+  fixedRowHeight = false,
 }: {
   geographies: DemoGeography[];
   segments: ReadonlyArray<{ key: string; label: string }>;
@@ -811,6 +863,10 @@ function StackedBarChart({
   // card space via CSS grid `minmax(minRowHeight, 1fr)`.
   minRowHeight?: number;
   rowGap?: number;
+  // When true, every row renders at exactly `minRowHeight` (no vertical
+  // stretching). Used by the composition cards in their collapsed
+  // single-row view so the three cards line up at a consistent thickness.
+  fixedRowHeight?: boolean;
 }) {
   const rows = useMemo(() => {
     const built = geographies.map((g) => {
@@ -849,7 +905,9 @@ function StackedBarChart({
       <div
         className="relative grid flex-1 min-h-0"
         style={{
-          gridTemplateRows: `repeat(${Math.max(1, rows.length)}, minmax(${minRowHeight}px, 1fr))`,
+          gridTemplateRows: fixedRowHeight
+            ? `repeat(${Math.max(1, rows.length)}, ${minRowHeight}px)`
+            : `repeat(${Math.max(1, rows.length)}, minmax(${minRowHeight}px, 1fr))`,
           rowGap,
           minHeight: rows.length * (minRowHeight + rowGap),
         }}
@@ -858,6 +916,10 @@ function StackedBarChart({
           const isActive = highlightId === geo.id;
           const isDimmed = highlightId != null && !isActive;
           const trailing = trailingLabel ? trailingLabel(geo) : null;
+          // `fixedRowHeight` doubles as the collapsed-view signal: rows
+          // are non-interactive (the synthetic Region id can't be
+          // promoted into activeId without breaking downstream displays).
+          const interactive = !fixedRowHeight;
           return (
             <div
               key={geo.id}
@@ -865,9 +927,9 @@ function StackedBarChart({
               style={{
                 gridTemplateColumns: `${labelW}px 1fr ${trailingW}px`,
                 opacity: isDimmed ? 0.55 : 1,
-                cursor: 'pointer',
+                cursor: interactive ? 'pointer' : 'default',
               }}
-              onClick={() => onActivate(geo.id)}
+              onClick={interactive ? () => onActivate(geo.id) : undefined}
             >
               <div
                 className="text-[11px] truncate"
@@ -933,10 +995,14 @@ function HispanicShareChart({
   geographies,
   highlightId,
   onActivate,
+  rowHeight: rowHeightOverride,
 }: {
   geographies: DemoGeography[];
   highlightId: string | null;
   onActivate: (id: string) => void;
+  // Optional fixed bar thickness in px. Used by the composition cards in
+  // their collapsed single-row view to match the Race + Household bars.
+  rowHeight?: number;
 }) {
   const rows = useMemo(() => {
     return geographies
@@ -957,7 +1023,7 @@ function HispanicShareChart({
 
   const labelW = 132;
   const trailingW = 56;
-  const rowHeight = 18;
+  const rowHeight = rowHeightOverride ?? 18;
   const rowGap = 6;
 
   return (
@@ -973,6 +1039,10 @@ function HispanicShareChart({
           const isActive = highlightId === geo.id;
           const isDimmed = highlightId != null && !isActive;
           const widthPct = ((pct ?? 0) / xMax) * 100;
+          // `rowHeightOverride` doubles as the collapsed-view signal:
+          // disable click + pointer cursor so the synthetic Region id
+          // can't be promoted into activeId.
+          const interactive = rowHeightOverride == null;
           return (
             <div
               key={geo.id}
@@ -980,9 +1050,9 @@ function HispanicShareChart({
               style={{
                 gridTemplateColumns: `${labelW}px 1fr ${trailingW}px`,
                 opacity: isDimmed ? 0.55 : 1,
-                cursor: 'pointer',
+                cursor: interactive ? 'pointer' : 'default',
               }}
-              onClick={() => onActivate(geo.id)}
+              onClick={interactive ? () => onActivate(geo.id) : undefined}
             >
               <div
                 className="text-[11px] truncate"
@@ -1017,10 +1087,6 @@ function HispanicShareChart({
             </div>
           );
         })}
-      </div>
-      <div className="flex justify-between text-[9px]" style={{ color: 'var(--text-dim)', paddingLeft: labelW + 8, paddingRight: trailingW + 8 }}>
-        <span>0%</span>
-        <span>{xMax}%</span>
       </div>
     </div>
   );
@@ -1655,12 +1721,77 @@ function PopulationPyramid({ geo }: { geo: DemoGeography | null }) {
 // ---------------------------------------------------------------------------
 // Top-level section
 // ---------------------------------------------------------------------------
+// Study-area county GEOIDs used by the Region aggregate in the collapsed
+// composition cards. Garfield + Pitkin + Eagle — same trio referenced in
+// CommerceComparisons.tsx and ZHVI_COUNTY_FIPS_BY_FILTER in
+// HousingMarketSection.tsx.
+const REGION_COUNTY_GEOIDS = ['08045', '08097', '08037'] as const;
+
+// Fields summed when building the synthetic "Region" geography for the
+// collapsed Race / Hispanic / Household cards. All raw counts — ratios are
+// computed downstream.
+const REGION_AGGREGATE_KEYS = [
+  'population',
+  'hispanic',
+  'white',
+  'black',
+  'amInd',
+  'asian',
+  'nhpi',
+  'twoOrMore',
+  'familyHh',
+  'nonFamilyHh',
+] as const;
+
+function buildRegionGeo(geographies: DemoGeography[]): DemoGeography | null {
+  const counties = REGION_COUNTY_GEOIDS
+    .map((geoid) => geographies.find((g) => g.id === `county:${geoid}`))
+    .filter((g): g is DemoGeography => !!g);
+  if (counties.length === 0) return null;
+
+  const summed: ContextLatest = {};
+  for (const key of REGION_AGGREGATE_KEYS) {
+    let total = 0;
+    let any = false;
+    for (const c of counties) {
+      const v = readNum(c.demoLatest, key);
+      if (v != null) {
+        total += v;
+        any = true;
+      }
+    }
+    if (any) summed[key] = total;
+  }
+
+  return {
+    id: 'region:study-area',
+    label: 'Region',
+    kind: 'county',
+    demoLatest: summed,
+    demoTrend: {},
+    demoHistoricalTrend: {},
+    eduLatest: null,
+  };
+}
+
+const WORKFORCE_COUNTY_TO_GEOID: Record<'garfield' | 'pitkin', string> = {
+  garfield: '08045',
+  pitkin: '08097',
+};
+
+// Sink for click handlers in the collapsed composition cards. The synthetic
+// Region id doesn't correspond to a real geography, so promoting it into
+// activeId would break the downstream HeadlineStats / trend highlights.
+const noopActivate = (_id: string) => { void _id; };
+
 export function DemographicsSection({
   bundle,
   selectedZip,
+  workforceCounty = 'all',
 }: {
   bundle: ContextBundle | null;
   selectedZip: string | null;
+  workforceCounty?: WorkforceCountyFilter;
 }) {
   const demo = bundle?.demographics ?? null;
   const edu = bundle?.education ?? null;
@@ -1693,11 +1824,49 @@ export function DemographicsSection({
   };
 
   // --- Population Trend toggles ------------------------------------------
-  const [popPeriod, setPopPeriod] = useState<'current' | 'historical'>('current');
+  // Historical is the default and only view per the v3 dashboard refresh.
+  // Geo-kind toggle still ships, now hosted in the ChartFrame's top-right
+  // rightSlot so the chart canvas reclaims that vertical real estate.
   const [popGeoKind, setPopGeoKind] = useState<GeoKind>('place');
   const popGeographies = useMemo(
     () => geographies.filter((g) => g.kind === popGeoKind),
     [geographies, popGeoKind],
+  );
+
+  // --- Composition cards: expand/collapse + Region aggregate ------------
+  // Race + Hispanic share one expand state per spec; Household has its own.
+  // Default = collapsed → single bar for the Region (3-county aggregate,
+  // unless the user has filtered to a county or workplace, in which case
+  // that one geography is used).
+  const [racePairExpanded, setRacePairExpanded] = useState(false);
+  const [householdExpanded, setHouseholdExpanded] = useState(false);
+
+  const regionGeo = useMemo(() => buildRegionGeo(geographies), [geographies]);
+
+  // Resolve the single bar shown when a composition card is collapsed.
+  // Priority: explicit place selection (sidebar workplace ZIP or active
+  // bar) > county filter (sidebar) > region aggregate. Returns an empty
+  // list as a defensive fallback when no geography can be resolved (e.g.
+  // bundle still loading).
+  const collapsedGeo = useMemo<DemoGeography | null>(() => {
+    if (selectedZip) {
+      const m = geographies.find((g) => g.id === `place:${selectedZip}`);
+      if (m) return m;
+    }
+    if (activeId) {
+      const m = geographies.find((g) => g.id === activeId);
+      if (m) return m;
+    }
+    if (workforceCounty !== 'all') {
+      const fips = WORKFORCE_COUNTY_TO_GEOID[workforceCounty];
+      const m = geographies.find((g) => g.id === `county:${fips}`);
+      if (m) return m;
+    }
+    return regionGeo;
+  }, [selectedZip, activeId, workforceCounty, geographies, regionGeo]);
+  const collapsedGeos = useMemo(
+    () => (collapsedGeo ? [collapsedGeo] : []),
+    [collapsedGeo],
   );
 
   const vintageEnd = demo?.vintageRange?.end ?? null;
@@ -1719,17 +1888,12 @@ export function DemographicsSection({
         <HeadlineStats geo={activeGeo} vintageEnd={vintageEnd} />
       </div>
 
-      {/* Row 2 — Trend charts (population w/ toggles · median income) */}
+      {/* Row 2 — Trend charts (population · median income) */}
       <div className="grid gap-3 lg:grid-cols-2 grid-cols-1 items-stretch">
         <ChartFrame
           title="Population Trend"
-          subtitle={
-            popPeriod === 'historical'
-              ? `Decennial 1950 → 2020 + ${vintageEnd ?? '2024'} anchor · CO SDO + Census · click a line or legend item to highlight`
-              : `Annual ${vintageStart ?? 2010} → ${vintageEnd ?? 'latest'} · CO SDO (places) + ACS (county/state) · click a line or legend item to highlight`
-          }
-        >
-          <div className="flex items-center gap-2 flex-wrap">
+          subtitle={`Decennial 1950 → 2020 + ${vintageEnd ?? '2024'} anchor · CO SDO + Census`}
+          rightSlot={
             <SegmentedControl<GeoKind>
               ariaLabel="Geography level"
               value={popGeoKind}
@@ -1740,25 +1904,17 @@ export function DemographicsSection({
                 { value: 'state',  label: 'State'  },
               ]}
             />
-            <SegmentedControl<'current' | 'historical'>
-              ariaLabel="Time period"
-              value={popPeriod}
-              onChange={setPopPeriod}
-              options={[
-                { value: 'current',    label: 'Current'    },
-                { value: 'historical', label: 'Historical' },
-              ]}
-            />
-          </div>
+          }
+        >
           <MultiLineTrendChart
             geographies={popGeographies}
             metricKey="population"
-            trendSource={popPeriod}
+            trendSource="historical"
             highlightId={effectiveActiveId}
             onActivate={handleActivate}
             formatY={(v) => fmtInt(v)}
             formatTooltip={(v) => fmtInt(v)}
-            showGrowthAnnotations={popPeriod === 'historical'}
+            showGrowthAnnotations
           />
         </ChartFrame>
         <ChartFrame
@@ -1806,28 +1962,57 @@ export function DemographicsSection({
         </div>
       </div>
 
-      {/* Row 4 — Race composition + Hispanic share */}
+      {/* Row 4 — Race composition + Hispanic share (paired expand state).
+          Collapsed view = single bar for the resolved Region geo, rendered
+          at a fixed 32px thickness, highlighted in amber, and non-interactive
+          (clicks would otherwise stamp the synthetic 'region:study-area' id
+          into activeId and break downstream displays that key on a real geo). */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1 items-stretch">
         <ChartFrame
           title="Race Composition"
-          subtitle={`Share of population by race (any ethnicity) · ACS 5-Year ${vintageEnd ?? 'latest'} · click a row to focus`}
+          subtitle={
+            racePairExpanded
+              ? `Share of population by race (any ethnicity) · ACS 5-Year ${vintageEnd ?? 'latest'} · click a row to focus`
+              : `Share of population by race (any ethnicity) · ACS 5-Year ${vintageEnd ?? 'latest'} · ${collapsedGeo?.label ?? 'Region'}`
+          }
+          rightSlot={
+            <ExpandToggle
+              expanded={racePairExpanded}
+              onToggle={() => setRacePairExpanded((v) => !v)}
+              ariaLabel="Toggle Race + Hispanic expanded view"
+            />
+          }
         >
           <StackedBarChart
-            geographies={geographies}
+            geographies={racePairExpanded ? geographies : collapsedGeos}
             segments={RACE_SEGMENTS}
             palette={RACE_PALETTE}
-            highlightId={effectiveActiveId}
-            onActivate={handleActivate}
+            highlightId={racePairExpanded ? effectiveActiveId : collapsedGeo?.id ?? null}
+            onActivate={racePairExpanded ? handleActivate : noopActivate}
+            minRowHeight={racePairExpanded ? 18 : 32}
+            fixedRowHeight={!racePairExpanded}
           />
         </ChartFrame>
         <ChartFrame
           title="Hispanic Share"
-          subtitle={`Hispanic of any race · ACS 5-Year ${vintageEnd ?? 'latest'} · ranked by share`}
+          subtitle={
+            racePairExpanded
+              ? `Hispanic of any race · ACS 5-Year ${vintageEnd ?? 'latest'} · ranked by share`
+              : `Hispanic of any race · ACS 5-Year ${vintageEnd ?? 'latest'} · ${collapsedGeo?.label ?? 'Region'}`
+          }
+          rightSlot={
+            <ExpandToggle
+              expanded={racePairExpanded}
+              onToggle={() => setRacePairExpanded((v) => !v)}
+              ariaLabel="Toggle Race + Hispanic expanded view"
+            />
+          }
         >
           <HispanicShareChart
-            geographies={geographies}
-            highlightId={effectiveActiveId}
-            onActivate={handleActivate}
+            geographies={racePairExpanded ? geographies : collapsedGeos}
+            highlightId={racePairExpanded ? effectiveActiveId : collapsedGeo?.id ?? null}
+            onActivate={racePairExpanded ? handleActivate : noopActivate}
+            rowHeight={racePairExpanded ? undefined : 32}
           />
         </ChartFrame>
       </div>
@@ -1836,14 +2021,27 @@ export function DemographicsSection({
       <div className="grid gap-3 grid-cols-1">
         <ChartFrame
           title="Household Composition"
-          subtitle={`Family vs. non-family households · ACS 5-Year ${vintageEnd ?? 'latest'} · total households shown on the right`}
+          subtitle={
+            householdExpanded
+              ? `Family vs. non-family households · ACS 5-Year ${vintageEnd ?? 'latest'} · total households shown on the right`
+              : `Family vs. non-family households · ACS 5-Year ${vintageEnd ?? 'latest'} · ${collapsedGeo?.label ?? 'Region'}`
+          }
+          rightSlot={
+            <ExpandToggle
+              expanded={householdExpanded}
+              onToggle={() => setHouseholdExpanded((v) => !v)}
+              ariaLabel="Toggle Household Composition expanded view"
+            />
+          }
         >
           <StackedBarChart
-            geographies={geographies}
+            geographies={householdExpanded ? geographies : collapsedGeos}
             segments={HOUSEHOLD_SEGMENTS}
             palette={HOUSEHOLD_PALETTE}
-            highlightId={effectiveActiveId}
-            onActivate={handleActivate}
+            highlightId={householdExpanded ? effectiveActiveId : collapsedGeo?.id ?? null}
+            onActivate={householdExpanded ? handleActivate : noopActivate}
+            minRowHeight={householdExpanded ? 18 : 32}
+            fixedRowHeight={!householdExpanded}
             trailingLabel={(g) => {
               const fam = readNum(g.demoLatest, 'familyHh') ?? 0;
               const non = readNum(g.demoLatest, 'nonFamilyHh') ?? 0;

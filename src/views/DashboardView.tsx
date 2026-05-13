@@ -28,10 +28,12 @@ import type {
 } from '../types/flow';
 import {
   ANCHOR_COUNTY,
+  ANCHOR_ZIPS,
   applySegmentFilter,
   filterByDirection,
   filterFlowsByAnchorCounty,
   filterForSelection,
+  isAnchorInCounty,
   isAnchorZip,
 } from '../lib/flowQueries';
 import { buildVisibleCorridorMap } from '../lib/corridors';
@@ -39,7 +41,6 @@ import type { FlowData } from '../lib/useFlowData';
 
 import { ModeToggle } from '../components/ModeToggle';
 import { DirectionToggle } from '../components/DirectionToggle';
-import { ZipSelector } from '../components/ZipSelector';
 import { StatsAggregated } from '../components/StatsAggregated';
 import { StatsForZip } from '../components/StatsForZip';
 import { ContextCards, type CommerceVariant, type CommerceCadence } from '../components/ContextCards';
@@ -135,8 +136,24 @@ export function DashboardView() {
   // on those surfaces highlight inside Commerce only — they do NOT
   // touch the dashboard-wide `selectedZip` (which is set by the
   // Workforce section's anchor click and continues to scope Commerce
-  // through the existing `selectedZip` prop).
-  const [commerceFocusZip, setCommerceFocusZip] = useState<string | null>(null);
+  // through the existing `selectedZip` prop). Multi-select: clicking
+  // a row toggles its membership; clicking an active row deselects it.
+  const [commerceFocusZips, setCommerceFocusZips] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const toggleCommerceFocus = (zip: string) => {
+    setCommerceFocusZips((prev) => {
+      const next = new Set(prev);
+      if (next.has(zip)) next.delete(zip); else next.add(zip);
+      return next;
+    });
+  };
+  // CommerceTimeSeriesChart + ContextCards still expect a single ZIP. With
+  // multi-select, pass the first chosen ZIP so the time-series / KPI tile
+  // still has one place to highlight. The bar + pie show the full set.
+  const firstCommerceFocusZip = commerceFocusZips.size > 0
+    ? Array.from(commerceFocusZips)[0]
+    : null;
 
   // ----- Derived state (mirrors the relevant parts of CommuteView) --------
   const selectionKind: 'aggregate' | 'anchor' | 'non-anchor' = useMemo(() => {
@@ -385,6 +402,19 @@ export function DashboardView() {
           })}
         </nav>
 
+        {/* Global filters — workplace + county chips. Source of truth for
+            both the Workforce section's StatsForZip drill-down (existing
+            behavior) AND the Zillow Home Value Index subsection's active
+            geography. Single-select; clicking the active chip clears it.
+            Mounts at the bottom of the desktop sidebar; on mobile it
+            stacks below the section nav. */}
+        <SidebarFiltersCard
+          zips={zips}
+          selectedZip={selectedZip}
+          onSelectZip={handleSelectZip}
+          workforceCounty={workforceCounty}
+          onWorkforceCountyChange={setWorkforceCounty}
+        />
       </aside>
 
       {/* Main scrolling content. */}
@@ -426,11 +456,6 @@ export function DashboardView() {
                   modeAggregate={selectionKind === 'aggregate'}
                   directionFilter={directionFilter}
                   onDirectionChange={setDirectionFilter}
-                  zips={zips}
-                  selectedZip={selectedZip}
-                  onSelectZip={handleSelectZip}
-                  workforceCounty={workforceCounty}
-                  onWorkforceCountyChange={setWorkforceCounty}
                 />
               </div>
               {selectedZip == null || selectedZip === 'ALL_OTHER' ? (
@@ -640,6 +665,7 @@ export function DashboardView() {
             <DemographicsSection
               bundle={contextBundle}
               selectedZip={selectedZip}
+              workforceCounty={workforceCounty}
             />
           </section>
 
@@ -667,7 +693,11 @@ export function DashboardView() {
               </h2>
               <MapLinkButton subjectId="housing" />
             </div>
-            <HousingMarketSection bundle={contextBundle} selectedZip={selectedZip} />
+            <HousingMarketSection
+              bundle={contextBundle}
+              selectedZip={selectedZip}
+              workforceCounty={workforceCounty}
+            />
           </section>
 
           {/* Section — Commerce: 2-column grid. Left = real timeseries chart
@@ -707,7 +737,7 @@ export function DashboardView() {
                 <div className="flex flex-wrap gap-3 min-w-0">
                   <ContextCards
                     bundle={contextBundle}
-                    selectedZip={commerceFocusZip ?? selectedZip}
+                    selectedZip={firstCommerceFocusZip ?? selectedZip}
                     racFile={racFile}
                     wacFile={wacFile}
                     odSummary={odSummary}
@@ -724,7 +754,7 @@ export function DashboardView() {
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] grid-cols-1 items-stretch">
                 <CommerceTimeSeriesChart
                   bundle={contextBundle}
-                  selectedZip={commerceFocusZip ?? selectedZip}
+                  selectedZip={firstCommerceFocusZip ?? selectedZip}
                   variant={commerceVariant}
                   cadence={commerceCadence}
                   onCadenceChange={setCommerceCadence}
@@ -735,8 +765,8 @@ export function DashboardView() {
                     bundle={contextBundle}
                     selectedZip={selectedZip}
                     variant={commerceVariant}
-                    commerceFocusZip={commerceFocusZip}
-                    onCommerceFocusZip={setCommerceFocusZip}
+                    commerceFocusZips={commerceFocusZips}
+                    onToggleCommerceFocus={toggleCommerceFocus}
                     selectedCountyGeoid={commerceCountyGeoid}
                     onSelectCounty={setCommerceCountyGeoid}
                   />
@@ -874,11 +904,6 @@ function WorkforceFiltersCard({
   modeAggregate,
   directionFilter,
   onDirectionChange,
-  zips,
-  selectedZip,
-  onSelectZip,
-  workforceCounty,
-  onWorkforceCountyChange,
 }: {
   mode: Mode;
   onModeChange: (m: Mode) => void;
@@ -886,47 +911,156 @@ function WorkforceFiltersCard({
   modeAggregate: boolean;
   directionFilter: DirectionFilter;
   onDirectionChange: (d: DirectionFilter) => void;
+}) {
+  return (
+    <div
+      className="rounded-md p-3 flex flex-col gap-3"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid var(--panel-border)',
+      }}
+    >
+      <div
+        className="text-[10px] font-semibold uppercase tracking-wider"
+        style={{ color: 'var(--text-h)' }}
+      >
+        Filters
+      </div>
+      <ModeToggle
+        mode={mode}
+        onChange={onModeChange}
+        disabled={modeDisabled}
+        aggregate={modeAggregate}
+      />
+      <DirectionToggle
+        value={directionFilter}
+        onChange={onDirectionChange}
+      />
+      <div
+        className="text-[10px]"
+        style={{ color: 'var(--text-dim)' }}
+      >
+        Workplace + county filters live in the left sidebar.
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SidebarFiltersCard — workplace + county chips mounted at the bottom of the
+// left aside. Single source of truth for `selectedZip` (workplace) and
+// `workforceCounty` (county). Both Workforce and the Zillow Home Value Index
+// subsection read these. Single-select; clicking the active chip clears it.
+// ---------------------------------------------------------------------------
+const SIDEBAR_COUNTY_OPTIONS: ReadonlyArray<{ key: WorkforceCountyFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'garfield', label: 'Garfield' },
+  { key: 'pitkin', label: 'Pitkin' },
+];
+
+function SidebarFiltersCard({
+  zips,
+  selectedZip,
+  onSelectZip,
+  workforceCounty,
+  onWorkforceCountyChange,
+}: {
   zips: FlowData['zips'];
   selectedZip: string | null;
   onSelectZip: (z: string | null) => void;
   workforceCounty: WorkforceCountyFilter;
   onWorkforceCountyChange: (c: WorkforceCountyFilter) => void;
 }) {
+  const anchorChips = ANCHOR_ZIPS
+    .map((z) => zips.find((x) => x.zip === z))
+    .filter((z): z is FlowData['zips'][number] => !!z)
+    .filter((z) => isAnchorInCounty(z.zip, workforceCounty));
+
   return (
     <div
-      className="rounded-md p-3 grid grid-cols-1 md:grid-cols-2 gap-3"
-      style={{
-        background: 'rgba(255,255,255,0.03)',
-        border: '1px solid var(--panel-border)',
-      }}
+      className="px-3 py-3 md:mt-auto flex flex-col gap-3"
+      style={{ borderTop: '1px solid var(--panel-border)' }}
     >
-      <div className="flex flex-col gap-3">
-        <div
-          className="text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: 'var(--text-h)' }}
-        >
-          Filters
-        </div>
-        <ModeToggle
-          mode={mode}
-          onChange={onModeChange}
-          disabled={modeDisabled}
-          aggregate={modeAggregate}
-        />
-        <DirectionToggle
-          value={directionFilter}
-          onChange={onDirectionChange}
-        />
+      <div
+        className="text-[10px] font-semibold uppercase tracking-wider"
+        style={{ color: 'var(--text-h)' }}
+      >
+        Filters
       </div>
+
       <div className="flex flex-col gap-2">
-        <ZipSelector
-          zips={zips}
-          selectedZip={selectedZip}
-          onSelectZip={onSelectZip}
-          hideSearch
-          selectedCounty={workforceCounty}
-          onSelectCounty={onWorkforceCountyChange}
-        />
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className="text-[10px] font-medium uppercase tracking-wider"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            Workplace · ZIP
+          </span>
+          {selectedZip && (
+            <button
+              type="button"
+              onClick={() => onSelectZip(null)}
+              aria-label="Reset workplace selection"
+              className="text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded focus:outline-none focus-visible:ring-1"
+              style={{ color: 'var(--accent)' }}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Workplace ZIPs">
+          {anchorChips.map((z) => {
+            const active = selectedZip === z.zip;
+            return (
+              <button
+                key={z.zip}
+                type="button"
+                aria-pressed={active}
+                aria-label={`${z.place}, ZIP ${z.zip}${active ? ' (selected)' : ''}`}
+                onClick={() => onSelectZip(active ? null : z.zip)}
+                className="text-[10px] px-1.5 py-1 rounded-md border transition-colors focus:outline-none focus-visible:ring-1"
+                style={{
+                  background: active ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
+                  color: active ? '#1a1207' : 'var(--text-h)',
+                  borderColor: active ? 'var(--accent)' : 'var(--panel-border)',
+                }}
+                title={`${z.place} (${z.zip})`}
+              >
+                {z.place}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <span
+          className="text-[10px] font-medium uppercase tracking-wider"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          County
+        </span>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="County filter">
+          {SIDEBAR_COUNTY_OPTIONS.map((opt) => {
+            const active = workforceCounty === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onWorkforceCountyChange(opt.key)}
+                className="text-[10px] px-2 py-1 rounded-md border transition-colors focus:outline-none focus-visible:ring-1"
+                style={{
+                  background: active ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
+                  color: active ? '#1a1207' : 'var(--text-h)',
+                  borderColor: active ? 'var(--accent)' : 'var(--panel-border)',
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

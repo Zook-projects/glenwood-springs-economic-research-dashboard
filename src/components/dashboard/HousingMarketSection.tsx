@@ -27,6 +27,8 @@ import type {
   TrendPoint,
 } from '../../types/context';
 import { fmtInt } from '../../lib/format';
+import { MapLinkButton } from '../MapLinkButton';
+import type { WorkforceCountyFilter } from '../../types/flow';
 
 // ---------------------------------------------------------------------------
 // Geography model
@@ -181,11 +183,13 @@ export function ChartFrame({
   subtitle,
   children,
   className,
+  rightSlot,
 }: {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   className?: string;
+  rightSlot?: React.ReactNode;
 }) {
   return (
     <div
@@ -195,18 +199,21 @@ export function ChartFrame({
         border: '1px solid var(--panel-border)',
       }}
     >
-      <div>
-        <div
-          className="text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: 'var(--text-h)' }}
-        >
-          {title}
-        </div>
-        {subtitle && (
-          <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
-            {subtitle}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: 'var(--text-h)' }}
+          >
+            {title}
           </div>
-        )}
+          {subtitle && (
+            <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        {rightSlot && <div className="shrink-0">{rightSlot}</div>}
       </div>
       <div className="flex-1 flex flex-col">{children}</div>
     </div>
@@ -1423,6 +1430,9 @@ function HousingVintageCard({
   geo: Geography | null;
   vintageEnd: number | null;
 }) {
+  // Default collapsed per user spec — the bar chart and About-this-data
+  // block are heavy; the KPI strip is enough at a glance.
+  const [expanded, setExpanded] = useState(false);
   const latest = geo?.latest ?? null;
   const cohorts = useMemo(() => {
     return YEAR_BUILT_COHORTS.map((c, idx) => ({
@@ -1542,6 +1552,38 @@ function HousingVintageCard({
             {geo?.label ?? '—'} · ACS 5-Year{vintageEnd ? ` ${vintageEnd}` : ''} · table B25034
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-pressed={expanded}
+          aria-label={expanded ? 'Collapse Housing Stock card' : 'Expand Housing Stock card'}
+          title={expanded ? 'Collapse — hide the bar chart and methodology' : 'Expand — show the bar chart and methodology'}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-1 shrink-0"
+          style={{
+            color: 'var(--text-h)',
+            border: '1px solid var(--panel-border)',
+            background: 'transparent',
+          }}
+        >
+          <svg
+            width="9"
+            height="9"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            style={{
+              transform: expanded ? 'rotate(180deg)' : 'none',
+              transition: 'transform 120ms ease',
+            }}
+          >
+            <path d="M2.5 4.5L6 8l3.5-3.5" />
+          </svg>
+          {expanded ? 'Collapse' : 'Expand'}
+        </button>
       </div>
 
       {/* KPI strip */}
@@ -1587,8 +1629,9 @@ function HousingVintageCard({
         </div>
       )}
 
-      {/* Vertical bar chart by decade */}
-      {totalUnits > 0 && (
+      {/* Vertical bar chart by decade. Hidden when the card is collapsed
+          (the KPI strip above still surfaces the headline numbers). */}
+      {expanded && totalUnits > 0 && (
         <div className="relative w-full">
           <svg
             viewBox={`0 0 ${W} ${H}`}
@@ -1721,7 +1764,7 @@ function HousingVintageCard({
       )}
 
       {/* Peak-decade callout under the chart */}
-      {kpis?.peak && kpis.peak.value > 0 && (
+      {expanded && kpis?.peak && kpis.peak.value > 0 && (
         <div
           className="text-[10px] italic"
           style={{ color: 'var(--text-dim)' }}
@@ -1746,7 +1789,9 @@ function HousingVintageCard({
           existing About-this-data tiles in the section: prose summary at
           top, structured key/value grid below. Lives at the bottom of the
           card so casual readers see the chart first, but analysts get the
-          source context they need to interpret the numbers. */}
+          source context they need to interpret the numbers. Hidden when
+          the card is collapsed. */}
+      {expanded && (
       <div
         className="rounded-md p-3 flex flex-col gap-2 mt-1"
         style={{
@@ -1827,6 +1872,7 @@ function HousingVintageCard({
           </li>
         </ul>
       </div>
+      )}
     </div>
   );
 }
@@ -2516,15 +2562,65 @@ function AffordabilityRatioChart({
 // ---------------------------------------------------------------------------
 // Top-level section
 // ---------------------------------------------------------------------------
+// Anchor ZIP → county-FIPS index for the Zillow time-series narrowing.
+// 'all' = no narrowing. Keeps the comparison bar chart untouched so the
+// user can still see every place across the dashboard's filter state.
+const ZHVI_COUNTY_FIPS_BY_FILTER: Record<Exclude<WorkforceCountyFilter, 'all'>, string> = {
+  garfield: '08045',
+  pitkin: '08097',
+};
+
+// Anchor ZIP membership per county filter — used to scope places shown in
+// the Zillow time series. Mirrors the chip-row narrowing on the sidebar.
+const ZHVI_PLACE_ZIPS_BY_FILTER: Record<Exclude<WorkforceCountyFilter, 'all'>, ReadonlyArray<string>> = {
+  garfield: ['81601', '81623', '81635', '81647', '81650', '81652'],
+  pitkin: ['81611', '81615', '81654'],
+};
+
 export function HousingMarketSection({
   bundle,
   selectedZip,
+  workforceCounty = 'all',
 }: {
   bundle: ContextBundle | null;
   selectedZip: string | null;
+  workforceCounty?: WorkforceCountyFilter;
 }) {
   const housing = bundle?.housing ?? null;
   const geographies = useMemo(() => deriveGeographies(housing), [housing]);
+
+  // Zillow Time Series scope — narrowed by sidebar filters. Workplace
+  // selection is the most specific and wins: when a workplace ZIP is
+  // selected the chart renders only that single place's line. Otherwise
+  // the county filter narrows to that county's places (with state +
+  // national benchmarks). With no filters set, every geography is shown.
+  // The Typical Home City Comparison bar chart and headline stats
+  // continue to read from the full geographies list per user spec
+  // ("individual workplace sections should not filter the bar chart").
+  const zillowTimeSeriesGeographies = useMemo(() => {
+    if (selectedZip) {
+      const onlyPlace = geographies.filter(
+        (g) => g.kind === 'place' && g.id === `place:${selectedZip}`,
+      );
+      if (onlyPlace.length > 0) return onlyPlace;
+      // Selected ZIP isn't represented in the Zillow envelope — fall
+      // back to the county filter / full list rather than rendering
+      // an empty chart.
+    }
+    if (workforceCounty === 'all') return geographies;
+    const placeZips = ZHVI_PLACE_ZIPS_BY_FILTER[workforceCounty];
+    const countyFips = ZHVI_COUNTY_FIPS_BY_FILTER[workforceCounty];
+    return geographies.filter((g) => {
+      if (g.kind === 'national') return true;
+      if (g.kind === 'state') return true;
+      if (g.kind === 'county') return g.id === `county:${countyFips}`;
+      if (g.kind === 'place') {
+        const zip = g.id.slice('place:'.length);
+        return placeZips.includes(zip);
+      }
+      return false;
+    });
+  }, [geographies, workforceCounty, selectedZip]);
 
   // Default the active geography to the user's current ZIP selection if it
   // resolves to a place; otherwise default to Glenwood Springs; otherwise
@@ -2565,12 +2661,33 @@ export function HousingMarketSection({
     setSelectedTypeKey((prev) => (prev === key ? null : key));
   };
 
+  // Geographies narrowed by the sidebar county filter only (no workplace
+  // narrowing). Drives the Housing Units Trend, Cost Burden, and
+  // Affordability Ratio cards so they scope to the selected county's
+  // places + the county itself + state/national benchmarks. Reuses the
+  // same place/county tables as the Zillow Time Series narrowing.
+  const countyScopedGeographies = useMemo(() => {
+    if (workforceCounty === 'all') return geographies;
+    const placeZips = ZHVI_PLACE_ZIPS_BY_FILTER[workforceCounty];
+    const countyFips = ZHVI_COUNTY_FIPS_BY_FILTER[workforceCounty];
+    return geographies.filter((g) => {
+      if (g.kind === 'national') return true;
+      if (g.kind === 'state') return true;
+      if (g.kind === 'county') return g.id === `county:${countyFips}`;
+      if (g.kind === 'place') {
+        const zip = g.id.slice('place:'.length);
+        return placeZips.includes(zip);
+      }
+      return false;
+    });
+  }, [geographies, workforceCounty]);
+
   // Housing Units Trend toggles (mirror Population Trend in DemographicsSection).
-  const [huPeriod, setHuPeriod] = useState<'current' | 'historical'>('current');
+  const [huPeriod, setHuPeriod] = useState<'current' | 'historical'>('historical');
   const [huGeoKind, setHuGeoKind] = useState<'place' | 'county' | 'state'>('place');
   const huGeographies = useMemo(
-    () => geographies.filter((g) => g.kind === huGeoKind),
-    [geographies, huGeoKind],
+    () => countyScopedGeographies.filter((g) => g.kind === huGeoKind),
+    [countyScopedGeographies, huGeoKind],
   );
 
   // Median household income lookup for the Affordability Ratio chart —
@@ -2636,12 +2753,6 @@ export function HousingMarketSection({
         <HousingCharacteristicsTile geo={activeGeo} />
       </div>
 
-      {/* Housing stock by year built — derived KPI strip + decade bars
-          (ACS B25034). */}
-      <div className="grid gap-3 grid-cols-1">
-        <HousingVintageCard geo={activeGeo} vintageEnd={vintageEnd} />
-      </div>
-
       {/* Housing Units Trend (current annual / historical decennial toggle).
           Mirrors the Population Trend chart in DemographicsSection so users
           have a consistent toggle pattern across both sections. */}
@@ -2653,28 +2764,30 @@ export function HousingMarketSection({
               ? `Decennial 1970 → 2020 + ${vintageEnd ?? '2024'} anchor · NHGIS + CO SDO · click a line or legend item to highlight`
               : `Annual ${vintageStart ?? 2010} → ${vintageEnd ?? 'latest'} · CO SDO (places) + ACS B25001 (county/state)`
           }
+          rightSlot={
+            <div className="flex items-center gap-2 flex-wrap">
+              <SegmentedControl<'place' | 'county' | 'state'>
+                ariaLabel="Geography level"
+                value={huGeoKind}
+                onChange={setHuGeoKind}
+                options={[
+                  { value: 'place',  label: 'Place'  },
+                  { value: 'county', label: 'County' },
+                  { value: 'state',  label: 'State'  },
+                ]}
+              />
+              <SegmentedControl<'current' | 'historical'>
+                ariaLabel="Time period"
+                value={huPeriod}
+                onChange={setHuPeriod}
+                options={[
+                  { value: 'current',    label: 'Current'    },
+                  { value: 'historical', label: 'Historical' },
+                ]}
+              />
+            </div>
+          }
         >
-          <div className="flex items-center gap-2 flex-wrap">
-            <SegmentedControl<'place' | 'county' | 'state'>
-              ariaLabel="Geography level"
-              value={huGeoKind}
-              onChange={setHuGeoKind}
-              options={[
-                { value: 'place',  label: 'Place'  },
-                { value: 'county', label: 'County' },
-                { value: 'state',  label: 'State'  },
-              ]}
-            />
-            <SegmentedControl<'current' | 'historical'>
-              ariaLabel="Time period"
-              value={huPeriod}
-              onChange={setHuPeriod}
-              options={[
-                { value: 'current',    label: 'Current'    },
-                { value: 'historical', label: 'Historical' },
-              ]}
-            />
-          </div>
           <HousingTrendChart
             geographies={huGeographies}
             metricKey="housingUnits"
@@ -2695,7 +2808,7 @@ export function HousingMarketSection({
           subtitle={`Households paying 30%+ of HHI on housing · ACS 5-Year ${vintageEnd ?? 'latest'} (B25070 + B25091)`}
         >
           <CostBurdenChart
-            geographies={geographies}
+            geographies={countyScopedGeographies}
             highlightId={effectiveActiveId}
             onActivate={handleSelectCity}
           />
@@ -2705,12 +2818,19 @@ export function HousingMarketSection({
           subtitle={`Median home value ÷ median HH income · ACS 5-Year ${vintageEnd ?? 'latest'} · vertical line at 5×`}
         >
           <AffordabilityRatioChart
-            geographies={geographies}
+            geographies={countyScopedGeographies}
             highlightId={effectiveActiveId}
             onActivate={handleSelectCity}
             incomeByGeoId={incomeByGeoId}
           />
         </ChartFrame>
+      </div>
+
+      {/* Housing stock by year built — derived KPI strip + decade bars
+          (ACS B25034). Moved below the affordability pair so the trend +
+          cost-burden indicators (the higher-impact KPIs) lead. */}
+      <div className="grid gap-3 grid-cols-1">
+        <HousingVintageCard geo={activeGeo} vintageEnd={vintageEnd} />
       </div>
 
       {/* === Zillow Home Value Index subsection ===
@@ -2731,6 +2851,7 @@ export function HousingMarketSection({
           className="flex-1"
           style={{ height: 1, background: 'var(--panel-border)' }}
         />
+        <MapLinkButton subjectId="housing" metricParam="zhvi" />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1">
@@ -2741,10 +2862,10 @@ export function HousingMarketSection({
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] grid-cols-1 items-stretch">
         <ChartFrame
           title="Typical Home Value by City"
-          subtitle={`Zillow ZHVI · ${typeLabel} · annual, 2000 → latest · hover for values${activeId ? ` · filtered to ${activeGeo?.label ?? ''}` : ''}`}
+          subtitle={`Zillow ZHVI · ${typeLabel} · annual, 2000 → latest · hover for values${selectedZip && zillowTimeSeriesGeographies.length === 1 ? ` · scoped to ${zillowTimeSeriesGeographies[0].label}` : activeId ? ` · filtered to ${activeGeo?.label ?? ''}` : workforceCounty !== 'all' ? ` · scoped to ${workforceCounty === 'garfield' ? 'Garfield' : 'Pitkin'} County` : ''}`}
         >
           <TimeSeriesChart
-            geographies={geographies}
+            geographies={zillowTimeSeriesGeographies}
             activeId={activeId}
             highlightId={effectiveActiveId}
             onActivate={handleSelectCity}

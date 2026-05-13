@@ -1,7 +1,7 @@
 // HousingMapView — top-level composition for the Housing map.
 
 import { useMemo, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { MapShell } from '../../components/MapShell';
 import { SubjectMapCanvas } from '../../components/SubjectMapCanvas';
 import { HousingMapTile } from '../../components/maps/HousingMapTile';
@@ -12,11 +12,24 @@ import { useCountyGeometry } from '../../lib/useCountyGeometry';
 import { computeWorkforceTotals } from '../../lib/workforceTotals';
 import type { AppOutletContext } from '../../App';
 
+// Deep-link entry: callers (e.g. the dashboard's Zillow View Map button) can
+// pass `?metric=zhvi` to preselect a metric on first load. Unknown values
+// fall back to the default ('zhvi').
+function readInitialMetric(param: string | null): HousingMetricId {
+  if (!param) return 'zhvi';
+  return HOUSING_METRICS.some((m) => m.id === param)
+    ? (param as HousingMetricId)
+    : 'zhvi';
+}
+
 export function HousingMapView() {
   const { data, mapState } = useOutletContext<AppOutletContext>();
   const { data: counties } = useCountyGeometry();
+  const [searchParams] = useSearchParams();
 
-  const [metricId, setMetricId] = useState<HousingMetricId>('zhvi');
+  const [metricId, setMetricId] = useState<HousingMetricId>(() =>
+    readInitialMetric(searchParams.get('metric')),
+  );
 
   const bundle = data.contextBundle?.housing;
   const metric = HOUSING_METRICS.find((m) => m.id === metricId)!;
