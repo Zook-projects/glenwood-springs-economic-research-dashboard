@@ -9,14 +9,33 @@ export interface TrendPoint {
 
 // Dimensions emitted as 22-point sparklines on RAC/WAC entries + aggregate.
 // Race, ethnicity, education, sex carry latest-year only (no trend).
+// NAICS-20 sectors carry full 22-year series alongside the 3-bucket rollup —
+// the keys match the Python NAICS_20_COLS values verbatim so the wire format
+// aligns. Used by the Work Area Profile dashboard subsection's Trend mode.
+export type Naics20Key =
+  | 'naics11_agriculture' | 'naics21_mining' | 'naics22_utilities'
+  | 'naics23_construction' | 'naics3133_manufacturing' | 'naics42_wholesale'
+  | 'naics4445_retail' | 'naics4849_transportation' | 'naics51_information'
+  | 'naics52_finance' | 'naics53_realEstate' | 'naics54_professional'
+  | 'naics55_management' | 'naics56_admin' | 'naics61_education'
+  | 'naics62_healthcare' | 'naics71_arts' | 'naics72_accommodation'
+  | 'naics81_otherServices' | 'naics92_publicAdmin';
+
 export type RacWacTrendDim =
   | 'totalJobs'
   | 'ageU29' | 'age30to54' | 'age55plus'
   | 'wageLow' | 'wageMid' | 'wageHigh'
-  | 'naicsGoods' | 'naicsTradeTransUtil' | 'naicsAllOther';
+  | 'naicsGoods' | 'naicsTradeTransUtil' | 'naicsAllOther'
+  | Naics20Key;
 
 // Dimensions emitted as 22-point sparklines on OD inflow/outflow + aggregate.
-export type OdTrendDim = RacWacTrendDim;
+// OD pairs carry only the 3-bucket NAICS rollup — the 20-sector breakdown is
+// WAC-only because LEHD doesn't publish per-sector OD pairs.
+export type OdTrendDim =
+  | 'totalJobs'
+  | 'ageU29' | 'age30to54' | 'age55plus'
+  | 'wageLow' | 'wageMid' | 'wageHigh'
+  | 'naicsGoods' | 'naicsTradeTransUtil' | 'naicsAllOther';
 
 export type RacWacTrend = Record<RacWacTrendDim, TrendPoint[]>;
 export type OdTrend = Record<OdTrendDim, TrendPoint[]>;
@@ -41,6 +60,11 @@ export interface Naics3Block {
   tradeTransUtil: number;
   allOther: number;
 }
+
+// Latest-year breakdown across all 20 NAICS sectors. Drives the Work Area
+// Profile dashboard chart and the Workforce map's Industry metric mode.
+// Keys must stay in lock-step with Naics20Key + scripts/lodes.py NAICS_20_COLS.
+export type Naics20Block = Record<Naics20Key, number>;
 
 export interface RaceBlock {
   white: number;
@@ -68,12 +92,14 @@ export interface SexBlock {
   female: number;
 }
 
-// Latest-year RAC/WAC breakdown — 9 dimensions, mirrors the bottom-card panels.
+// Latest-year RAC/WAC breakdown — 10 dimensions, mirrors the bottom-card panels
+// plus the Work Area Profile dashboard subsection's per-sector NAICS-20 view.
 export interface RacWacLatest {
   totalJobs: number;
   age: AgeBlock;
   wage: WageBlock;
   naics3: Naics3Block;
+  naics20: Naics20Block;
   race: RaceBlock;
   ethnicity: EthnicityBlock;
   education: EducationBlock;

@@ -52,6 +52,7 @@ import {
 import { FlowDataTables } from '../components/dashboard/FlowDataTables';
 import { HousingMarketSection } from '../components/dashboard/HousingMarketSection';
 import { DemographicsSection } from '../components/dashboard/DemographicsSection';
+import { WorkAreaProfileSection } from '../components/dashboard/WorkAreaProfileSection';
 import { CommerceTimeSeriesChart } from '../components/dashboard/CommerceTimeSeriesChart';
 import { CommerceDataSetTile } from '../components/dashboard/CommerceDataSetTile';
 import { EconomicResearchSection } from '../components/dashboard/EconomicResearchSection';
@@ -582,6 +583,18 @@ export function DashboardView() {
                 />
               </div>
             </div>
+
+            {/* Work Area Profile — workplace-area employment composition for
+                the active scope. Inserted between the BottomCardStrip's
+                glanceable 3-bucket NAICS cards and the FlowDataTables so the
+                user reads "what does this workplace area look like" before
+                "where do its workers come from / go to". */}
+            <WorkAreaProfileSection
+              wacFile={wacFile}
+              selectedZip={selectedZip}
+              selectionKind={selectionKind}
+              workforceCounty={workforceCounty}
+            />
 
             {/* Flow data tables. */}
             <FlowDataTables

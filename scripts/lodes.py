@@ -147,12 +147,12 @@ def load_od_all_years() -> pd.DataFrame:
 def aggregate_rac_or_wac(df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate block-level RAC/WAC rows up to (zcta, year) totals across every
-    LODES variable plus the rolled-up NAICS-3 columns.
+    LODES variable plus the rolled-up NAICS-3 columns and the full NAICS-20
+    sector breakdown.
 
     Output columns: zcta, year + every value column in RAC_WAC_COLS
-    + naicsGoods + naicsTradeTransUtil + naicsAllOther. NAICS-20 columns are
-    summed only as inputs to the NAICS-3 rollup and are dropped from the
-    returned frame — no downstream consumer reads them.
+    + naicsGoods + naicsTradeTransUtil + naicsAllOther + every NAICS_20_COLS
+    human key (naics11_agriculture … naics92_publicAdmin).
     """
     naics20_cols = list(NAICS_20_COLS.keys())
     value_cols = list(RAC_WAC_COLS.keys()) + naics20_cols
@@ -166,16 +166,16 @@ def aggregate_rac_or_wac(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
-    # Roll up NAICS-3
+    # Roll up NAICS-3 from the raw CNS columns BEFORE the rename so the index
+    # lookups (NAICS_GOODS etc.) still use the raw codes.
     grouped["naicsGoods"] = grouped[NAICS_GOODS].sum(axis=1)
     grouped["naicsTradeTransUtil"] = grouped[NAICS_TTU].sum(axis=1)
     grouped["naicsAllOther"] = grouped[NAICS_OTHER].sum(axis=1)
 
-    # Rename LODES codes → human keys, then drop the now-unused NAICS-20
-    # columns. The NAICS_20_COLS dict stays as documentation but the data
-    # path keeps only the 3-bucket rollup that downstream code actually uses.
-    grouped = grouped.rename(columns=RAC_WAC_COLS)
-    grouped = grouped.drop(columns=naics20_cols)
+    # Rename LODES codes → human keys. Both RAC_WAC_COLS (totals/age/wage/
+    # race/ethnicity/education/sex) and NAICS_20_COLS (individual sectors)
+    # are renamed in a single pass so downstream code reads only human keys.
+    grouped = grouped.rename(columns={**RAC_WAC_COLS, **NAICS_20_COLS})
 
     return grouped
 
@@ -269,6 +269,9 @@ def _latest_block(row: pd.Series) -> dict:
             "tradeTransUtil": int(row["naicsTradeTransUtil"]),
             "allOther": int(row["naicsAllOther"]),
         },
+        "naics20": {
+            key: int(row[key]) for key in NAICS_20_COLS.values()
+        },
         "race": {
             "white": int(row["raceWhite"]),
             "black": int(row["raceBlack"]),
@@ -302,6 +305,9 @@ TREND_DIMS = [
     "ageU29", "age30to54", "age55plus",
     "wageLow", "wageMid", "wageHigh",
     "naicsGoods", "naicsTradeTransUtil", "naicsAllOther",
+    # NAICS-20 sectors — full 22-year series per sector. Powers the Work Area
+    # Profile dashboard subsection's "Trend" toggle and per-sector sparklines.
+    *NAICS_20_COLS.values(),
 ]
 
 
@@ -330,10 +336,16 @@ def build_rac_or_wac_entries(
         }
         entries.append(entry)
 
-    # Aggregate roll-up — sum of every per-zip × per-year row.
+    # Aggregate roll-up — sum of every per-zip × per-year row across the full
+    # value-column set: core/age/wage/race/ethnicity/education/sex (RAC_WAC_COLS)
+    # + NAICS-3 super-sectors + the full NAICS-20 sector breakdown.
     agg_year = (
         grouped.groupby("year", as_index=False)
-        [list(RAC_WAC_COLS.values()) + ["naicsGoods", "naicsTradeTransUtil", "naicsAllOther"]]
+        [
+            list(RAC_WAC_COLS.values())
+            + ["naicsGoods", "naicsTradeTransUtil", "naicsAllOther"]
+            + list(NAICS_20_COLS.values())
+        ]
         .sum()
         .sort_values("year")
         .reset_index(drop=True)

@@ -395,11 +395,17 @@ export function StatsForZip({
                         cursor: 'pointer',
                       }}
                     >
-                      <div className="flex justify-between mb-0.5">
-                        <span style={{ color: isSelected ? 'var(--accent)' : 'var(--text-h)' }}>
+                      <div className="flex justify-between gap-2 mb-0.5 min-w-0">
+                        <span
+                          className="truncate min-w-0"
+                          style={{ color: isSelected ? 'var(--accent)' : 'var(--text-h)' }}
+                        >
                           {r.place} <span className="tnum" style={{ color: 'var(--text-dim)' }}>· {r.zips.length > 1 ? 'multiple' : r.zips[0]}</span>
                         </span>
-                        <span className="tnum" style={{ color: 'var(--text-dim)' }}>
+                        <span
+                          className="tnum whitespace-nowrap shrink-0"
+                          style={{ color: 'var(--text-dim)' }}
+                        >
                           {fmtInt(r.workerCount)} · {fmtPct(share)}
                         </span>
                       </div>
@@ -446,12 +452,18 @@ export function StatsForZip({
                         cursor: 'pointer',
                       }}
                     >
-                      <div className="flex justify-between mb-0.5">
-                        <span style={{ color: isSelected ? 'var(--accent)' : 'var(--text-h)' }}>
+                      <div className="flex justify-between gap-2 mb-0.5 min-w-0">
+                        <span
+                          className="truncate min-w-0"
+                          style={{ color: isSelected ? 'var(--accent)' : 'var(--text-h)' }}
+                        >
                           Within-ZIP commute{' '}
                           <span className="tnum" style={{ color: 'var(--text-dim)' }}>· {meta.zip}</span>
                         </span>
-                        <span className="tnum" style={{ color: 'var(--text-dim)' }}>
+                        <span
+                          className="tnum whitespace-nowrap shrink-0"
+                          style={{ color: 'var(--text-dim)' }}
+                        >
                           {fmtInt(selfFlow)} · {fmtPct(selfFlow / Math.max(1, anchorTotal))}
                         </span>
                       </div>
@@ -471,8 +483,8 @@ export function StatsForZip({
               })()}
               {remainderCount > 0 && (
                 <li className="text-xs">
-                  <div className="flex justify-between mb-0.5">
-                    <span style={{ color: 'var(--text-h)' }}>
+                  <div className="flex justify-between gap-2 mb-0.5 min-w-0">
+                    <span className="truncate min-w-0" style={{ color: 'var(--text-h)' }}>
                       {mode === 'inbound' ? 'All Other Locations' : 'Other destinations'}
                       {filterActive && allOther > 0 && (
                         <span className="ml-1 italic" style={{ color: 'var(--text-dim)' }}>
@@ -480,7 +492,10 @@ export function StatsForZip({
                         </span>
                       )}
                     </span>
-                    <span className="tnum" style={{ color: 'var(--text-dim)' }}>
+                    <span
+                      className="tnum whitespace-nowrap shrink-0"
+                      style={{ color: 'var(--text-dim)' }}
+                    >
                       {fmtInt(remainderCount)} · {fmtPct(remainderCount / Math.max(1, anchorTotal))}
                     </span>
                   </div>
@@ -625,11 +640,17 @@ function TopNList({
     const isButton = handleClick != null;
     const inner = (
       <>
-        <div className="flex justify-between mb-0.5">
-          <span style={{ color: selected ? 'var(--accent)' : 'var(--text-h)' }}>
+        <div className="flex justify-between gap-2 mb-0.5 min-w-0">
+          <span
+            className="truncate min-w-0"
+            style={{ color: selected ? 'var(--accent)' : 'var(--text-h)' }}
+          >
             {label}
           </span>
-          <span className="tnum" style={{ color: 'var(--text-dim)' }}>
+          <span
+            className="tnum whitespace-nowrap shrink-0"
+            style={{ color: 'var(--text-dim)' }}
+          >
             {fmtInt(workerCount)} · {fmtPct(share)}
           </span>
         </div>
@@ -740,8 +761,8 @@ function TopNList({
           })()}
         {remainder > 0 && (
           <li className="text-xs px-1.5 py-1">
-            <div className="flex justify-between mb-0.5">
-              <span style={{ color: 'var(--text-h)' }}>
+            <div className="flex justify-between gap-2 mb-0.5 min-w-0">
+              <span className="truncate min-w-0" style={{ color: 'var(--text-h)' }}>
                 {residualLabel}
                 {filterActive && allOther > 0 && (
                   <span className="ml-1 italic" style={{ color: 'var(--text-dim)' }}>
@@ -749,7 +770,10 @@ function TopNList({
                   </span>
                 )}
               </span>
-              <span className="tnum" style={{ color: 'var(--text-dim)' }}>
+              <span
+                className="tnum whitespace-nowrap shrink-0"
+                style={{ color: 'var(--text-dim)' }}
+              >
                 {fmtInt(remainder)} · {fmtPct(remainder / denom)}
               </span>
             </div>

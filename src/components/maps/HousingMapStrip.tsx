@@ -348,7 +348,7 @@ function TrendCard({
           <MiniTrendChart
             series={series}
             height="fill"
-            yMin="auto"
+            yMin="zero"
             valueFormat={valueFormat}
           />
         ) : (
@@ -356,7 +356,7 @@ function TrendCard({
             data={singlePoints ?? []}
             color={color}
             height="fill"
-            yMin="auto"
+            yMin="zero"
             valueFormat={valueFormat}
           />
         )}

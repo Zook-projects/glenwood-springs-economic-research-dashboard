@@ -12,8 +12,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapCanvas } from '../components/MapCanvas';
 import { DashboardTile } from '../components/DashboardTile';
 import { BottomCardStrip } from '../components/BottomCardStrip';
+import { IndustryMapStrip } from '../components/maps/IndustryMapStrip';
 import { ActiveFiltersOverlay } from '../components/ActiveFiltersOverlay';
 import type { ViewLayer } from '../components/ViewLayerToggle';
+import type { Naics20Key } from '../types/lodes';
 import type {
   ActiveCorridorAggregation,
   CorridorFlowEntry,
@@ -24,7 +26,6 @@ import type {
   SegmentFilter,
   ZipMeta,
 } from '../types/flow';
-import { ContextLayerToggle, type CardLayer } from '../components/ContextLayerToggle';
 import { buildHeatmapGeoJson } from '../lib/heatmapPoints';
 import type { HeatmapSide } from '../components/HeatmapModeToggle';
 import {
@@ -264,7 +265,6 @@ export function CommuteView({ data }: CommuteViewProps) {
     odBlocks,
     contextBundle,
   } = data;
-  const [cardLayer, setCardLayer] = useState<CardLayer>('commute');
   const [mode, setMode] = useState<Mode>('inbound');
   const [selectedZip, setSelectedZip] = useState<string | null>(null);
   // Non-anchor place bundle. Set when the user selects a real ZIP that isn't
@@ -285,8 +285,16 @@ export function CommuteView({ data }: CommuteViewProps) {
   >(null);
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('all');
   // Spatial visualization layer — corridor (flow arcs) is the default; user
-  // can flip to heatmap (block-level density) via the DashboardTile toggle.
+  // can flip to heatmap (block-level density) or industry (anchor bubbles
+  // sized by NAICS-filtered job totals) via the DashboardTile Metric toggle.
   const [viewLayer, setViewLayer] = useState<ViewLayer>('corridor');
+  // Industry-mode sector filter — when viewLayer === 'industry', bubbles
+  // scale by total jobs (when 'all') or jobs in the named NAICS-20 sector.
+  // Reset to 'all' when the user leaves Industry mode so re-entering lands
+  // in the canonical no-filter state.
+  const [industrySector, setIndustrySector] = useState<Naics20Key | 'all'>(
+    'all',
+  );
   // Independent heatmap-side toggle — drives the Workplace / Residence tab
   // strip that slides out below the View Layer toggle whenever the heatmap
   // layer is active. Decoupled from canonical `mode` so all four
@@ -732,6 +740,13 @@ export function CommuteView({ data }: CommuteViewProps) {
     if (selectionKind === 'non-anchor') setViewLayer('corridor');
   }, [selectionKind]);
 
+  // Reset the industry-sector chip back to 'all' whenever the user leaves
+  // Industry mode. Re-entering Industry lands them on the unfiltered total
+  // bubble layer rather than a stale per-sector filter.
+  useEffect(() => {
+    if (viewLayer !== 'industry') setIndustrySector('all');
+  }, [viewLayer]);
+
   // Reference distribution for the corridor width buckets — built from the
   // active mode's unfiltered flow set (ignoring direction filter and
   // selection) so the legend stays stable across All / East / West and
@@ -1050,6 +1065,8 @@ export function CommuteView({ data }: CommuteViewProps) {
         onDirectionChange={handleDirectionChange}
         viewLayer={viewLayer}
         onViewLayerChange={setViewLayer}
+        industrySector={industrySector}
+        onIndustrySectorChange={setIndustrySector}
         bucketBreaks={bucketBreaks}
         topCorridorInbound={topCorridorInbound}
         topCorridorOutbound={topCorridorOutbound}
@@ -1115,6 +1132,8 @@ export function CommuteView({ data }: CommuteViewProps) {
           }}
           heatmapData={heatmapData}
           viewLayer={viewLayer}
+          industrySector={industrySector}
+          wacFile={wacFile}
           blockSelectionActive={blockSelectionActive}
           selectedBlocks={selectedBlocks}
           onSelectedBlocksChange={handleSelectedBlocksChange}
@@ -1122,19 +1141,6 @@ export function CommuteView({ data }: CommuteViewProps) {
           blocksHidden={blocksHidden}
           odBlocks={odBlocks}
         />
-
-        {/* Layer toggle — floats above the bottom card strip in the lower-left
-            corner. Same vertical anchor as the credit chip on the right. The
-            strip's height varies; both elements track it via bottomStripHeight. */}
-        <div
-          className="absolute left-4 z-30 pointer-events-auto"
-          style={{ bottom: bottomStripHeight + 8 }}
-        >
-          <ContextLayerToggle
-            layer={cardLayer}
-            onLayerChange={setCardLayer}
-          />
-        </div>
 
         {/* Credit chip — docked to the right edge just above the bottom
             card strip. Strip height varies by view type (aggregate / anchor
@@ -1443,38 +1449,57 @@ export function CommuteView({ data }: CommuteViewProps) {
           );
         })()}
 
-        {/* Bottom card strip — aggregate vs per-anchor LODES panels */}
-        <BottomCardStrip
-          containerRef={bottomStripRef}
-          racFile={racFile}
-          wacFile={wacFile}
-          odSummary={odSummary}
-          selectedZip={selectedZip}
-          selectionKind={selectionKind}
-          nonAnchorBundle={nonAnchorBundle}
-          visibleFlows={visibleFlows}
-          bundleFlows={bundleFlows}
-          selectedPartner={selectedPartner}
-          mode={mode}
-          flowsInbound={directionFilteredInbound}
-          flowsOutbound={directionFilteredOutbound}
-          zips={zips}
-          corridorIndex={corridorIndex}
-          flowIndex={flowIndex}
-          driveDistance={driveDistance}
-          segmentFilter={segmentFilter}
-          onSegmentFilterChange={handleSegmentFilterChange}
-          directionFilter={directionFilter}
-          passThrough={passThrough}
-          passThroughOrigin={passThroughOrigin}
-          passThroughDest={passThroughDest}
-          onPassThroughOriginChange={handlePassThroughOrigin}
-          onPassThroughDestChange={handlePassThroughDest}
-          cardLayer={cardLayer}
-          contextBundle={contextBundle}
-          blockScopeActive={blockScopeActive}
-          blockSelectionBundle={blockSelectionBundle}
-        />
+        {/* Bottom card strip — Industry metric swaps the default
+            commuter-flow cards for a 3-card overview/trend/rankings layout
+            that mirrors the Demographics / Commerce / Housing strips. */}
+        {viewLayer === 'industry' ? (
+          <div
+            ref={bottomStripRef}
+            className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
+            style={{ paddingBottom: 12 }}
+          >
+            <IndustryMapStrip
+              wacFile={wacFile}
+              zips={zips}
+              selectedZip={selectedZip}
+              industrySector={industrySector}
+              onIndustrySectorChange={setIndustrySector}
+              onSelectZip={handleSelectZip}
+            />
+          </div>
+        ) : (
+          <BottomCardStrip
+            containerRef={bottomStripRef}
+            racFile={racFile}
+            wacFile={wacFile}
+            odSummary={odSummary}
+            selectedZip={selectedZip}
+            selectionKind={selectionKind}
+            nonAnchorBundle={nonAnchorBundle}
+            visibleFlows={visibleFlows}
+            bundleFlows={bundleFlows}
+            selectedPartner={selectedPartner}
+            mode={mode}
+            flowsInbound={directionFilteredInbound}
+            flowsOutbound={directionFilteredOutbound}
+            zips={zips}
+            corridorIndex={corridorIndex}
+            flowIndex={flowIndex}
+            driveDistance={driveDistance}
+            segmentFilter={segmentFilter}
+            onSegmentFilterChange={handleSegmentFilterChange}
+            directionFilter={directionFilter}
+            passThrough={passThrough}
+            passThroughOrigin={passThroughOrigin}
+            passThroughDest={passThroughDest}
+            onPassThroughOriginChange={handlePassThroughOrigin}
+            onPassThroughDestChange={handlePassThroughDest}
+            cardLayer="commute"
+            contextBundle={contextBundle}
+            blockScopeActive={blockScopeActive}
+            blockSelectionBundle={blockSelectionBundle}
+          />
+        )}
       </main>
     </div>
   );

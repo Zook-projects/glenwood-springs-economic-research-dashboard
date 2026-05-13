@@ -1,10 +1,14 @@
-// Corridor / Heatmap segmented control. Picks which spatial visualization
-// the map area renders: the flow-arc corridor view (default) or the block-
-// level density heatmap. Sits above DirectionToggle in DashboardTile.
+// Corridor / Heatmap / Industry segmented control. Picks which spatial
+// visualization the map area renders: the flow-arc corridor view (default),
+// the block-level density heatmap, or the workplace-anchor Industry bubble
+// view. Sits below DirectionToggle in DashboardTile.
 //
-// Visually and structurally mirrors DirectionToggle.tsx.
+// Uses the shared MapToggleSegmented primitive so its styling matches the
+// metric toggles on the Demographics / Housing / Commerce maps.
 
-export type ViewLayer = 'corridor' | 'heatmap';
+import { MapToggleSegmented } from './maps/MapToggleSegmented';
+
+export type ViewLayer = 'corridor' | 'heatmap' | 'industry';
 
 interface Props {
   value: ViewLayer;
@@ -14,6 +18,7 @@ interface Props {
 const OPTIONS: ReadonlyArray<{ value: ViewLayer; label: string }> = [
   { value: 'corridor', label: 'Corridor' },
   { value: 'heatmap', label: 'Heatmap' },
+  { value: 'industry', label: 'Industry' },
 ];
 
 export function ViewLayerToggle({ value, onChange }: Props) {
@@ -23,36 +28,15 @@ export function ViewLayerToggle({ value, onChange }: Props) {
         className="text-[10px] font-medium uppercase tracking-wider"
         style={{ color: 'var(--text-dim)' }}
       >
-        View
+        Metric
       </span>
-      <div
-        role="tablist"
-        aria-label="Map visualization layer"
-        className="flex p-1 rounded-lg border"
-        style={{
-          background: 'rgba(255,255,255,0.03)',
-          borderColor: 'var(--panel-border)',
-        }}
-      >
-        {OPTIONS.map(({ value: opt, label }) => {
-          const active = value === opt;
-          return (
-            <button
-              key={opt}
-              role="tab"
-              aria-selected={active}
-              onClick={() => onChange(opt)}
-              className="flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors"
-              style={{
-                background: active ? 'var(--accent)' : 'transparent',
-                color: active ? '#1a1207' : 'var(--text)',
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <MapToggleSegmented
+        options={OPTIONS}
+        value={value}
+        onChange={onChange}
+        accent="var(--accent)"
+        ariaLabel="Map visualization metric"
+      />
     </div>
   );
 }

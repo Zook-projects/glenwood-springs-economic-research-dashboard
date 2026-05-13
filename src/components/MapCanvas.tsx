@@ -19,7 +19,8 @@ import type {
   Mode,
   ZipMeta,
 } from '../types/flow';
-import type { OdBlocksFile } from '../types/lodes';
+import type { Naics20Key, OdBlocksFile, WacFile } from '../types/lodes';
+import { NAICS20_BY_KEY, sumNaics20 } from '../lib/naics20';
 
 interface Props {
   flows: FlowRow[];
@@ -73,9 +74,17 @@ interface Props {
   } | null;
   // Active visualization layer — 'corridor' shows the SVG flow arcs and hides
   // the heatmap; 'heatmap' shows the heatmap and hides arcs / off-corridor
-  // strands. ZIP nodes + labels remain visible in both modes so selection
-  // still works in heatmap view.
-  viewLayer: 'corridor' | 'heatmap';
+  // strands; 'industry' hides both and paints each workplace anchor as a
+  // sized bubble scaled by total jobs (or jobs in the selected NAICS sector).
+  // ZIP nodes + labels remain visible in every mode so selection still works.
+  viewLayer: 'corridor' | 'heatmap' | 'industry';
+  // Industry-mode NAICS sector filter — 'all' sums every NAICS-20 sector
+  // (equivalent to totalJobs); otherwise scales bubbles by jobs in that one
+  // sector. Ignored unless viewLayer === 'industry'.
+  industrySector: Naics20Key | 'all';
+  // Per-ZIP WAC totals + per-sector breakdown. Drives the Industry bubble
+  // layer; ignored in corridor / heatmap mode.
+  wacFile: WacFile | null;
   // Block-selection mode — when on, an interactive circle layer overlays the
   // heatmap source so the user can click or drag-rectangle-select blocks. The
   // layer is visible regardless of viewLayer so selection works in corridor
@@ -133,6 +142,8 @@ export function MapCanvas({
   onClickEmpty,
   heatmapData,
   viewLayer,
+  industrySector,
+  wacFile,
   blockSelectionActive,
   selectedBlocks,
   onSelectedBlocksChange,
@@ -146,6 +157,10 @@ export function MapCanvas({
   // Box-select rectangle overlay (DOM, not SVG — sits above the map canvas
   // and is activated only while the user is dragging in selection mode).
   const boxRef = useRef<HTMLDivElement | null>(null);
+  // Industry-bubble hover tooltip overlay. A single floating DIV inside the
+  // canvas container; show/hide and content swaps are driven imperatively by
+  // mouseenter/leave handlers on each bubble in the SVG render loop.
+  const industryTipRef = useRef<HTMLDivElement | null>(null);
   // Latest selection callback — held in a ref so the init-once map handlers
   // (click, drag) always reach the current closure without re-binding.
   const onSelectedBlocksChangeRef = useRef(onSelectedBlocksChange);
@@ -897,6 +912,18 @@ export function MapCanvas({
       arcGroup.setAttribute('data-layer', 'arcs');
       svg.appendChild(arcGroup);
 
+      // Group: industry-mode bubbles (anchor workplaces sized by total or
+      // sector-filtered jobs). Painted between arcs and nodes so the small
+      // click-target node circles stay on top and selection still works.
+      // CSS rule above keeps this hidden unless viewLayer === 'industry'.
+      const industryGroup = document.createElementNS(NS, 'g');
+      industryGroup.setAttribute('data-layer', 'industry-bubbles');
+      industryGroup.setAttribute(
+        'style',
+        viewLayer === 'industry' ? '' : 'display: none;',
+      );
+      svg.appendChild(industryGroup);
+
       // Group: nodes (drawn above corridors)
       const nodeGroup = document.createElementNS(NS, 'g');
       nodeGroup.setAttribute('data-layer', 'nodes');
@@ -1415,6 +1442,104 @@ export function MapCanvas({
         arcGroup.appendChild(ring);
       }
 
+      // ---- Industry mode bubbles ----
+      // Each workplace anchor renders as a sized circle scaled to its total
+      // jobs (or jobs in the selected NAICS sector). Sqrt-scaled radius for
+      // area-perceptual sizing; the largest bubble caps at ~60 px so it
+      // doesn't swallow neighboring anchors at the default valley zoom.
+      // Sits below the small ZIP click-nodes so anchor selection still works.
+      if (viewLayer === 'industry' && wacFile != null) {
+        const sectorMeta =
+          industrySector === 'all' ? null : NAICS20_BY_KEY[industrySector];
+        const fillColor = sectorMeta ? sectorMeta.color : 'var(--accent)';
+        // Build {zip → value} for every anchor, computing the max for
+        // shared radius scaling so anchors stay visually comparable.
+        const anchorValues = new Map<string, number>();
+        let maxValue = 0;
+        for (const z of zips) {
+          if (!z.isAnchor) continue;
+          const entry = wacFile.entries.find((e) => e.zip === z.zip);
+          if (!entry) continue;
+          const value =
+            industrySector === 'all'
+              ? sumNaics20(entry.latest.naics20)
+              : entry.latest.naics20[industrySector] ?? 0;
+          anchorValues.set(z.zip, value);
+          if (value > maxValue) maxValue = value;
+        }
+        const MAX_RADIUS = 60;
+        const totalAcrossAnchors = Array.from(anchorValues.values()).reduce(
+          (a, b) => a + b,
+          0,
+        );
+        const sectorLabel = sectorMeta ? sectorMeta.label : 'All Sectors';
+        for (const [zip, value] of anchorValues) {
+          if (value <= 0) continue;
+          const p = projected.get(zip);
+          if (!p) continue;
+          const r =
+            maxValue > 0
+              ? Math.max(4, MAX_RADIUS * Math.sqrt(value / maxValue))
+              : 4;
+          const bubble = document.createElementNS(NS, 'circle');
+          bubble.setAttribute('cx', String(p.x));
+          bubble.setAttribute('cy', String(p.y));
+          bubble.setAttribute('r', String(r));
+          bubble.setAttribute('fill', fillColor);
+          bubble.setAttribute('fill-opacity', '0.28');
+          bubble.setAttribute('stroke', fillColor);
+          bubble.setAttribute('stroke-width', '1.5');
+          bubble.setAttribute('stroke-opacity', '0.95');
+          bubble.style.pointerEvents = 'auto';
+          bubble.style.cursor = 'pointer';
+          const meta = zips.find((z) => z.zip === zip);
+          const placeLabel = meta?.place || zip;
+          const share =
+            totalAcrossAnchors > 0
+              ? Math.round((value / totalAcrossAnchors) * 1000) / 10
+              : 0;
+          // Native <title> for accessibility + browser-default tooltip.
+          const title = document.createElementNS(NS, 'title');
+          title.textContent = `${placeLabel} · ${sectorLabel} — ${value.toLocaleString()} jobs (${share}% of anchors)`;
+          bubble.appendChild(title);
+          // Rich hover tooltip — overlay div populated and positioned by
+          // these handlers; positioned relative to the map container so it
+          // floats just above the bubble's cursor without escaping the map.
+          const showTip = (evt: MouseEvent) => {
+            const tip = industryTipRef.current;
+            const containerEl = map.getContainer();
+            if (!tip || !containerEl) return;
+            const rect = containerEl.getBoundingClientRect();
+            const x = evt.clientX - rect.left;
+            const y = evt.clientY - rect.top;
+            tip.innerHTML = `
+              <div style="font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:${fillColor};margin-bottom:2px;">${sectorLabel}</div>
+              <div style="font-size:12px;font-weight:600;color:var(--text-h);line-height:1.15;">${placeLabel}</div>
+              <div style="font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-h);margin-top:3px;">${value.toLocaleString()} jobs <span style="color:var(--text-dim);">· ${share}% of anchors</span></div>
+            `;
+            tip.style.display = 'block';
+            tip.style.left = `${x + 14}px`;
+            tip.style.top = `${y - 12}px`;
+          };
+          const moveTip = (evt: MouseEvent) => {
+            const tip = industryTipRef.current;
+            const containerEl = map.getContainer();
+            if (!tip || !containerEl) return;
+            const rect = containerEl.getBoundingClientRect();
+            tip.style.left = `${evt.clientX - rect.left + 14}px`;
+            tip.style.top = `${evt.clientY - rect.top - 12}px`;
+          };
+          const hideTip = () => {
+            const tip = industryTipRef.current;
+            if (tip) tip.style.display = 'none';
+          };
+          bubble.addEventListener('mouseenter', showTip);
+          bubble.addEventListener('mousemove', moveTip);
+          bubble.addEventListener('mouseleave', hideTip);
+          industryGroup.appendChild(bubble);
+        }
+      }
+
       // ---- ZIP centroid nodes ----
       type Rect = { x: number; y: number; w: number; h: number };
       const placedLabelRects: Rect[] = [];
@@ -1639,6 +1764,9 @@ export function MapCanvas({
     blockScopeActive,
     selectedBlocks,
     odBlocks,
+    viewLayer,
+    industrySector,
+    wacFile,
   ]);
 
   return (
@@ -1668,6 +1796,23 @@ export function MapCanvas({
           zIndex: 10,
         }}
       />
+      {/* Industry-mode hover tooltip — single floating panel populated and
+          positioned imperatively by per-bubble mouseenter/move/leave handlers
+          in the SVG render loop. Hidden when not over a bubble. */}
+      <div
+        ref={industryTipRef}
+        aria-hidden="true"
+        className="glass rounded-md"
+        style={{
+          position: 'absolute',
+          display: 'none',
+          padding: '8px 10px',
+          minWidth: 140,
+          pointerEvents: 'none',
+          zIndex: 25,
+          boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+        }}
+      />
       {/* Pointer-events on the interactive arc + node geometry; nodes and
           labels remain visible in heatmap mode so the user can still pick a
           ZIP, but arcs and the off-corridor strands are hidden so the
@@ -1677,6 +1822,8 @@ export function MapCanvas({
         svg [data-layer="nodes"] circle { pointer-events: auto; }
         svg[data-view-layer="heatmap"] [data-layer="arcs"],
         svg[data-view-layer="heatmap"] [data-layer="off-corridor"] { display: none; }
+        svg[data-view-layer="industry"] [data-layer="arcs"],
+        svg[data-view-layer="industry"] [data-layer="off-corridor"] { display: none; }
       `}</style>
     </div>
   );

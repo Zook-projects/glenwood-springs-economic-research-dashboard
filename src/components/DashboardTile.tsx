@@ -6,6 +6,8 @@ import type { DriveDistanceMap } from '../lib/flowQueries';
 import { ModeToggle } from './ModeToggle';
 import { DirectionToggle } from './DirectionToggle';
 import { ViewLayerToggle, type ViewLayer } from './ViewLayerToggle';
+import { IndustryChipRow } from './IndustryChipRow';
+import type { Naics20Key } from '../types/lodes';
 import { HeatmapModeToggle, type HeatmapSide } from './HeatmapModeToggle';
 import { BlockSelectionToggle } from './BlockSelectionToggle';
 import { ZipSelector } from './ZipSelector';
@@ -67,10 +69,16 @@ interface Props {
   onSelectPartner: (p: { place: string; zips: string[] } | null) => void;
   directionFilter: DirectionFilter;
   onDirectionChange: (d: DirectionFilter) => void;
-  // Spatial visualization layer — corridor (flow arcs) vs heatmap
-  // (block-level density). Toggle sits directly above DirectionToggle.
+  // Spatial visualization layer — corridor (flow arcs), heatmap (block-level
+  // density), or industry (anchor bubbles sized by job count). Toggle sits
+  // directly below DirectionToggle.
   viewLayer: ViewLayer;
   onViewLayerChange: (v: ViewLayer) => void;
+  // Industry-mode sector filter — when viewLayer === 'industry', sized
+  // anchor bubbles scale by total jobs (when 'all') or jobs in the named
+  // NAICS-20 sector. No effect on the corridor / heatmap modes.
+  industrySector: Naics20Key | 'all';
+  onIndustrySectorChange: (next: Naics20Key | 'all') => void;
   // Quantile breaks for the corridor width × luminance legend. Recomputed
   // upstream when mode/visible flows change.
   bucketBreaks: [number, number, number, number];
@@ -150,6 +158,8 @@ export function DashboardTile({
   onDirectionChange,
   viewLayer,
   onViewLayerChange,
+  industrySector,
+  onIndustrySectorChange,
   bucketBreaks,
   topCorridorInbound,
   topCorridorOutbound,
@@ -242,24 +252,33 @@ export function DashboardTile({
           </div>
         )}
 
-        {/* View-layer toggle (sits above direction — picks corridor flow
-            arcs vs block-level heatmap). */}
+        {/* Direction toggle (independent — composes with mode) */}
+        <DirectionToggle value={directionFilter} onChange={onDirectionChange} />
+
+        {/* Metric toggle (sits below direction — picks corridor flow arcs,
+            block-level heatmap, or the Industry bubble visualization). */}
         <ViewLayerToggle value={viewLayer} onChange={onViewLayerChange} />
 
+        {/* Industry-mode sub-row — only visible when viewLayer === 'industry'.
+            Chips select one of the 20 NAICS sectors or "All Sectors" to
+            scale the workplace-anchor bubbles by. */}
+        {viewLayer === 'industry' && (
+          <IndustryChipRow
+            value={industrySector}
+            onChange={onIndustrySectorChange}
+          />
+        )}
+
         {/* Heatmap-only Residence / Workplace toggle. Slides out from behind
-            the Corridor / Heatmap row when heatmap is active and the heatmap
-            layer is actually visible (i.e. not non-anchor). Drives an
-            INDEPENDENT heatmap-side state — decoupled from the canonical
-            mode so every (mode × heatmapSide) combination is reachable in
-            anchor view. */}
+            the Metric row when heatmap is active and the heatmap layer is
+            actually visible (i.e. not non-anchor). Drives an INDEPENDENT
+            heatmap-side state — decoupled from the canonical mode so every
+            (mode × heatmapSide) combination is reachable in anchor view. */}
         <HeatmapModeToggle
           side={heatmapSide}
           onChange={onHeatmapSideChange}
           visible={viewLayer === 'heatmap' && selectionKind !== 'non-anchor'}
         />
-
-        {/* Direction toggle (independent — composes with mode) */}
-        <DirectionToggle value={directionFilter} onChange={onDirectionChange} />
 
         {/* ZIP selector */}
         <ZipSelector
