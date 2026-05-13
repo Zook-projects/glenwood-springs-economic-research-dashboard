@@ -524,15 +524,50 @@ export function CommerceComparisons({
     // Bars render in white per the v3 dashboard refresh — the bar is
     // purely a length channel. The active focus still overrides to
     // amber via `highlight`.
-    const placeRows: BarRow[] = filteredMunicipalityData
-      .sort((a, b) => b.value - a.value)
-      .map((d) => ({
-        key: d.place.zip,
-        label: d.place.name,
-        value: d.value,
+    const placeBars: BarRow[] = filteredMunicipalityData.map((d) => ({
+      key: d.place.zip,
+      label: d.place.name,
+      value: d.value,
+      fill: '#ffffff',
+      highlight: d.place.zip === focusZip,
+    }));
+
+    // Append synthetic "Unincorporated {county}" rows so the municipalities
+    // bar reflects the full county-collected commerce footprint, matching
+    // the pie's residual treatment below. Scope follows the active county
+    // filter: one residual row when a county is selected, three when no
+    // county is selected (one per study-area county).
+    const residualScope = selectedCountyGeoid
+      ? [selectedCountyGeoid]
+      : ['08045', '08097', '08037'];
+    const unincorpBars: BarRow[] = [];
+    for (const geoid of residualScope) {
+      const county = env.counties.find((c) => c.geoid === geoid);
+      if (!county) continue;
+      const countyLatest = pickAnnualLatest(
+        county.trend as unknown as CommerceTrend | undefined,
+        measure,
+      );
+      if (!countyLatest) continue;
+      const anchorSum = placeData
+        .filter((d) => d.place.countyGeoid === geoid)
+        .reduce((sum, d) => sum + d.value, 0);
+      const residual = countyLatest.value - anchorSum;
+      // Skip vintage mismatches that drive the residual to ~0 or below.
+      if (residual <= countyLatest.value * 0.001) continue;
+      const shortName = county.name.replace(/ County$/, '');
+      unincorpBars.push({
+        key: `unincorp-${geoid}`,
+        label: `Unincorporated ${shortName}`,
+        value: residual,
         fill: '#ffffff',
-        highlight: d.place.zip === focusZip,
-      }));
+        highlight: false,
+      });
+    }
+
+    const placeRows: BarRow[] = [...placeBars, ...unincorpBars].sort(
+      (a, b) => b.value - a.value,
+    );
 
     // Pie entries — start with every place in env.places (the 11
     // anchors PLUS the Eagle-County supplementary municipalities), then
