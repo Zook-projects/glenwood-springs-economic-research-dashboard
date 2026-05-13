@@ -50,14 +50,34 @@ ACS_YEAR_BUILT_VARS = {
     "yearBuiltPre1940":  "B25034_011E",
 }
 
-# Cost burden composites — sum across renter (B25070) and owner (B25091) buckets.
+# Cost burden composites — sum across renter (B25070) and owner (B25091)
+# buckets. Owner side covers BOTH mortgage-status sub-universes (with /
+# without) and skips the "Not computed" bucket so the count reflects only
+# households whose burden the Census actually estimated. The earlier list
+# was missing owners with-mortgage at 30–39.9% and all owners without-
+# mortgage at 30%+, and was instead summing the without-mortgage *parent
+# total* and the "Not computed" bucket — see commit history for context.
 COST_BURDEN_30_VARS = [
+    # Renters 30%+
     "B25070_007E", "B25070_008E", "B25070_009E", "B25070_010E",
-    "B25091_008E", "B25091_009E", "B25091_010E", "B25091_011E",
+    # Owners WITH mortgage 30%+
+    "B25091_006E", "B25091_007E", "B25091_008E", "B25091_009E",
+    # Owners WITHOUT mortgage 30%+
+    "B25091_017E", "B25091_018E", "B25091_019E", "B25091_020E",
 ]
 COST_BURDEN_50_VARS = [
+    # Renters 50%+
     "B25070_010E",
-    "B25091_011E",
+    # Owners 50%+ (with + without mortgage)
+    "B25091_009E", "B25091_020E",
+]
+# B25106 — Tenure by Housing Costs as % of HHI. 30%+ rows summed across
+# income brackets (one per income bracket per tenure) give a single-table
+# cross-check of cost burden. Owner: _006, _010, _014, _018, _022. Renter:
+# _028, _032, _036, _040, _044.
+COST_BURDEN_30_B25106_VARS = [
+    "B25106_006E", "B25106_010E", "B25106_014E", "B25106_018E", "B25106_022E",
+    "B25106_028E", "B25106_032E", "B25106_036E", "B25106_040E", "B25106_044E",
 ]
 
 ACS_LATEST_YEAR = 2024
@@ -165,6 +185,10 @@ def _acs_block(row) -> dict:
     cb50 = cs.sum_vars(row, COST_BURDEN_50_VARS)
     if cb50 is not None:
         block["costBurden50"] = cb50
+    # B25106 cross-validation total — same metric, single-table source.
+    cb30_b25106 = cs.sum_vars(row, COST_BURDEN_30_B25106_VARS)
+    if cb30_b25106 is not None:
+        block["costBurden30B25106"] = cb30_b25106
     return block
 
 
@@ -224,9 +248,10 @@ def _annual_cost_burden_30(
     row_lookup,
 ) -> list[dict]:
     """Per-year cost-burden-30 composite series. `row_lookup(rows, year)` must
-    return the matching ACS row for the geography. Sums the renter (B25070_007–
-    010) and owner (B25091_008–011) >=30%-of-income buckets, mirroring
-    `_acs_block`'s latest-year composite."""
+    return the matching ACS row for the geography. Uses the corrected
+    COST_BURDEN_30_VARS — renters at 30%+ plus owners (with + without
+    mortgage) at 30%+ — so the time series matches the latest-year point in
+    `_acs_block`."""
     pairs: list[tuple[int, float | None]] = []
     for y in sorted(rows_by_year):
         row = row_lookup(rows_by_year[y])

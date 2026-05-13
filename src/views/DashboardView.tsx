@@ -37,6 +37,7 @@ import {
   isAnchorZip,
 } from '../lib/flowQueries';
 import { buildVisibleCorridorMap } from '../lib/corridors';
+import { COUNTY_GEOID_BY_FILTER } from '../lib/workforceCountyScopes';
 import type { FlowData } from '../lib/useFlowData';
 
 import { ModeToggle } from '../components/ModeToggle';
@@ -148,12 +149,20 @@ export function DashboardView() {
       return next;
     });
   };
-  // CommerceTimeSeriesChart + ContextCards still expect a single ZIP. With
-  // multi-select, pass the first chosen ZIP so the time-series / KPI tile
-  // still has one place to highlight. The bar + pie show the full set.
+  // ContextCards still expects a single ZIP for the headline KPI tile —
+  // pass the first chosen ZIP so the tile has one place to highlight when
+  // multiple are focused. The trend chart now handles the full set itself.
   const firstCommerceFocusZip = commerceFocusZips.size > 0
     ? Array.from(commerceFocusZips)[0]
     : null;
+
+  // Sidebar county filter takes precedence over the section-local Commerce
+  // county selection when it's not 'all'. Drives both CommerceTimeSeriesChart
+  // (single-county series) and CommerceComparisons (bar + pie scoping).
+  const effectiveCommerceCountyGeoid =
+    workforceCounty !== 'all'
+      ? COUNTY_GEOID_BY_FILTER[workforceCounty]
+      : commerceCountyGeoid;
 
   // ----- Derived state (mirrors the relevant parts of CommuteView) --------
   const selectionKind: 'aggregate' | 'anchor' | 'non-anchor' = useMemo(() => {
@@ -797,11 +806,12 @@ export function DashboardView() {
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] grid-cols-1 items-stretch">
                 <CommerceTimeSeriesChart
                   bundle={contextBundle}
-                  selectedZip={firstCommerceFocusZip ?? selectedZip}
+                  selectedZip={selectedZip}
+                  commerceFocusZips={commerceFocusZips}
                   variant={commerceVariant}
                   cadence={commerceCadence}
                   onCadenceChange={setCommerceCadence}
-                  highlightCountyGeoid={commerceCountyGeoid}
+                  highlightCountyGeoid={effectiveCommerceCountyGeoid}
                 />
                 <div className="min-w-0">
                   <CommerceComparisons
@@ -810,7 +820,7 @@ export function DashboardView() {
                     variant={commerceVariant}
                     commerceFocusZips={commerceFocusZips}
                     onToggleCommerceFocus={toggleCommerceFocus}
-                    selectedCountyGeoid={commerceCountyGeoid}
+                    selectedCountyGeoid={effectiveCommerceCountyGeoid}
                     onSelectCounty={setCommerceCountyGeoid}
                   />
                 </div>

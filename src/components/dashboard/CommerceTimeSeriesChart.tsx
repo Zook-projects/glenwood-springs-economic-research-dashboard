@@ -24,6 +24,7 @@ import type {
 } from '../../types/context';
 import { getPlaceWithRails } from '../../lib/contextQueries';
 import { fmtCompactUSD } from '../../lib/format';
+import { seriesColor } from '../../lib/subjectColorRamps';
 import {
   COMMERCE_CADENCE_LABEL,
   COMMERCE_VARIANT_LABEL,
@@ -36,11 +37,18 @@ import { ChartFrame } from './HousingMarketSection';
 
 interface Props {
   bundle: ContextBundle | null;
+  // Sidebar workplace ZIP. Treated as one entry in the focus set so the
+  // chart highlights it alongside section-local Commerce focus zips.
   selectedZip: string | null;
+  // Section-local focus set from the Anchor Places bar / pie. Each ZIP in
+  // the union of `commerceFocusZips ∪ selectedZip` renders as its own line
+  // when the union has two or more entries; one entry renders as the
+  // canonical single-series view with the amber area gradient.
+  commerceFocusZips?: ReadonlySet<string>;
   variant: CommerceVariant;
   cadence: CommerceCadence;
   onCadenceChange: (v: CommerceCadence) => void;
-  // When set in multi-series (no-anchor) mode, the matching county's
+  // When set in county-comparison (no-focus) mode, the matching county's
   // line renders in amber (var(--accent)) and is brought to the front;
   // the other lines stay rendered in their grey palette so the chart
   // still shows the comparison context.
@@ -91,34 +99,75 @@ const COUNTY_SERIES_SPEC: Array<{ geoid: string; color: string }> = [
 
 function buildSeries(
   bundle: ContextBundle | null,
-  selectedZip: string | null,
+  focusZips: ReadonlySet<string>,
+  countyOverrideGeoid: string | null,
   cadence: CommerceCadence,
   variant: CommerceVariant,
 ): { series: Series[]; subtitleLabel: string; isMulti: boolean } {
   if (!bundle) return { series: [], subtitleLabel: '', isMulti: false };
-  if (selectedZip) {
-    const { place, county } = getPlaceWithRails(bundle, 'commerce', selectedZip);
-    const placeTrend = place?.trend as CommerceTrend | undefined;
-    if (placeTrend && (placeTrend.annual?.length ?? 0) > 0) {
-      const points = buildPoints(placeTrend, cadence, variant);
-      return {
-        series: [{ key: 'sel', label: place?.name ?? '', color: 'var(--accent)', points }],
-        subtitleLabel: place?.name ?? '',
-        isMulti: false,
-      };
+
+  // Place-focus mode — one series per focused ZIP. When the set has only
+  // one entry, we keep `isMulti: false` so the single-series treatment
+  // (area gradient + amber accent) still applies. With two or more, each
+  // line is colored from the shared series palette and rendered without
+  // an area fill so overlapping shapes stay legible.
+  if (focusZips.size > 0) {
+    const ordered = Array.from(focusZips);
+    const series: Series[] = [];
+    let palettedCount = 0;
+    for (const zip of ordered) {
+      const { place, county } = getPlaceWithRails(bundle, 'commerce', zip);
+      const placeTrend = place?.trend as CommerceTrend | undefined;
+      let points = buildPoints(placeTrend, cadence, variant);
+      let label = place?.name ?? zip;
+      // Fall back to the containing county when the place has no commerce
+      // trend (matches the legacy single-zip behavior).
+      if (points.length === 0) {
+        const countyTrend = county?.trend as CommerceTrend | undefined;
+        points = buildPoints(countyTrend, cadence, variant);
+        label = county?.name ?? label;
+      }
+      if (points.length === 0) continue;
+      series.push({
+        key: zip,
+        label,
+        color:
+          ordered.length === 1
+            ? 'var(--accent)'
+            : seriesColor(palettedCount),
+        points,
+      });
+      palettedCount++;
     }
-    const countyTrend = county?.trend as CommerceTrend | undefined;
-    if (countyTrend && (countyTrend.annual?.length ?? 0) > 0) {
-      const points = buildPoints(countyTrend, cadence, variant);
+    if (series.length > 0) {
       return {
-        series: [{ key: 'sel', label: county?.name ?? '', color: 'var(--accent)', points }],
-        subtitleLabel: county?.name ?? '',
-        isMulti: false,
+        series,
+        subtitleLabel: series.map((s) => s.label).join(' · '),
+        isMulti: series.length > 1,
       };
     }
   }
-  // Aggregate (no anchor selected) — compare Garfield, Eagle, and Pitkin
-  // counties as three lines on a shared y-axis.
+
+  // County-override mode — sidebar county filter narrows the chart to that
+  // one county's line. Renders single-series with the amber accent so the
+  // active scope reads at a glance.
+  if (countyOverrideGeoid) {
+    const env = bundle.commerce;
+    const c = env?.counties.find((x) => x.geoid === countyOverrideGeoid);
+    if (c) {
+      const points = buildPoints(c.trend as unknown as CommerceTrend | undefined, cadence, variant);
+      if (points.length > 0) {
+        return {
+          series: [{ key: c.geoid, label: c.name, color: 'var(--accent)', points }],
+          subtitleLabel: c.name,
+          isMulti: false,
+        };
+      }
+    }
+  }
+
+  // Aggregate (no focus, no county override) — compare Garfield, Eagle,
+  // and Pitkin counties as three lines on a shared y-axis.
   const env = bundle.commerce;
   if (!env) return { series: [], subtitleLabel: '', isMulti: false };
   const series: Series[] = [];
@@ -147,17 +196,32 @@ function fmtMonthLabel(month: number | undefined): string {
   return names[Math.max(0, Math.min(11, month - 1))] ?? '';
 }
 
+// Module-level frozen empty set so the default prop has a stable reference.
+// Avoids invalidating the useMemo below on every parent render when no
+// section-local focus zips have been picked.
+const EMPTY_ZIPS: ReadonlySet<string> = new Set<string>();
+
 export function CommerceTimeSeriesChart({
   bundle,
   selectedZip,
+  commerceFocusZips = EMPTY_ZIPS,
   variant,
   cadence,
   onCadenceChange,
   highlightCountyGeoid = null,
 }: Props) {
+  // Union of section-local focus zips + the sidebar workplace ZIP (when
+  // set). Mirrors CommerceComparisons' bar/pie behavior so the trend and
+  // the comparison charts always agree on which places are "in scope".
+  const focusZips = useMemo(() => {
+    const next = new Set<string>(commerceFocusZips);
+    if (selectedZip) next.add(selectedZip);
+    return next;
+  }, [commerceFocusZips, selectedZip]);
+
   const { series, subtitleLabel, isMulti } = useMemo(
-    () => buildSeries(bundle, selectedZip, cadence, variant),
-    [bundle, selectedZip, cadence, variant],
+    () => buildSeries(bundle, focusZips, highlightCountyGeoid, cadence, variant),
+    [bundle, focusZips, highlightCountyGeoid, cadence, variant],
   );
   // Flat union of all points used for scale-domain calculation. Anchor x
   // ticks against this so all series share an x-axis.

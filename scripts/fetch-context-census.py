@@ -94,6 +94,10 @@ ACS5_HOUSING = {
     # Cost-burden composites computed from B25070 (renters) + B25091 (owners)
     "costBurden30": "_compose:cost_burden_30",
     "costBurden50": "_compose:cost_burden_50",
+    # Cross-validation source: B25106 (Tenure by Housing Costs as % of HHI)
+    # — single combined table the builder uses to double-check the
+    # B25070+B25091 composite.
+    "costBurden30B25106": "_compose:b25106_30pct",
     # Year structure built — 10 cohorts (B25034). Surfaced individually so
     # the housing characteristics tile can render the distribution.
     "yearBuilt2020plus": "B25034_002E",
@@ -144,16 +148,40 @@ COMPOSITES_AGE = {
 }
 
 COMPOSITES_HOUSING = {
+    # Cost-burdened (housing costs ≥ 30% of household income) — sums every
+    # ACS-published bucket at 30%+ across all three tenure / mortgage-status
+    # universes. The earlier composite was missing owners with-mortgage at
+    # 30–39.9% AND all owners without-mortgage at 30%+, and was instead
+    # adding the "Not computed" bucket and the without-mortgage *parent
+    # total* — both of which over-/under-count in non-obvious ways. See:
+    # B25070 (renter cost as % of HH income) and B25091 (owner cost as % of
+    # HH income, split by mortgage status).
     "cost_burden_30": [
-        # Owners 30%+ + renters 30%+ aggregated. ACS publishes these in
-        # B25070 (renters: cost as % of HH income) and B25091 (owners w/
-        # mortgage). The composite sums every bucket ≥30%.
+        # Renters 30%+
         "B25070_007E", "B25070_008E", "B25070_009E", "B25070_010E",
-        "B25091_008E", "B25091_009E", "B25091_010E", "B25091_011E",
+        # Owners WITH mortgage 30%+
+        "B25091_006E", "B25091_007E", "B25091_008E", "B25091_009E",
+        # Owners WITHOUT mortgage 30%+
+        "B25091_017E", "B25091_018E", "B25091_019E", "B25091_020E",
     ],
+    # Severely cost-burdened (≥ 50%).
     "cost_burden_50": [
         "B25070_010E",
-        "B25091_011E",
+        "B25091_009E",
+        "B25091_020E",
+    ],
+    # B25106 — Tenure by Housing Costs as a Percentage of Household Income.
+    # A single combined table that sums cost burden across renters + owners
+    # in one pass without needing to merge B25070 and B25091. We fetch the
+    # full bucket set so the builder can compute cost burden two ways for
+    # cross-validation. The 30%+ rows are (one per income bracket):
+    #   Owners:  _006 (<$20k), _010 ($20–34.9k), _014 ($35–49.9k),
+    #            _018 ($50–74.9k), _022 ($75k+)
+    #   Renters: _028 (<$20k), _032 ($20–34.9k), _036 ($35–49.9k),
+    #            _040 ($50–74.9k), _044 ($75k+)
+    "b25106_30pct": [
+        "B25106_006E", "B25106_010E", "B25106_014E", "B25106_018E", "B25106_022E",
+        "B25106_028E", "B25106_032E", "B25106_036E", "B25106_040E", "B25106_044E",
     ],
 }
 
