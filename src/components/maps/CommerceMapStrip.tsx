@@ -403,7 +403,7 @@ function RankedListCard({
                 onClick={() => onSelect(r.id)}
                 className="w-full text-left flex items-center gap-2 px-1 py-1 rounded transition-colors"
                 style={{
-                  background: active ? 'rgba(245, 185, 66, 0.16)' : 'transparent',
+                  background: active ? `${accent}29` : 'transparent',
                 }}
               >
                 <span

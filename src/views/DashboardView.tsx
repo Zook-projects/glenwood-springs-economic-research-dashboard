@@ -447,6 +447,7 @@ export function DashboardView() {
                   layout="side-by-side"
                   defaultExpanded
                   whiteLabels
+                  workforceCounty={workforceCounty}
                 />
               ) : selectionKind === 'anchor' && perZipBlockData ? (
                 // Anchor view: 1/3 left column (totals + Workforce flows OD chart)

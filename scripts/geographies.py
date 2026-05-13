@@ -20,11 +20,15 @@ STATE_FIPS: str = "08"
 STATE_NAME: str = "Colorado"
 
 # ---------------------------------------------------------------------------
-# Counties — 3 counties touching the 11 anchor places.
-# Garfield holds 7 anchors, Pitkin holds 4. Eagle borders the study area and
-# covers Basalt's eastern half. Mesa County (which contains De Beque's
-# western tail) is intentionally excluded — its economic shed is dominated
-# by Grand Junction and pulls regional aggregates off-mission.
+# Counties — 3 in-scope counties touching the anchor places.
+# Garfield holds 6 anchors, Pitkin holds 4. Eagle borders the study area and
+# covers Basalt's eastern half. Mesa County (FIPS 085) is intentionally
+# OMITTED from this map even though it contains De Beque — its economic shed
+# is dominated by Grand Junction and pulls regional aggregates off-mission.
+# Keeping Mesa out of COUNTY_FIPS is what hides De Beque under every county
+# filter chip in the dashboard: De Beque's `countyGeoid` resolves to "08085"
+# (Mesa) and matches no filter option, so it only renders when "All" is
+# active. See scripts/geographies.py PLACE_CODES["81630"] below.
 # ---------------------------------------------------------------------------
 COUNTY_FIPS: dict[str, str] = {
     # FIPS → Name (3-digit county code; full GEOID is STATE_FIPS + this)
@@ -84,7 +88,10 @@ PLACE_CODES: dict[str, dict] = {
     "81630": {
         "place_code": "19355",
         "place_name": "De Beque",
-        "county_fips": "045",
+        # De Beque sits in Mesa County (FIPS 085), not Garfield. Mesa is
+        # intentionally not included in COUNTY_FIPS so De Beque only renders
+        # when no county filter is active (see COUNTY_FIPS note above).
+        "county_fips": "085",
         "kind": "place",
     },
     "81635": {

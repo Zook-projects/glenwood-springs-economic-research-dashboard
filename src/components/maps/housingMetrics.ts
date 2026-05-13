@@ -7,7 +7,6 @@ import type { ContextLatest } from '../../types/context';
 
 export type HousingMetricId =
   | 'zhvi'
-  | 'medianHomeValueAcs'
   | 'medianGrossRent'
   | 'pctOwnerOccupied'
   | 'pctCostBurdened30'
@@ -93,13 +92,6 @@ export const HOUSING_METRICS: ReadonlyArray<HousingMetric> = [
     shortLabel: 'ZHVI',
     format: fmtMoneyK,
     extract: (l) => num(l?.zhvi),
-  },
-  {
-    id: 'medianHomeValueAcs',
-    label: 'Median Home Value',
-    shortLabel: 'Med. Value',
-    format: fmtMoneyK,
-    extract: (l) => num(l?.medianHomeValueAcs),
   },
   {
     id: 'medianGrossRent',

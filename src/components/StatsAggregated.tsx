@@ -21,10 +21,16 @@
 // (List / Grid / Hero); Hero was selected and the others have been pruned.
 
 import { useCallback, useMemo, useState } from 'react';
-import type { DirectionFilter, FlowRow, ZipMeta } from '../types/flow';
+import type {
+  DirectionFilter,
+  FlowRow,
+  WorkforceCountyFilter,
+  ZipMeta,
+} from '../types/flow';
 import {
   computeAggregated,
   computeAnchorRankings,
+  isAnchorInCounty,
   meanCommuteMiles,
   type AnchorRanking,
   type DriveDistanceMap,
@@ -67,6 +73,10 @@ interface Props {
   // text color instead of the default dim gray. Dashboard view opts in for
   // higher contrast against the panel background.
   whiteLabels?: boolean;
+  // Workforce county filter — narrows the Workplace ZIP rankings to anchors
+  // whose centroid sits in the selected county. 'all' (default) keeps all 11
+  // anchors visible.
+  workforceCounty?: WorkforceCountyFilter;
 }
 
 // ---------------------------------------------------------------------------
@@ -769,30 +779,40 @@ export function StatsAggregated(props: Props) {
   );
 
   // Rankings are computed off the un-narrowed direction-filtered arrays so
-  // every anchor stays visible regardless of filter state.
-  const rankings = useMemo(
-    () =>
-      computeAnchorRankings(
-        props.directionFilteredInbound,
-        props.directionFilteredOutbound ?? [],
-        props.zips,
-      ),
-    [props.directionFilteredInbound, props.directionFilteredOutbound, props.zips],
-  );
+  // every anchor stays visible regardless of direction-filter state. The
+  // workforce county filter, however, removes anchors entirely from the
+  // ranking list so the Workplace ZIP rankings track the chip-row subset.
+  const workforceCounty: WorkforceCountyFilter = props.workforceCounty ?? 'all';
+  const rankings = useMemo(() => {
+    const all = computeAnchorRankings(
+      props.directionFilteredInbound,
+      props.directionFilteredOutbound ?? [],
+      props.zips,
+    );
+    if (workforceCounty === 'all') return all;
+    return all.filter((r) => isAnchorInCounty(r.zip, workforceCounty));
+  }, [
+    props.directionFilteredInbound,
+    props.directionFilteredOutbound,
+    props.zips,
+    workforceCounty,
+  ]);
 
   // Un-direction-filtered ranking baseline — used as the denominator for
   // the hero's "% of regional X" share line. With no direction or ranking
   // filter active the share resolves to 100%; activating either filter
   // shrinks it to the visible slice of the regional total for the axis.
-  const unfilteredRankings = useMemo(
-    () =>
-      computeAnchorRankings(
-        props.flowsInbound,
-        props.flowsOutbound ?? [],
-        props.zips,
-      ),
-    [props.flowsInbound, props.flowsOutbound, props.zips],
-  );
+  // County filter narrows the baseline too, so the share denominators stay
+  // consistent with the visible rankings list.
+  const unfilteredRankings = useMemo(() => {
+    const all = computeAnchorRankings(
+      props.flowsInbound,
+      props.flowsOutbound ?? [],
+      props.zips,
+    );
+    if (workforceCounty === 'all') return all;
+    return all.filter((r) => isAnchorInCounty(r.zip, workforceCounty));
+  }, [props.flowsInbound, props.flowsOutbound, props.zips, workforceCounty]);
 
   // Per-axis hero numerator: sum the active axis across the rankings the
   // user has highlighted (all anchors when no rankings rows are toggled).

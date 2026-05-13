@@ -360,7 +360,7 @@ function MetricButton({
       title={metric.label}
       className="text-left px-2 py-1.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
       style={{
-        background: active ? 'rgba(125, 220, 193, 0.16)' : 'rgba(255,255,255,0.03)',
+        background: active ? `${accent}29` : 'rgba(255,255,255,0.03)',
         border: `1px solid ${active ? accent : 'var(--panel-border)'}`,
         color: active ? accent : 'var(--text-h)',
       }}

@@ -47,6 +47,7 @@ interface RegionAggregate {
   renterOccupied: number;
   costBurden30: number;
   zhvi: number | null;
+  medianGrossRent: number | null;
   workforce: number;
 }
 
@@ -254,6 +255,7 @@ function RegionKpis({
     renterOccupied: region.renterOccupied,
     costBurden30: region.costBurden30,
     zhvi: region.zhvi,
+    medianGrossRent: region.medianGrossRent,
   };
   const headline = metric.extract(synthLatest);
   const ownPct =
@@ -400,7 +402,7 @@ function RankedListCard({
                 onClick={() => onSelect(r.id)}
                 className="w-full text-left flex items-center gap-2 px-1 py-1 rounded transition-colors"
                 style={{
-                  background: active ? 'rgba(229, 143, 182, 0.16)' : 'transparent',
+                  background: active ? `${accent}29` : 'transparent',
                 }}
               >
                 <span
@@ -541,6 +543,8 @@ function aggregateHousing(
   let burden = 0;
   let weightedZhvi = 0;
   let weightedZhviDenom = 0;
+  let weightedRent = 0;
+  let weightedRentDenom = 0;
   let wf = 0;
   for (const e of entities) {
     const l = e.latest;
@@ -555,6 +559,11 @@ function aggregateHousing(
       weightedZhvi += z * u;
       weightedZhviDenom += u;
     }
+    const rent = numOrNull(l.medianGrossRent);
+    if (rent != null && u > 0) {
+      weightedRent += rent * u;
+      weightedRentDenom += u;
+    }
     if (level === 'county' && 'geoid' in e) {
       wf += workforce.byCountyGeoid.get(e.geoid) ?? 0;
     } else if ('zip' in e) {
@@ -567,6 +576,7 @@ function aggregateHousing(
     renterOccupied: renter,
     costBurden30: burden,
     zhvi: weightedZhviDenom > 0 ? weightedZhvi / weightedZhviDenom : null,
+    medianGrossRent: weightedRentDenom > 0 ? weightedRent / weightedRentDenom : null,
     workforce: wf,
   };
 }

@@ -262,7 +262,7 @@ export function IndustryMapStrip({
                     onClick={() => onSelectZip(active ? null : row.zip)}
                     className="w-full text-left flex items-center gap-2 px-1 py-1 rounded transition-colors"
                     style={{
-                      background: active ? 'rgba(245, 185, 66, 0.16)' : 'transparent',
+                      background: active ? `${sectorColor}29` : 'transparent',
                     }}
                   >
                     <span

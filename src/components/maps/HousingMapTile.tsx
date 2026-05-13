@@ -66,8 +66,8 @@ export function HousingMapTile({
   })();
 
   // Aggregate snapshot for the headline mini-strip when nothing selected.
-  // For housing, sums where it makes sense (units), pop-weighted means for
-  // ZHVI/income, ratios over summed counts (owner %, burden %).
+  // For housing, sums where it makes sense (units), unit-weighted means for
+  // ZHVI / median rent, ratios over summed counts (owner %, burden %).
   const aggregateSnapshot = (() => {
     if (activeLatest) return null;
     let units = 0;
@@ -76,6 +76,8 @@ export function HousingMapTile({
     let burden = 0;
     let weightedZhvi = 0;
     let weightedZhviDenom = 0;
+    let weightedRent = 0;
+    let weightedRentDenom = 0;
     for (const p of studyPlaces) {
       const lp = p.latest;
       if (!lp) continue;
@@ -89,6 +91,11 @@ export function HousingMapTile({
         weightedZhvi += zhvi * u;
         weightedZhviDenom += u;
       }
+      const rent = typeof lp.medianGrossRent === 'number' ? lp.medianGrossRent : null;
+      if (rent != null && u > 0) {
+        weightedRent += rent * u;
+        weightedRentDenom += u;
+      }
     }
     return {
       totalHousingUnits: units,
@@ -96,6 +103,7 @@ export function HousingMapTile({
       renterOccupied: renter,
       costBurden30: burden,
       zhvi: weightedZhviDenom > 0 ? weightedZhvi / weightedZhviDenom : null,
+      medianGrossRent: weightedRentDenom > 0 ? weightedRent / weightedRentDenom : null,
     };
   })();
 
@@ -282,7 +290,7 @@ function MetricButton({
       title={metric.label}
       className="text-left px-2 py-1.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
       style={{
-        background: active ? 'rgba(229, 143, 182, 0.16)' : 'rgba(255,255,255,0.03)',
+        background: active ? `${accent}29` : 'rgba(255,255,255,0.03)',
         border: `1px solid ${active ? accent : 'var(--panel-border)'}`,
         color: active ? accent : 'var(--text-h)',
       }}

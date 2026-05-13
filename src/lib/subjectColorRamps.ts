@@ -14,25 +14,25 @@ export interface ColorRamp {
   accent: string;
 }
 
-// Demographics — green/teal sequential
+// Demographics — light royal blue sequential
 const DEMOGRAPHICS: ColorRamp = {
-  palette: ['#0f3a35', '#1b5d4f', '#2c8674', '#3fb59a', '#7ddcc1'],
+  palette: ['#0c1f3d', '#1a3c70', '#2d62a8', '#5089d4', '#86b3ee'],
   noData: 'rgba(255,255,255,0.06)',
-  accent: '#7ddcc1',
+  accent: '#86b3ee',
 };
 
-// Housing — magenta/violet sequential
+// Housing — orange sequential
 const HOUSING: ColorRamp = {
-  palette: ['#3a0e3a', '#641555', '#962168', '#c63575', '#e58fb6'],
+  palette: ['#2a1305', '#552310', '#8c3d18', '#cc6620', '#f59e4a'],
   noData: 'rgba(255,255,255,0.06)',
-  accent: '#e58fb6',
+  accent: '#f59e4a',
 };
 
-// Commerce — amber sequential (matches existing app accent color family)
+// Commerce — forest green sequential
 const COMMERCE: ColorRamp = {
-  palette: ['#3d2300', '#664010', '#9c6418', '#d18b1a', '#f5b942'],
+  palette: ['#0d2417', '#16432a', '#256f3f', '#3aa056', '#6dd182'],
   noData: 'rgba(255,255,255,0.06)',
-  accent: '#f5b942',
+  accent: '#6dd182',
 };
 
 // Workforce ramp present for completeness; the workforce map uses its own

@@ -3,12 +3,10 @@
 // Workforce dashboard section between the BottomCardStrip (3-bucket NAICS
 // glanceable cards) and the FlowDataTables (OD tables).
 //
-// Five sub-charts:
-//   1. Jobs by all 20 NAICS sectors (Latest | Trend toggle)
+// Three sub-charts:
+//   1. Jobs by all 20 NAICS sectors (Latest | 22-year trend toggle)
 //   2. Workers by age (latest stacked bar + 22-year trend)
 //   3. Workers by earnings (latest stacked bar + 22-year trend)
-//   4. Workers by race / ethnicity (latest only)
-//   5. Workers by education / sex (latest only)
 //
 // Scope derivation:
 //   - aggregate, county === 'all'  → wacFile.aggregate
@@ -22,22 +20,20 @@ import { isAnchorInCounty } from '../../lib/flowQueries';
 import type { WorkforceCountyFilter } from '../../types/flow';
 import type {
   Naics20Block,
+  Naics20Key,
   RacWacLatest,
   RacWacTrend,
   TrendPoint,
   WacFile,
 } from '../../types/lodes';
 import { ChartFrame } from './HousingMarketSection';
+import { MiniTrendChart, type TrendSeries } from '../maps/MiniTrendChart';
 
 // ---------------------------------------------------------------------------
 // Palettes (mirror DemographicsSection so the dashboard reads consistently)
 // ---------------------------------------------------------------------------
 const AGE_PALETTE = ['#7AC4D8', '#4FB3A9', '#C8B273'];
 const WAGE_PALETTE = ['#C47979', '#C8B273', '#4FB3A9'];
-const RACE_PALETTE = ['#7AC4D8', '#9FB3C8', '#C29479', '#C8B273', '#94C4B7', '#B79CC4'];
-const ETHNICITY_PALETTE = ['#9FB3C8', '#C29479'];
-const EDUCATION_PALETTE = ['#C47979', '#C8B273', '#94C4B7', '#7AC4D8'];
-const SEX_PALETTE = ['#7AC4D8', '#C29479'];
 
 // ---------------------------------------------------------------------------
 // Scope derivation
@@ -57,6 +53,10 @@ function sumBlocks(blocks: RacWacLatest[]): RacWacLatest {
     naics20: Object.fromEntries(
       NAICS20_SECTORS.map((s) => [s.key, 0]),
     ) as Naics20Block,
+    // Race / ethnicity / education / sex fields are still required by
+    // RacWacLatest but no rendered chart consumes them after the dashboard
+    // workforce-section trim — leave them at zero in the synthesized
+    // aggregate so the schema stays valid.
     race: { white: 0, black: 0, amInd: 0, asian: 0, nhpi: 0, twoOrMore: 0 },
     ethnicity: { notHispanic: 0, hispanic: 0 },
     education: { lessHs: 0, hs: 0, someCol: 0, bachPlus: 0 },
@@ -74,20 +74,6 @@ function sumBlocks(blocks: RacWacLatest[]): RacWacLatest {
     out.naics3.tradeTransUtil += b.naics3.tradeTransUtil;
     out.naics3.allOther += b.naics3.allOther;
     for (const s of NAICS20_SECTORS) out.naics20[s.key] += b.naics20[s.key];
-    out.race.white += b.race.white;
-    out.race.black += b.race.black;
-    out.race.amInd += b.race.amInd;
-    out.race.asian += b.race.asian;
-    out.race.nhpi += b.race.nhpi;
-    out.race.twoOrMore += b.race.twoOrMore;
-    out.ethnicity.notHispanic += b.ethnicity.notHispanic;
-    out.ethnicity.hispanic += b.ethnicity.hispanic;
-    out.education.lessHs += b.education.lessHs;
-    out.education.hs += b.education.hs;
-    out.education.someCol += b.education.someCol;
-    out.education.bachPlus += b.education.bachPlus;
-    out.sex.male += b.sex.male;
-    out.sex.female += b.sex.female;
   }
   return out;
 }
@@ -352,67 +338,118 @@ function NaicsBarChart({ naics20 }: { naics20: Naics20Block }) {
   );
 }
 
-function NaicsTrendGrid({ trend }: { trend: RacWacTrend }) {
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {NAICS20_SECTORS.map((s) => {
-        const points = trend[s.key] ?? [];
-        return (
-          <div
-            key={s.key}
-            className="rounded-md p-2 flex flex-col gap-1"
-            style={{
-              background: 'rgba(255,255,255,0.02)',
-              border: '1px solid var(--panel-border)',
-            }}
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span
-                className="inline-block rounded-sm shrink-0"
-                style={{ width: 8, height: 8, background: s.color }}
-              />
-              <span
-                className="text-[10px] truncate"
-                style={{ color: 'var(--text-h)' }}
-                title={s.label}
-              >
-                {s.shortLabel}
-              </span>
-            </div>
-            <Spark points={points} color={s.color} />
-            <div className="flex justify-between text-[9px] tnum" style={{ color: 'var(--text-dim)' }}>
-              <span>{points.length > 0 ? fmtInt(points[0].value) : '—'}</span>
-              <span>{points.length > 0 ? fmtInt(points[points.length - 1].value) : '—'}</span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+// Top-N seed selection — chooses the N largest sectors by latest-year jobs
+// so the trend chart opens in a legible (not overcrowded) state. The user
+// can toggle other sectors on via the chip row.
+const DEFAULT_VISIBLE_SECTORS = 5;
+
+function defaultVisibleKeys(latest: Naics20Block): Set<Naics20Key> {
+  const ranked = NAICS20_SECTORS
+    .map((s) => ({ key: s.key, value: latest[s.key] }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, DEFAULT_VISIBLE_SECTORS)
+    .map((r) => r.key);
+  return new Set(ranked);
 }
 
-function Spark({ points, color }: { points: TrendPoint[]; color: string }) {
-  if (points.length === 0) {
-    return <div style={{ height: 32 }} />;
-  }
-  const W = 100;
-  const H = 32;
-  const values = points.map((p) => p.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = Math.max(1, max - min);
-  const xs = (i: number) => (i / Math.max(1, points.length - 1)) * W;
-  const ys = (v: number) => H - 2 - ((v - min) / span) * (H - 4);
-  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xs(i).toFixed(1)} ${ys(p.value).toFixed(1)}`).join(' ');
+// NAICS trend — single multi-line chart with a chip-row selector. Chips
+// toggle individual sectors on/off; the chart redraws against the visible
+// set. Tooltip + axis ticks come from MiniTrendChart.
+function NaicsTrendChart({
+  trend,
+  latest,
+}: {
+  trend: RacWacTrend;
+  latest: Naics20Block;
+}) {
+  const [visible, setVisible] = useState<Set<Naics20Key>>(() =>
+    defaultVisibleKeys(latest),
+  );
+
+  // Recompute the default visible set if the scope changes underfoot
+  // (e.g. user switches anchor) and the previously-selected sector no
+  // longer has meaningful data. We only reseed when nothing is visible
+  // to avoid clobbering user toggles mid-session.
+  const visibleArr = useMemo(() => Array.from(visible), [visible]);
+
+  const toggleSector = (key: Naics20Key) => {
+    setVisible((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const series: TrendSeries[] = useMemo(() => {
+    return NAICS20_SECTORS
+      .filter((s) => visible.has(s.key))
+      .map((s) => ({
+        key: s.key,
+        label: s.shortLabel,
+        color: s.color,
+        points: (trend[s.key] ?? []) as TrendPoint[],
+      }));
+  }, [trend, visible]);
+
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      width="100%"
-      height={H}
-      preserveAspectRatio="none"
-    >
-      <path d={d} fill="none" stroke={color} strokeWidth={1.25} strokeLinejoin="round" />
-    </svg>
+    <div className="flex flex-col gap-3">
+      {/* Chip row — all 20 sectors. Active chips render in sector color;
+          inactive chips dim out so the user can see what's available. */}
+      <div className="flex flex-wrap gap-1.5" role="group" aria-label="NAICS sectors">
+        {NAICS20_SECTORS.map((s) => {
+          const active = visible.has(s.key);
+          const latestVal = latest[s.key];
+          return (
+            <button
+              key={s.key}
+              type="button"
+              aria-pressed={active}
+              onClick={() => toggleSector(s.key)}
+              title={`${s.label} · ${fmtInt(latestVal)} jobs (latest)`}
+              className="text-[10px] px-2 py-1 rounded-md border transition-colors focus:outline-none focus-visible:ring-1 flex items-center gap-1.5"
+              style={{
+                background: active ? `${s.color}22` : 'rgba(255,255,255,0.03)',
+                color: active ? 'var(--text-h)' : 'var(--text-dim)',
+                borderColor: active ? s.color : 'var(--panel-border)',
+              }}
+            >
+              <span
+                className="inline-block rounded-sm shrink-0"
+                style={{
+                  width: 8,
+                  height: 8,
+                  background: s.color,
+                  opacity: active ? 1 : 0.35,
+                }}
+              />
+              {s.shortLabel}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Multi-line chart. Height fixed at 240 so the legend + chips don't
+          jump as the user toggles series. MiniTrendChart owns the hover
+          tooltip, axis ticks, gridlines, and per-series legend. */}
+      <div style={{ height: 240 }}>
+        {visibleArr.length === 0 ? (
+          <div
+            className="h-full flex items-center justify-center text-[10px] italic"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            Select one or more sectors above to plot a trend.
+          </div>
+        ) : (
+          <MiniTrendChart
+            series={series}
+            height="fill"
+            yMin="zero"
+            valueFormat={(v) => fmtInt(v)}
+          />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -547,7 +584,7 @@ export function WorkAreaProfileSection({
         {naicsView === 'latest' ? (
           <NaicsBarChart naics20={latest.naics20} />
         ) : (
-          <NaicsTrendGrid trend={trend} />
+          <NaicsTrendChart trend={trend} latest={latest.naics20} />
         )}
       </ChartFrame>
 
@@ -596,73 +633,6 @@ export function WorkAreaProfileSection({
         </ChartFrame>
       </div>
 
-      {/* Row 3 — Race + Ethnicity side-by-side */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <ChartFrame title="Workers by race" subtitle="Latest year · LODES CR01–CR07">
-          <StackedRow
-            segments={[
-              { key: 'white', label: 'White' },
-              { key: 'black', label: 'Black' },
-              { key: 'amInd', label: 'Am. Indian' },
-              { key: 'asian', label: 'Asian' },
-              { key: 'nhpi', label: 'NHPI' },
-              { key: 'twoOrMore', label: 'Two+' },
-            ]}
-            values={[
-              latest.race.white,
-              latest.race.black,
-              latest.race.amInd,
-              latest.race.asian,
-              latest.race.nhpi,
-              latest.race.twoOrMore,
-            ]}
-            palette={RACE_PALETTE}
-          />
-        </ChartFrame>
-
-        <ChartFrame title="Workers by ethnicity" subtitle="Latest year · Hispanic / Not Hispanic">
-          <StackedRow
-            segments={[
-              { key: 'notHispanic', label: 'Not Hispanic' },
-              { key: 'hispanic', label: 'Hispanic' },
-            ]}
-            values={[latest.ethnicity.notHispanic, latest.ethnicity.hispanic]}
-            palette={ETHNICITY_PALETTE}
-          />
-        </ChartFrame>
-      </div>
-
-      {/* Row 4 — Education + Sex side-by-side */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <ChartFrame title="Workers by education" subtitle="Latest year · Workers 30+">
-          <StackedRow
-            segments={[
-              { key: 'lessHs', label: '< High school' },
-              { key: 'hs', label: 'High school' },
-              { key: 'someCol', label: 'Some college' },
-              { key: 'bachPlus', label: "Bachelor's+" },
-            ]}
-            values={[
-              latest.education.lessHs,
-              latest.education.hs,
-              latest.education.someCol,
-              latest.education.bachPlus,
-            ]}
-            palette={EDUCATION_PALETTE}
-          />
-        </ChartFrame>
-
-        <ChartFrame title="Workers by sex" subtitle="Latest year · Male / Female">
-          <StackedRow
-            segments={[
-              { key: 'male', label: 'Male' },
-              { key: 'female', label: 'Female' },
-            ]}
-            values={[latest.sex.male, latest.sex.female]}
-            palette={SEX_PALETTE}
-          />
-        </ChartFrame>
-      </div>
     </div>
   );
 }
