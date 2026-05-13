@@ -15,7 +15,7 @@ import {
   pie as d3Pie,
   type PieArcDatum,
 } from 'd3-shape';
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { fmtInt, fmtPct } from '../lib/format';
 import type {
   AgeBlock,
@@ -101,12 +101,21 @@ function unionYears(seriesList: TrendPoint[][]): number[] {
 
 // Hover handlers that map cursor → nearest year via the wrapper's bounding
 // rect. The wrapper element is captured in a ref so the math stays accurate
-// regardless of scroll/layout shifts.
+// regardless of scroll/layout shifts. State updates are throttled with
+// requestAnimationFrame so a fast trackpad doesn't flood React with mouse-
+// move state writes — without throttling, the tooltip stutters because the
+// reconciler runs once per pixel of cursor movement.
 function makeHoverHandlers(
   wrapperRef: React.RefObject<HTMLDivElement | null>,
+  rafIdRef: React.MutableRefObject<number | null>,
+  pendingRef: React.MutableRefObject<HoverState | null>,
   years: number[],
   setHover: (h: HoverState | null) => void,
 ) {
+  const flush = () => {
+    rafIdRef.current = null;
+    if (pendingRef.current) setHover(pendingRef.current);
+  };
   const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = wrapperRef.current;
     if (!el || years.length === 0) return;
@@ -115,10 +124,38 @@ function makeHoverHandlers(
     const x = e.clientX - rect.left;
     const t = Math.max(0, Math.min(1, x / rect.width));
     const idx = Math.round(t * (years.length - 1));
-    setHover({ yearIdx: idx, clientX: x });
+    pendingRef.current = { yearIdx: idx, clientX: x };
+    if (rafIdRef.current == null) {
+      rafIdRef.current = requestAnimationFrame(flush);
+    }
   };
-  const onLeave = () => setHover(null);
+  const onLeave = () => {
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    pendingRef.current = null;
+    setHover(null);
+  };
   return { onMove, onLeave };
+}
+
+// React hook that wires a ResizeObserver to a ref and tracks the element's
+// current pixel width. Used by tooltip rendering — reading
+// getBoundingClientRect() inside the render block forces a synchronous
+// reflow every hover; a ResizeObserver-cached width updates only when the
+// element actually resizes.
+function useElementWidth(ref: React.RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
 }
 
 // Tooltip card rendered above the cursor. Lists the year header followed by
@@ -195,7 +232,10 @@ function Sparkline({
 }) {
   const gradId = useId();
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const pendingRef = useRef<HoverState | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
+  const wrapperWidth = useElementWidth(wrapperRef);
 
   const geometry = useMemo(() => {
     if (series.length < 2) return null;
@@ -233,7 +273,7 @@ function Sparkline({
 
   const years = useMemo(() => series.map((p) => p.year), [series]);
   const hoverHandlers = useMemo(
-    () => makeHoverHandlers(wrapperRef, years, setHover),
+    () => makeHoverHandlers(wrapperRef, rafIdRef, pendingRef, years, setHover),
     [years],
   );
 
@@ -321,12 +361,12 @@ function Sparkline({
           }}
         />
       )}
-      {hover && hoveredPoint && wrapperRef.current && (
+      {hover && hoveredPoint && wrapperWidth > 0 && (
         <HoverTooltip
           year={hoveredPoint.year}
           rows={[{ name, value: hoveredPoint.value, color: dotColor }]}
           x={hover.clientX}
-          containerWidth={wrapperRef.current.getBoundingClientRect().width}
+          containerWidth={wrapperWidth}
         />
       )}
     </div>
@@ -1132,7 +1172,10 @@ function MultiSparkline({
 }) {
   const gradId = useId();
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const pendingRef = useRef<HoverState | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
+  const wrapperWidth = useElementWidth(wrapperRef);
 
   const domainInfo = useMemo(() => {
     const flat = series.flatMap((s) => s.points);
@@ -1182,7 +1225,7 @@ function MultiSparkline({
 
   const years = useMemo(() => unionYears(series.map((s) => s.points)), [series]);
   const hoverHandlers = useMemo(
-    () => makeHoverHandlers(wrapperRef, years, setHover),
+    () => makeHoverHandlers(wrapperRef, rafIdRef, pendingRef, years, setHover),
     [years],
   );
 
@@ -1335,12 +1378,12 @@ function MultiSparkline({
           }}
         />
       ))}
-      {hover && hoveredYear != null && hoveredValues && wrapperRef.current && (
+      {hover && hoveredYear != null && hoveredValues && wrapperWidth > 0 && (
         <HoverTooltip
           year={hoveredYear}
           rows={hoveredValues}
           x={hover.clientX}
-          containerWidth={wrapperRef.current.getBoundingClientRect().width}
+          containerWidth={wrapperWidth}
         />
       )}
     </div>

@@ -398,12 +398,14 @@ export function DashboardView() {
                 >
                   {s.label}
                 </button>
-                {/* Nested sub-section anchors — only visible on desktop and
-                    only when the parent section is active, to keep the nav
-                    column quiet at rest. Each click smooth-scrolls to the
-                    sub-section's DOM id, which lives on a wrapper div inside
-                    the section component. */}
-                {s.subSections && active && (
+                {/* Nested sub-section anchors — always visible on desktop so
+                    users can jump anywhere without first clicking the parent.
+                    Each click smooth-scrolls to the sub-section's DOM id,
+                    which lives on a wrapper div inside the section component.
+                    The parent's active state is the visual cue; sub-links
+                    inherit a dimmer color while inactive to keep the menu
+                    quiet at rest. */}
+                {s.subSections && (
                   <ul
                     className="hidden md:flex flex-col pl-3 gap-0.5"
                     aria-label={`${s.label} sub-sections`}
@@ -420,7 +422,7 @@ export function DashboardView() {
                           }}
                           className="text-left w-full px-3 py-1 rounded-md text-[10px] font-medium tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
                           style={{
-                            color: 'var(--text-h)',
+                            color: active ? 'var(--text-h)' : 'var(--text-dim)',
                             background: 'transparent',
                             border: '1px solid transparent',
                           }}
