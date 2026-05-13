@@ -8,6 +8,7 @@
 // drives which color ramp from RAMPS to use.
 
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMapProjection } from '../SubjectMapCanvas';
 import type { ContextEnvelope, ContextLatest } from '../../types/context';
 import type { SubjectId } from '../../config/subjects';
@@ -171,6 +172,7 @@ export function SubjectMapOverlay({
   const showSymbols = mapLayer === 'symbols' || geoLevel === 'place';
 
   return (
+    <>
     <svg
       className="absolute inset-0 w-full h-full"
       style={{ pointerEvents: 'none' }}
@@ -330,41 +332,64 @@ export function SubjectMapOverlay({
         );
       })}
 
-      {/* Hover tooltip — fixed-position chip at cursor */}
-      {hover && (
-        <foreignObject
-          x={0}
-          y={0}
-          width={1}
-          height={1}
-          style={{ overflow: 'visible', pointerEvents: 'none' }}
-        >
-          <div
-            style={{
-              position: 'fixed',
-              left: hover.x + 12,
-              top: hover.y + 12,
-              padding: '6px 10px',
-              background: 'rgba(0,0,0,0.85)',
-              border: `1px solid ${ramp.accent}`,
-              borderRadius: 4,
-              fontSize: 11,
-              color: '#fff',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-              zIndex: 1000,
-            }}
-          >
-            <div style={{ fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-              {hover.label}
-            </div>
-            <div style={{ color: ramp.accent }}>
-              {metric.label}: {hover.valueText}
-            </div>
-          </div>
-        </foreignObject>
-      )}
     </svg>
+    {/* Hover tooltip — glass-panel multi-line card at cursor.
+        Mirrors the industry-bubble tooltip in MapCanvas so all four maps
+        share a single visual treatment (kicker / title / value). Rendered
+        via a portal to document.body so `position: fixed` reliably anchors
+        to the viewport — `position: fixed` inside a <foreignObject> ends up
+        relative to the SVG's coordinate system in most browsers, which puts
+        the tooltip far away from the cursor. */}
+    {hover && createPortal(
+      <div
+        className="glass rounded-md"
+        style={{
+          position: 'fixed',
+          left: hover.x + 14,
+          top: hover.y - 12,
+          padding: '8px 10px',
+          minWidth: 140,
+          pointerEvents: 'none',
+          zIndex: 1000,
+          boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 9,
+            fontWeight: 600,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            color: ramp.accent,
+            marginBottom: 2,
+          }}
+        >
+          {metric.label}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--text-h)',
+            lineHeight: 1.15,
+          }}
+        >
+          {hover.label}
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            fontVariantNumeric: 'tabular-nums',
+            color: 'var(--text-h)',
+            marginTop: 3,
+          }}
+        >
+          {hover.valueText}
+        </div>
+      </div>,
+      document.body,
+    )}
+    </>
   );
 }
 

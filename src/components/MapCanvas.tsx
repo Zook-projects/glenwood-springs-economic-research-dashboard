@@ -1547,10 +1547,6 @@ export function MapCanvas({
             totalAcrossAnchors > 0
               ? Math.round((value / totalAcrossAnchors) * 1000) / 10
               : 0;
-          // Native <title> for accessibility + browser-default tooltip.
-          const title = document.createElementNS(NS, 'title');
-          title.textContent = `${placeLabel} · ${sectorLabel} — ${value.toLocaleString()} jobs (${share}% of anchors)`;
-          bubble.appendChild(title);
           // Rich hover tooltip — overlay div populated and positioned by
           // these handlers; positioned relative to the map container so it
           // floats just above the bubble's cursor without escaping the map.

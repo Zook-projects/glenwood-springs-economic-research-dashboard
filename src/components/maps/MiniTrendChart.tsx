@@ -29,6 +29,10 @@ interface Props {
   yMin?: 'auto' | 'zero';
   // Number formatter for hover tooltip + axis labels. Default: locale-string.
   valueFormat?: (v: number) => string;
+  // When set, the matching series renders at full emphasis and the rest
+  // dim out so the user can read a single line in context. Falsy = all
+  // series at normal weight.
+  highlightedKey?: string | null;
 }
 
 export function MiniTrendChart({
@@ -38,6 +42,7 @@ export function MiniTrendChart({
   color = 'var(--accent)',
   yMin = 'zero',
   valueFormat = (v) => v.toLocaleString(),
+  highlightedKey = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 280, h: typeof height === 'number' ? height : 200 });
@@ -272,30 +277,44 @@ export function MiniTrendChart({
         />
 
         {/* Series — area + line. Area only renders for single-series mode
-            so multi-series stacked-fills don't muddy the chart. */}
-        {renderableSeries.map((s) => (
-          <g key={s.key}>
-            {isSingle && (
-              <path d={areaGen(s.points)!} fill={s.color} fillOpacity={0.18} />
-            )}
-            <path
-              d={lineGen(s.points)!}
-              fill="none"
-              stroke={s.color}
-              strokeWidth={isSingle ? 1.75 : 1.5}
-            />
-            {s.points.map((p) => (
-              <circle
-                key={`${s.key}-${p.year}`}
-                cx={xScale(p.year)}
-                cy={yScale(p.value)}
-                r={2}
-                fill={s.color}
-                fillOpacity={0.85}
+            so multi-series stacked-fills don't muddy the chart. When
+            `highlightedKey` is set, the matching series renders bolder and
+            non-matching series dim out so the user can read a single line
+            in context. */}
+        {renderableSeries.map((s) => {
+          const isHighlighted = highlightedKey != null && s.key === highlightedKey;
+          const isDimmed = highlightedKey != null && s.key !== highlightedKey;
+          const strokeOpacity = isDimmed ? 0.22 : 1;
+          const strokeWidth = isHighlighted
+            ? 2.5
+            : isSingle
+              ? 1.75
+              : 1.5;
+          return (
+            <g key={s.key}>
+              {isSingle && (
+                <path d={areaGen(s.points)!} fill={s.color} fillOpacity={0.18} />
+              )}
+              <path
+                d={lineGen(s.points)!}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={strokeWidth}
+                strokeOpacity={strokeOpacity}
               />
-            ))}
-          </g>
-        ))}
+              {!isDimmed && s.points.map((p) => (
+                <circle
+                  key={`${s.key}-${p.year}`}
+                  cx={xScale(p.year)}
+                  cy={yScale(p.value)}
+                  r={isHighlighted ? 2.5 : 2}
+                  fill={s.color}
+                  fillOpacity={0.85}
+                />
+              ))}
+            </g>
+          );
+        })}
 
         {/* Hover crosshair + per-series dots + label */}
         {hover && (() => {

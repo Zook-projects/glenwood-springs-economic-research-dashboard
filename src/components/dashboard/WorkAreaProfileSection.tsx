@@ -97,34 +97,54 @@ function sumTrends(trends: RacWacTrend[]): RacWacTrend {
 }
 
 // ---------------------------------------------------------------------------
-// Stacked horizontal bar (single row — one scope, multiple segments)
+// Stacked horizontal bar (single row — one scope, multiple segments).
+// Segments are clickable: clicking a segment selects it (toggling off when
+// re-clicked). Selection drives the highlight on the trend chart below.
 // ---------------------------------------------------------------------------
 function StackedRow({
   segments,
   values,
   palette,
+  selectedKey = null,
+  onSegmentClick,
 }: {
   segments: ReadonlyArray<{ key: string; label: string }>;
   values: number[];
   palette: readonly string[];
+  selectedKey?: string | null;
+  onSegmentClick?: (key: string) => void;
 }) {
   const total = values.reduce((a, b) => a + b, 0);
+  const isInteractive = !!onSegmentClick;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {segments.map((s, idx) => (
-          <span
-            key={s.key}
-            className="flex items-center gap-1.5 text-[10px]"
-            style={{ color: 'var(--text)' }}
-          >
+        {segments.map((s, idx) => {
+          const isSelected = selectedKey === s.key;
+          const isDimmed = selectedKey != null && !isSelected;
+          return (
             <span
-              className="inline-block rounded-sm"
-              style={{ width: 10, height: 10, background: palette[idx % palette.length] }}
-            />
-            {s.label}
-          </span>
-        ))}
+              key={s.key}
+              className="flex items-center gap-1.5 text-[10px]"
+              style={{
+                color: isDimmed ? 'var(--text-dim)' : 'var(--text)',
+                opacity: isDimmed ? 0.55 : 1,
+                fontWeight: isSelected ? 600 : 400,
+              }}
+            >
+              <span
+                className="inline-block rounded-sm"
+                style={{
+                  width: 10,
+                  height: 10,
+                  background: palette[idx % palette.length],
+                  opacity: isDimmed ? 0.45 : 1,
+                }}
+              />
+              {s.label}
+            </span>
+          );
+        })}
       </div>
       <div
         className="relative flex w-full overflow-hidden rounded-sm"
@@ -137,14 +157,43 @@ function StackedRow({
         {values.map((v, idx) => {
           if (v <= 0 || total <= 0) return null;
           const pct = (v / total) * 100;
+          const segKey = segments[idx].key;
+          const isSelected = selectedKey === segKey;
+          const isDimmed = selectedKey != null && !isSelected;
           return (
             <div
-              key={segments[idx].key}
-              title={`${segments[idx].label}: ${fmtInt(v)} (${pct.toFixed(1)}%)`}
+              key={segKey}
+              role={isInteractive ? 'button' : undefined}
+              tabIndex={isInteractive ? 0 : undefined}
+              aria-pressed={isInteractive ? isSelected : undefined}
+              aria-label={
+                isInteractive
+                  ? `${segments[idx].label}: ${fmtInt(v)} (${pct.toFixed(1)}%)`
+                  : undefined
+              }
+              onClick={
+                isInteractive ? () => onSegmentClick(segKey) : undefined
+              }
+              onKeyDown={
+                isInteractive
+                  ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSegmentClick(segKey);
+                      }
+                    }
+                  : undefined
+              }
               style={{
                 width: `${pct}%`,
                 background: palette[idx % palette.length],
-                opacity: 0.92,
+                opacity: isDimmed ? 0.35 : 0.92,
+                cursor: isInteractive ? 'pointer' : undefined,
+                outline: isSelected
+                  ? '2px solid rgba(255,255,255,0.55)'
+                  : 'none',
+                outlineOffset: isSelected ? -2 : 0,
+                transition: 'opacity 120ms ease-out',
               }}
             />
           );
@@ -153,11 +202,21 @@ function StackedRow({
       <div className="grid grid-cols-3 md:grid-cols-6 gap-x-3 gap-y-1">
         {values.map((v, idx) => {
           const pct = total > 0 ? v / total : 0;
+          const segKey = segments[idx].key;
+          const isSelected = selectedKey === segKey;
+          const isDimmed = selectedKey != null && !isSelected;
           return (
-            <div key={segments[idx].key} className="flex flex-col">
+            <div
+              key={segKey}
+              className="flex flex-col"
+              style={{ opacity: isDimmed ? 0.55 : 1 }}
+            >
               <span
                 className="text-[10px] uppercase tracking-wider"
-                style={{ color: 'var(--text-dim)' }}
+                style={{
+                  color: 'var(--text-dim)',
+                  fontWeight: isSelected ? 600 : 400,
+                }}
               >
                 {segments[idx].label}
               </span>
@@ -168,119 +227,6 @@ function StackedRow({
           );
         })}
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Multi-line trend chart (compact; up to 4 series)
-// ---------------------------------------------------------------------------
-function TrendLines({
-  series,
-  height = 120,
-}: {
-  series: ReadonlyArray<{ label: string; color: string; points: TrendPoint[] }>;
-  height?: number;
-}) {
-  const dims = useMemo(() => {
-    const allPoints = series.flatMap((s) => s.points);
-    if (allPoints.length === 0) {
-      return { years: [] as number[], min: 0, max: 0 };
-    }
-    const years = Array.from(new Set(allPoints.map((p) => p.year))).sort((a, b) => a - b);
-    const min = Math.min(...allPoints.map((p) => p.value));
-    const max = Math.max(...allPoints.map((p) => p.value));
-    return { years, min, max };
-  }, [series]);
-
-  if (dims.years.length === 0) {
-    return (
-      <div
-        className="text-[10px] italic flex items-center justify-center"
-        style={{ height, color: 'var(--text-dim)' }}
-      >
-        No trend data available.
-      </div>
-    );
-  }
-
-  const W = 320;
-  const H = height;
-  const padL = 8;
-  const padR = 8;
-  const padT = 8;
-  const padB = 16;
-  const xs = (year: number) => {
-    const x0 = dims.years[0];
-    const x1 = dims.years[dims.years.length - 1];
-    if (x0 === x1) return padL + (W - padL - padR) / 2;
-    return padL + ((year - x0) / (x1 - x0)) * (W - padL - padR);
-  };
-  const span = Math.max(1, dims.max - dims.min);
-  const ys = (value: number) => padT + (1 - (value - dims.min) / span) * (H - padT - padB);
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {series.map((s) => (
-          <span
-            key={s.label}
-            className="flex items-center gap-1.5 text-[10px]"
-            style={{ color: 'var(--text)' }}
-          >
-            <span
-              className="inline-block rounded-sm"
-              style={{ width: 10, height: 2, background: s.color }}
-            />
-            {s.label}
-          </span>
-        ))}
-      </div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        width="100%"
-        height={H}
-        preserveAspectRatio="none"
-        style={{ overflow: 'visible' }}
-      >
-        {series.map((s) => {
-          if (s.points.length === 0) return null;
-          const d = s.points
-            .sort((a, b) => a.year - b.year)
-            .map((p, i) => `${i === 0 ? 'M' : 'L'} ${xs(p.year).toFixed(1)} ${ys(p.value).toFixed(1)}`)
-            .join(' ');
-          return (
-            <path
-              key={s.label}
-              d={d}
-              fill="none"
-              stroke={s.color}
-              strokeWidth={1.5}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-            />
-          );
-        })}
-        {/* Axis label — last year only */}
-        <text
-          x={W - padR}
-          y={H - 2}
-          textAnchor="end"
-          fontSize={9}
-          fill="var(--text-dim)"
-        >
-          {dims.years[dims.years.length - 1]}
-        </text>
-        <text
-          x={padL}
-          y={H - 2}
-          textAnchor="start"
-          fontSize={9}
-          fill="var(--text-dim)"
-        >
-          {dims.years[0]}
-        </text>
-      </svg>
     </div>
   );
 }
@@ -468,6 +414,16 @@ export function WorkAreaProfileSection({
   workforceCounty: WorkforceCountyFilter;
 }) {
   const [naicsView, setNaicsView] = useState<'latest' | 'trend'>('latest');
+  // Click-to-highlight state for the Age and Earnings sub-sections. Clicking
+  // a segment in the stacked bar sets the matching key here; clicking the
+  // same segment again clears it. The selected key drives both the bar's
+  // selected/dimmed styling and the trend chart's `highlightedKey`.
+  const [ageSelected, setAgeSelected] = useState<string | null>(null);
+  const [wageSelected, setWageSelected] = useState<string | null>(null);
+  const toggleAge = (key: string) =>
+    setAgeSelected((prev) => (prev === key ? null : key));
+  const toggleWage = (key: string) =>
+    setWageSelected((prev) => (prev === key ? null : key));
 
   const scope: ScopeSnapshot | null = useMemo(() => {
     if (!wacFile) return null;
@@ -600,14 +556,23 @@ export function WorkAreaProfileSection({
               ]}
               values={[latest.age.u29, latest.age.age30to54, latest.age.age55plus]}
               palette={AGE_PALETTE}
+              selectedKey={ageSelected}
+              onSegmentClick={toggleAge}
             />
-            <TrendLines
-              series={[
-                { label: 'Under 30', color: AGE_PALETTE[0], points: trend.ageU29 ?? [] },
-                { label: '30–54', color: AGE_PALETTE[1], points: trend.age30to54 ?? [] },
-                { label: '55+', color: AGE_PALETTE[2], points: trend.age55plus ?? [] },
-              ]}
-            />
+            {/* Fixed height matches prior TrendLines visual envelope */}
+            <div style={{ height: 160 }}>
+              <MiniTrendChart
+                series={[
+                  { key: 'u29', label: 'Under 30', color: AGE_PALETTE[0], points: (trend.ageU29 ?? []) as TrendPoint[] },
+                  { key: 'age30to54', label: '30–54', color: AGE_PALETTE[1], points: (trend.age30to54 ?? []) as TrendPoint[] },
+                  { key: 'age55plus', label: '55+', color: AGE_PALETTE[2], points: (trend.age55plus ?? []) as TrendPoint[] },
+                ]}
+                height="fill"
+                yMin="zero"
+                valueFormat={(v) => fmtInt(v)}
+                highlightedKey={ageSelected}
+              />
+            </div>
           </div>
         </ChartFrame>
 
@@ -621,14 +586,22 @@ export function WorkAreaProfileSection({
               ]}
               values={[latest.wage.low, latest.wage.mid, latest.wage.high]}
               palette={WAGE_PALETTE}
+              selectedKey={wageSelected}
+              onSegmentClick={toggleWage}
             />
-            <TrendLines
-              series={[
-                { label: 'Low', color: WAGE_PALETTE[0], points: trend.wageLow ?? [] },
-                { label: 'Mid', color: WAGE_PALETTE[1], points: trend.wageMid ?? [] },
-                { label: 'High', color: WAGE_PALETTE[2], points: trend.wageHigh ?? [] },
-              ]}
-            />
+            <div style={{ height: 160 }}>
+              <MiniTrendChart
+                series={[
+                  { key: 'low', label: 'Low', color: WAGE_PALETTE[0], points: (trend.wageLow ?? []) as TrendPoint[] },
+                  { key: 'mid', label: 'Mid', color: WAGE_PALETTE[1], points: (trend.wageMid ?? []) as TrendPoint[] },
+                  { key: 'high', label: 'High', color: WAGE_PALETTE[2], points: (trend.wageHigh ?? []) as TrendPoint[] },
+                ]}
+                height="fill"
+                yMin="zero"
+                valueFormat={(v) => fmtInt(v)}
+                highlightedKey={wageSelected}
+              />
+            </div>
           </div>
         </ChartFrame>
       </div>
