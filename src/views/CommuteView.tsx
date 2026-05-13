@@ -730,6 +730,40 @@ export function CommuteView({ data }: CommuteViewProps) {
     selectedPartner,
   ]);
 
+  // Selection-layer GeoJSON — same builder, but keyed off blockSelectionSide
+  // and blockSelectionMode so the dots the user CAN click match the
+  // workplace/residence buttons inside the BlockSelectionToggle. Decoupled
+  // from `heatmapData` so the heatmap layer keeps rendering against
+  // heatmapSide while the selection layer responds independently to
+  // blockSelectionSide. Only built when block selection is on — when off
+  // the layer is hidden anyway, so we save the work.
+  const selectionData = useMemo(() => {
+    if (!odBlocks || !zips) return null;
+    if (!blockSelectionActive) return null;
+    return buildHeatmapGeoJson({
+      odBlocks,
+      zips,
+      mode: blockSelectionMode,
+      heatmapSide: blockSelectionSide,
+      selectedZip,
+      nonAnchorBundle,
+      directionFilter,
+      segmentFilter,
+      selectedPartner,
+    });
+  }, [
+    odBlocks,
+    zips,
+    blockSelectionActive,
+    blockSelectionMode,
+    blockSelectionSide,
+    selectedZip,
+    nonAnchorBundle,
+    directionFilter,
+    segmentFilter,
+    selectedPartner,
+  ]);
+
   // Selecting a non-anchor place drops the heatmap data to null upstream
   // (heatmapPoints returns null for non-anchor). If the user happened to be
   // in heatmap view at the moment of selection, force the toggle back to
@@ -1131,6 +1165,7 @@ export function CommuteView({ data }: CommuteViewProps) {
             setSuppressedHover(hover?.corridorId ?? null);
           }}
           heatmapData={heatmapData}
+          selectionData={selectionData}
           viewLayer={viewLayer}
           industrySector={industrySector}
           wacFile={wacFile}

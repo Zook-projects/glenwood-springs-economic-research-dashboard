@@ -72,6 +72,20 @@ interface Props {
       properties: { weight: number; block: string };
     }>;
   } | null;
+  // Selection-layer block data — keyed off blockSelectionSide /
+  // blockSelectionMode upstream so the dots the user can click match the
+  // BlockSelectionToggle's workplace/residence buttons independently from
+  // the heatmap layer's heatmapSide. Null when block selection is off (the
+  // selection layer is hidden in that case); otherwise the same GeoJSON
+  // shape as heatmapData.
+  selectionData: {
+    type: 'FeatureCollection';
+    features: Array<{
+      type: 'Feature';
+      geometry: { type: 'Point'; coordinates: [number, number] };
+      properties: { weight: number; block: string };
+    }>;
+  } | null;
   // Active visualization layer — 'corridor' shows the SVG flow arcs and hides
   // the heatmap; 'heatmap' shows the heatmap and hides arcs / off-corridor
   // strands; 'industry' hides both and paints each workplace anchor as a
@@ -141,6 +155,7 @@ export function MapCanvas({
   onClickCorridor,
   onClickEmpty,
   heatmapData,
+  selectionData,
   viewLayer,
   industrySector,
   wacFile,
@@ -434,28 +449,39 @@ export function MapCanvas({
   }, [heatmapData, viewLayer]);
 
   // ---- Block-selection circle layer ----------------------------------------
-  // Sibling to the heatmap layer, sourced from the same od-blocks GeoJSON.
-  // Visible only when blockSelectionActive is true; serves as both the
-  // hit-target for clicks and the visual feedback for selected blocks.
-  // Block FIPS (or `zip:<zcta>` synthetic key for cross-anchor centroid
-  // fallback rows) is exposed as feature.properties.block for hit-testing
-  // and as a paint expression input for selected styling.
+  // Sibling to the heatmap layer, but with its OWN GeoJSON source keyed off
+  // blockSelectionSide so the dots the user can click match the
+  // BlockSelectionToggle's workplace/residence buttons independently of the
+  // heatmap layer's heatmapSide. Visible only when blockSelectionActive is
+  // true; serves as both the hit-target for clicks and the visual feedback
+  // for selected blocks. Block FIPS (or `zip:<zcta>` synthetic key for
+  // cross-anchor centroid fallback rows) is exposed as feature.properties.block
+  // for hit-testing and as a paint expression input for selected styling.
+  const SELECT_SOURCE_ID = 'od-blocks-select-source';
   const SELECT_LAYER_ID = 'od-blocks-select-layer';
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const ensureLayer = () => {
       if (map.getLayer(SELECT_LAYER_ID)) return;
-      if (!map.getSource(HEATMAP_SOURCE_ID)) return; // wait for heatmap source
       const style = map.getStyle();
       if (!style?.layers) return;
+      if (!map.getSource(SELECT_SOURCE_ID)) {
+        map.addSource(SELECT_SOURCE_ID, {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+          // Stable numeric IDs so the selected-state paint expression
+          // (driven via setFeatureState) can target individual dots.
+          generateId: true,
+        });
+      }
       const firstSymbolLayerId =
         style.layers.find((l) => l.type === 'symbol')?.id;
       map.addLayer(
         {
           id: SELECT_LAYER_ID,
           type: 'circle',
-          source: HEATMAP_SOURCE_ID,
+          source: SELECT_SOURCE_ID,
           paint: {
             'circle-radius': [
               'interpolate', ['linear'], ['zoom'],
@@ -531,6 +557,29 @@ export function MapCanvas({
     else map.once('idle', apply);
   }, [blockSelectionActive]);
 
+  // Push selectionData into the selection-layer source whenever it changes.
+  // When null (block selection off or data unloaded) the source is reset to
+  // an empty FeatureCollection so the next show is instant. Layer visibility
+  // is handled by the sibling effect above — this one only owns the data.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const apply = () => {
+      const src = map.getSource(SELECT_SOURCE_ID) as
+        | GeoJSONSource
+        | undefined;
+      if (!src) return;
+      src.setData(
+        selectionData ?? { type: 'FeatureCollection', features: [] },
+      );
+    };
+    if (map.isStyleLoaded() && map.getSource(SELECT_SOURCE_ID)) {
+      apply();
+    } else {
+      map.once('idle', apply);
+    }
+  }, [selectionData]);
+
   // Apply the Hide Blocks filter on the selection-circle layer. When
   // `blocksHidden` is true and there are selections, the circle layer is
   // limited to features whose `block` property matches the selected set;
@@ -559,22 +608,22 @@ export function MapCanvas({
 
   // Mirror the selectedBlocks set into MapLibre feature-state so the circle
   // layer's paint expressions can light up the selected dots. Feature IDs
-  // come from `properties.block` — the heatmap source needs `generateId`
-  // because the build-time GeoJSON doesn't carry numeric IDs. Instead of
-  // adding promoteId (which would require source re-registration), we walk
-  // the current feature collection and apply state by querying the source.
+  // come from `properties.block` — the selection source uses `generateId`
+  // so the build-time GeoJSON (which lacks numeric IDs) gets stable runtime
+  // ones. We walk the currently-loaded features and apply state to each
+  // dot whose `block` is in the selected set.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const apply = () => {
-      const src = map.getSource(HEATMAP_SOURCE_ID) as
+      const src = map.getSource(SELECT_SOURCE_ID) as
         | GeoJSONSource
         | undefined;
       if (!src) return;
       // querySourceFeatures returns currently-loaded features; for a small
       // GeoJSON source loaded all at once, that's everything. Walk and set
       // state per feature based on whether its `block` property is selected.
-      const feats = map.querySourceFeatures(HEATMAP_SOURCE_ID);
+      const feats = map.querySourceFeatures(SELECT_SOURCE_ID);
       for (const f of feats) {
         const blockKey = (f.properties as { block?: string } | null)?.block;
         if (blockKey == null) continue;
@@ -588,14 +637,14 @@ export function MapCanvas({
         if (f.id == null) continue;
         const selected = selectedBlocks.has(blockKey);
         map.setFeatureState(
-          { source: HEATMAP_SOURCE_ID, id: f.id },
+          { source: SELECT_SOURCE_ID, id: f.id },
           { selected },
         );
       }
     };
     if (map.isStyleLoaded()) apply();
     else map.once('idle', apply);
-  }, [selectedBlocks, heatmapData]);
+  }, [selectedBlocks, selectionData]);
 
   // ---- Click + box-select interaction --------------------------------------
   // Click handler for individual blocks; mousedown handler for drag-rectangle.
