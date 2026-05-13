@@ -28,8 +28,16 @@ export interface MapSubjectState {
   setCountyFilter: (c: string | null) => void;
   setMapLayer: (l: MapLayerKind) => void;
   setMultiSelect: (m: boolean) => void;
+  // Map-symbol clicks. Respects multiSelect: when off, replaces selection;
+  // when on, toggles in/out.
   handleSelectZip: (zip: string) => void;
   handleSelectCounty: (geoid: string) => void;
+  // Ranked-list clicks. Always toggles regardless of multiSelect — the
+  // ranked list is the canonical multi-select surface so each click in/out
+  // of the list builds up a comparison set without requiring the toolbar
+  // toggle.
+  handleToggleZip: (zip: string) => void;
+  handleToggleCounty: (geoid: string) => void;
   clearSelections: () => void;
 }
 
@@ -101,6 +109,29 @@ export default function App() {
     setSelectedZips(new Set());
   };
 
+  // Toggle-only variants for ranked-list clicks. The list always functions
+  // as a multi-select comparison surface, so a click just flips the item's
+  // membership in the set without clearing siblings.
+  const handleToggleZip = (zip: string) => {
+    setSelectedZips((prev) => {
+      const next = new Set(prev);
+      if (next.has(zip)) next.delete(zip);
+      else next.add(zip);
+      return next;
+    });
+    setSelectedCountyGeoids(new Set());
+  };
+
+  const handleToggleCounty = (geoid: string) => {
+    setSelectedCountyGeoids((prev) => {
+      const next = new Set(prev);
+      if (next.has(geoid)) next.delete(geoid);
+      else next.add(geoid);
+      return next;
+    });
+    setSelectedZips(new Set());
+  };
+
   if (error) {
     return (
       <div className="min-h-screen w-full md:w-screen md:h-screen flex items-center justify-center px-4">
@@ -137,6 +168,8 @@ export default function App() {
       setMultiSelect,
       handleSelectZip,
       handleSelectCounty,
+      handleToggleZip,
+      handleToggleCounty,
       clearSelections,
     },
   };

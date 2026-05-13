@@ -35,8 +35,11 @@ interface Props {
   selectedCountyGeoids: Set<string>;
   multiSelect: boolean;
   onMultiSelectChange: (next: boolean) => void;
-  onSelectZip: (zip: string) => void;
-  onSelectCounty: (geoid: string) => void;
+  // Ranked-list click handlers (always toggle in/out — the ranked list is
+  // the canonical multi-select comparison surface). Map-symbol clicks live
+  // on SubjectMapOverlay and don't flow through the strip.
+  onToggleZip: (zip: string) => void;
+  onToggleCounty: (geoid: string) => void;
   onClearSelections: () => void;
   workforce: WorkforceTotals;
 }
@@ -60,8 +63,8 @@ export function HousingMapStrip({
   selectedCountyGeoids,
   multiSelect,
   onMultiSelectChange,
-  onSelectZip,
-  onSelectCounty,
+  onToggleZip,
+  onToggleCounty,
   onClearSelections,
   workforce,
 }: Props) {
@@ -158,10 +161,6 @@ export function HousingMapStrip({
     return `Selected · ${totalSelected} ${totalSelected === 1 ? 'item' : 'items'}`;
   })();
 
-  const showSingleDetail = !multiSelect && totalSelected === 1;
-  const singleEntity: ContextPlaceEntry | ContextCountyEntry | null =
-    showSingleDetail ? (activePlaces[0] ?? activeCounties[0] ?? null) : null;
-
   return (
     <div className="px-3 flex flex-col gap-2">
       <MultiSelectToolbar
@@ -202,33 +201,22 @@ export function HousingMapStrip({
           color={accent}
           valueFormat={(v) => `$${Math.round(v / 1000)}k`}
         />
-        {singleEntity ? (
-          <SingleEntityKpis
-            entity={singleEntity}
-            metric={metric}
-            workforce={workforce}
-            accent={accent}
-            regionWorkforce={regionAggregate.workforce}
-            onClear={onClearSelections}
-          />
-        ) : (
-          <RankedListCard
-            rows={rankedRows}
-            metric={metric}
-            selectedIds={
-              activeCounties.length > 0
-                ? new Set([...selectedCountyGeoids])
-                : new Set([...selectedZips])
-            }
-            onSelect={(id) =>
-              activeCounties.length > 0 || geoLevel === 'county'
-                ? onSelectCounty(id)
-                : onSelectZip(id)
-            }
-            geoLevel={geoLevel}
-            accent={accent}
-          />
-        )}
+        <RankedListCard
+          rows={rankedRows}
+          metric={metric}
+          selectedIds={
+            activeCounties.length > 0
+              ? new Set([...selectedCountyGeoids])
+              : new Set([...selectedZips])
+          }
+          onSelect={(id) =>
+            geoLevel === 'county' || activeCounties.length > 0
+              ? onToggleCounty(id)
+              : onToggleZip(id)
+          }
+          geoLevel={geoLevel}
+          accent={accent}
+        />
       </div>
     </div>
   );
@@ -432,100 +420,6 @@ function RankedListCard({
           );
         })}
       </ul>
-    </div>
-  );
-}
-
-function SingleEntityKpis({
-  entity,
-  metric,
-  workforce,
-  accent,
-  regionWorkforce,
-  onClear,
-}: {
-  entity: ContextPlaceEntry | ContextCountyEntry;
-  metric: HousingMetric;
-  workforce: WorkforceTotals;
-  accent: string;
-  regionWorkforce: number;
-  onClear: () => void;
-}) {
-  const latest = entity.latest;
-  const isPlace = 'zip' in entity;
-  const wf = isPlace
-    ? workforce.byZip.get(entity.zip) ?? null
-    : workforce.byCountyGeoid.get(entity.geoid) ?? null;
-  const wfPctOfRegion = wf != null && regionWorkforce > 0 ? wf / regionWorkforce : null;
-
-  const ownPct = (() => {
-    const own = numOrNull(latest?.ownerOccupied);
-    const rent = numOrNull(latest?.renterOccupied);
-    if (own == null || rent == null || own + rent === 0) return null;
-    return own / (own + rent);
-  })();
-  const burdPct = (() => {
-    const burden = numOrNull(latest?.costBurden30);
-    const own = numOrNull(latest?.ownerOccupied);
-    const rent = numOrNull(latest?.renterOccupied);
-    const denom = (own ?? 0) + (rent ?? 0);
-    if (burden == null || denom === 0) return null;
-    return burden / denom;
-  })();
-
-  return (
-    <div
-      className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden"
-      style={{ borderColor: accent }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <span
-            className="inline-block w-2 h-2 rounded-full"
-            style={{ background: accent }}
-          />
-          <div
-            className="text-[10px] font-semibold uppercase tracking-wider truncate"
-            style={{ color: accent }}
-          >
-            {entity.name}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClear}
-          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded hover:bg-white/10"
-          style={{ color: 'var(--text-dim)' }}
-        >
-          Clear
-        </button>
-      </div>
-      <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
-        <SubjectKpiCard
-          label={metric.label}
-          value={metric.format(metric.extract(latest))}
-          active
-        />
-        <SubjectKpiCard
-          label="Workforce"
-          value={wf != null ? Math.round(wf).toLocaleString() : '—'}
-          sublabel={
-            wfPctOfRegion != null
-              ? `${(wfPctOfRegion * 100).toFixed(1)}% of region`
-              : 'inbound + local'
-          }
-        />
-        <SubjectKpiCard
-          label="Owner Occ."
-          value={ownPct != null ? `${(ownPct * 100).toFixed(0)}%` : '—'}
-          size="sm"
-        />
-        <SubjectKpiCard
-          label="Cost Burdened"
-          value={burdPct != null ? `${(burdPct * 100).toFixed(0)}%` : '—'}
-          size="sm"
-        />
-      </div>
     </div>
   );
 }

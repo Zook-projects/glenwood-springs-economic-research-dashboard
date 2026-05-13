@@ -71,8 +71,8 @@ export function HousingMapView() {
           selectedCountyGeoids={mapState.selectedCountyGeoids}
           multiSelect={mapState.multiSelect}
           onMultiSelectChange={mapState.setMultiSelect}
-          onSelectZip={mapState.handleSelectZip}
-          onSelectCounty={mapState.handleSelectCounty}
+          onToggleZip={mapState.handleToggleZip}
+          onToggleCounty={mapState.handleToggleCounty}
           onClearSelections={mapState.clearSelections}
           workforce={workforce}
         />

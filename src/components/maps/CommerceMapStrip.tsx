@@ -37,8 +37,11 @@ interface Props {
   selectedCountyGeoids: Set<string>;
   multiSelect: boolean;
   onMultiSelectChange: (next: boolean) => void;
-  onSelectZip: (zip: string) => void;
-  onSelectCounty: (geoid: string) => void;
+  // Ranked-list click handlers (always toggle in/out — the ranked list is
+  // the canonical multi-select comparison surface). Map-symbol clicks live
+  // on SubjectMapOverlay and don't flow through the strip.
+  onToggleZip: (zip: string) => void;
+  onToggleCounty: (geoid: string) => void;
   onClearSelections: () => void;
   workforce: WorkforceTotals;
 }
@@ -60,8 +63,8 @@ export function CommerceMapStrip({
   selectedCountyGeoids,
   multiSelect,
   onMultiSelectChange,
-  onSelectZip,
-  onSelectCounty,
+  onToggleZip,
+  onToggleCounty,
   onClearSelections,
   workforce,
 }: Props) {
@@ -93,6 +96,15 @@ export function CommerceMapStrip({
     return aggregateCommerce(entities, workforce, geoLevel);
   }, [filteredCounties, filteredPlaces, geoLevel, workforce]);
 
+  // Denominator for "% of region" KPIs. Always sums county totals so the
+  // unincorporated commerce (county total − named-place sum) is captured.
+  // regionAggregate above still drives the RegionKpis display + "X places"
+  // label so the headline tile reads consistently with the ranked list,
+  // but the percentage divides by the true county-collected total.
+  const regionTotalForPct = useMemo<RegionAggregate>(() => {
+    return aggregateCommerce(filteredCounties, workforce, 'county');
+  }, [filteredCounties, workforce]);
+
   const selectionAggregate = useMemo<RegionAggregate | null>(() => {
     if (totalSelected === 0) return null;
     if (activeCounties.length > 0) {
@@ -102,12 +114,52 @@ export function CommerceMapStrip({
   }, [totalSelected, activePlaces, activeCounties, workforce]);
 
   const rankedRows = useMemo(() => {
-    const rows = (geoLevel === 'county' ? filteredCounties : filteredPlaces).map((e) => ({
-      id: 'zip' in e ? e.zip : e.geoid,
+    if (geoLevel === 'county') {
+      // County mode — the counties themselves are the ranked rows, so
+      // unincorporated residuals are not meaningful (each county already
+      // shows its full total).
+      return filteredCounties
+        .map((e) => ({ id: e.geoid, name: e.name, value: variant.extract(e.latest), interactive: true }))
+        .filter((r) => r.value != null)
+        .sort((a, b) => (b.value as number) - (a.value as number));
+    }
+    // Place mode — surface named places plus an "Unincorporated {County}"
+    // row per in-scope county. The residual = countyTotal − sum(placeTotals
+    // in that county). Mirrors the CommerceComparisons pie's residual logic
+    // (CommerceComparisons.tsx:562–585) so the two surfaces agree.
+    type Row = { id: string; name: string; value: number | null; interactive: boolean };
+    const placeRows: Row[] = filteredPlaces.map((e) => ({
+      id: e.zip,
       name: e.name,
       value: variant.extract(e.latest),
+      interactive: true,
     }));
-    return rows
+    const unincorpRows: Row[] = [];
+    for (const c of filteredCounties) {
+      const countyTotal = variant.extract(c.latest);
+      if (countyTotal == null) continue;
+      let placeSum = 0;
+      for (const p of filteredPlaces) {
+        if (p.countyGeoid !== c.geoid) continue;
+        const v = variant.extract(p.latest);
+        if (v != null) placeSum += v;
+      }
+      const residual = countyTotal - placeSum;
+      // Skip when the residual collapses to ~0 or goes negative (vintage
+      // mismatches between county and place feeds can produce small
+      // negatives — show the named places only in that case).
+      if (residual <= countyTotal * 0.001) continue;
+      const shortName = c.name.replace(/ County$/, '');
+      unincorpRows.push({
+        id: `unincorp-${c.geoid}`,
+        name: `Unincorporated ${shortName}`,
+        value: residual,
+        // No place entity behind the row — clicks would have nothing to
+        // select, so we render them as read-only data points.
+        interactive: false,
+      });
+    }
+    return [...placeRows, ...unincorpRows]
       .filter((r) => r.value != null)
       .sort((a, b) => (b.value as number) - (a.value as number));
   }, [filteredCounties, filteredPlaces, geoLevel, variant]);
@@ -160,22 +212,21 @@ export function CommerceMapStrip({
     return `Selected · ${totalSelected} ${totalSelected === 1 ? 'item' : 'items'}`;
   })();
 
-  // % of region — denominators come from regionAggregate (the *filtered*
-  // region) so a county filter narrows the baseline: county-only view reads
-  // 100%; selecting a place inside the county shows that place's share of
-  // the county.
+  // % of region — denominators come from `regionTotalForPct` (county sums,
+  // which include unincorporated). A county filter still narrows the
+  // baseline because `filteredCounties` reduces to that one county. When
+  // no county filter is active the denominator is the full 3-county
+  // total; selecting Glenwood Springs reads as its share of the
+  // Garfield + Pitkin + Eagle total instead of the named-places-only
+  // sum, so the KPI accounts for unincorporated commerce.
   const headlinePctOfRegion =
-    regionAggregate[variant.trendField] > 0
-      ? headlineAggregate[variant.trendField] / regionAggregate[variant.trendField]
+    regionTotalForPct[variant.trendField] > 0
+      ? headlineAggregate[variant.trendField] / regionTotalForPct[variant.trendField]
       : null;
   const workforcePctOfRegion =
-    regionAggregate.workforce > 0
-      ? headlineAggregate.workforce / regionAggregate.workforce
+    regionTotalForPct.workforce > 0
+      ? headlineAggregate.workforce / regionTotalForPct.workforce
       : null;
-
-  const showSingleDetail = !multiSelect && totalSelected === 1;
-  const singleEntity: ContextPlaceEntry | ContextCountyEntry | null =
-    showSingleDetail ? (activePlaces[0] ?? activeCounties[0] ?? null) : null;
 
   return (
     <div className="px-3 flex flex-col gap-2">
@@ -218,34 +269,22 @@ export function CommerceMapStrip({
           color={accent}
           valueFormat={variant.format}
         />
-        {singleEntity ? (
-          <SingleEntityKpis
-            entity={singleEntity}
-            variant={variant}
-            workforce={workforce}
-            accent={accent}
-            regionTotal={regionAggregate[variant.trendField]}
-            regionWorkforce={regionAggregate.workforce}
-            onClear={onClearSelections}
-          />
-        ) : (
-          <RankedListCard
-            rows={rankedRows}
-            variant={variant}
-            selectedIds={
-              activeCounties.length > 0
-                ? new Set([...selectedCountyGeoids])
-                : new Set([...selectedZips])
-            }
-            onSelect={(id) =>
-              activeCounties.length > 0 || geoLevel === 'county'
-                ? onSelectCounty(id)
-                : onSelectZip(id)
-            }
-            geoLevel={geoLevel}
-            accent={accent}
-          />
-        )}
+        <RankedListCard
+          rows={rankedRows}
+          variant={variant}
+          selectedIds={
+            activeCounties.length > 0
+              ? new Set([...selectedCountyGeoids])
+              : new Set([...selectedZips])
+          }
+          onSelect={(id) =>
+            geoLevel === 'county' || activeCounties.length > 0
+              ? onToggleCounty(id)
+              : onToggleZip(id)
+          }
+          geoLevel={geoLevel}
+          accent={accent}
+        />
       </div>
     </div>
   );
@@ -376,7 +415,10 @@ function RankedListCard({
   geoLevel,
   accent,
 }: {
-  rows: Array<{ id: string; name: string; value: number | null }>;
+  // `interactive: false` rows render as read-only context (used for the
+  // "Unincorporated {County}" residual rows — they have no underlying
+  // place entity to select).
+  rows: Array<{ id: string; name: string; value: number | null; interactive?: boolean }>;
   variant: CommerceMetric;
   selectedIds: Set<string>;
   onSelect: (id: string) => void;
@@ -396,19 +438,26 @@ function RankedListCard({
         {rows.map((r) => {
           const pct = r.value != null && max > 0 ? r.value / max : 0;
           const active = selectedIds.has(r.id);
+          const interactive = r.interactive !== false;
           return (
             <li key={r.id}>
               <button
                 type="button"
-                onClick={() => onSelect(r.id)}
+                onClick={interactive ? () => onSelect(r.id) : undefined}
+                disabled={!interactive}
                 className="w-full text-left flex items-center gap-2 px-1 py-1 rounded transition-colors"
                 style={{
                   background: active ? `${accent}29` : 'transparent',
+                  cursor: interactive ? 'pointer' : 'default',
+                  opacity: interactive ? 1 : 0.75,
                 }}
               >
                 <span
                   className="text-[10px] truncate w-[90px] shrink-0"
-                  style={{ color: active ? accent : 'var(--text-h)' }}
+                  style={{
+                    color: active ? accent : 'var(--text-h)',
+                    fontStyle: interactive ? undefined : 'italic',
+                  }}
                   title={r.name}
                 >
                   {r.name}
@@ -433,82 +482,6 @@ function RankedListCard({
           );
         })}
       </ul>
-    </div>
-  );
-}
-
-function SingleEntityKpis({
-  entity,
-  variant,
-  workforce,
-  accent,
-  regionTotal,
-  regionWorkforce,
-  onClear,
-}: {
-  entity: ContextPlaceEntry | ContextCountyEntry;
-  variant: CommerceMetric;
-  workforce: WorkforceTotals;
-  accent: string;
-  regionTotal: number;
-  regionWorkforce: number;
-  onClear: () => void;
-}) {
-  const latest = entity.latest;
-  const isPlace = 'zip' in entity;
-  const wf = isPlace
-    ? workforce.byZip.get(entity.zip) ?? null
-    : workforce.byCountyGeoid.get(entity.geoid) ?? null;
-  const value = variant.extract(latest);
-  const pctOfRegion = value != null && regionTotal > 0 ? value / regionTotal : null;
-  const wfPctOfRegion = wf != null && regionWorkforce > 0 ? wf / regionWorkforce : null;
-
-  return (
-    <div
-      className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden"
-      style={{ borderColor: accent }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <span
-            className="inline-block w-2 h-2 rounded-full"
-            style={{ background: accent }}
-          />
-          <div
-            className="text-[10px] font-semibold uppercase tracking-wider truncate"
-            style={{ color: accent }}
-          >
-            {entity.name}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClear}
-          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded hover:bg-white/10"
-          style={{ color: 'var(--text-dim)' }}
-        >
-          Clear
-        </button>
-      </div>
-      <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
-        <SubjectKpiCard
-          label={variant.label}
-          value={variant.format(value)}
-          sublabel={pctOfRegion != null ? `${(pctOfRegion * 100).toFixed(1)}% of region` : undefined}
-          active
-        />
-        <SubjectKpiCard
-          label="Workforce"
-          value={wf != null ? Math.round(wf).toLocaleString() : '—'}
-          sublabel={
-            wfPctOfRegion != null
-              ? `${(wfPctOfRegion * 100).toFixed(1)}% of region`
-              : 'inbound + local'
-          }
-        />
-        <SubjectKpiCard label="Retail" value={variant.format(numOrNull(latest?.cdorRetailSales))} size="sm" />
-        <SubjectKpiCard label="Taxable" value={variant.format(numOrNull(latest?.cdorNetTaxableSales))} size="sm" />
-      </div>
     </div>
   );
 }
