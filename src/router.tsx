@@ -9,6 +9,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import App from './App';
 import { DashboardView } from './views/DashboardView';
 import { WorkforceMapView } from './views/maps/WorkforceMapView';
+import { ActivityMapView } from './views/maps/ActivityMapView';
 import { DemographicsMapView } from './views/maps/DemographicsMapView';
 import { HousingMapView } from './views/maps/HousingMapView';
 import { CommerceMapView } from './views/maps/CommerceMapView';
@@ -21,6 +22,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <DashboardView /> },
       { path: 'map/workforce', element: <WorkforceMapView /> },
+      { path: 'map/activity', element: <ActivityMapView /> },
       { path: 'map/demographics', element: <DemographicsMapView /> },
       { path: 'map/housing', element: <HousingMapView /> },
       { path: 'map/commerce', element: <CommerceMapView /> },

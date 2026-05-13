@@ -15,6 +15,8 @@ import { Outlet } from 'react-router-dom';
 import { TopBar } from './components/TopBar';
 import { useFlowData } from './lib/useFlowData';
 import type { FlowData } from './lib/useFlowData';
+import { usePlacerData } from './lib/usePlacerData';
+import type { PlacerData } from './types/placer';
 import type { GeoLevel, MapLayerKind } from './components/maps/SubjectMapOverlay';
 
 export interface MapSubjectState {
@@ -43,11 +45,17 @@ export interface MapSubjectState {
 
 export interface AppOutletContext {
   data: FlowData;
+  placer: PlacerData | null;
   mapState: MapSubjectState;
 }
 
 export default function App() {
   const { data, isLoading, error } = useFlowData();
+  // Placer.ai zip-origin bundle — fail-open. The hook returns null until the
+  // four metric JSONs + summary exist under public/data/placer/; in that
+  // state the Activity surfaces render a friendly notice instead of failing
+  // the whole shell.
+  const { data: placer } = usePlacerData();
 
   // Shared map-subject state — kept in App so it survives Demographics ↔
   // Housing ↔ Commerce route changes (App is a layout route, never unmounts
@@ -155,6 +163,7 @@ export default function App() {
 
   const ctx: AppOutletContext = {
     data,
+    placer,
     mapState: {
       geoLevel,
       countyFilter,

@@ -376,7 +376,7 @@ function Sparkline({
 // ---------------------------------------------------------------------------
 // Card chrome
 // ---------------------------------------------------------------------------
-function Card({
+export function Card({
   title,
   subtitle,
   children,
@@ -1546,7 +1546,7 @@ export function CardsForOd({
 //
 // `withinZip` (optional) injects a within-ZIP commute row immediately above
 // the pinned "All Other Locations" residual, mirroring the left-panel layout.
-function PartnerList({
+export function PartnerList({
   partners,
   denominator,
   withinZip,
@@ -2415,7 +2415,7 @@ function PassThroughList({
   );
 }
 
-function PassThroughCard({
+export function PassThroughCard({
   anchorZip,
   anchorPlace,
   passThrough,

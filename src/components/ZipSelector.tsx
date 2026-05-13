@@ -20,6 +20,11 @@ interface Props {
   // DashboardTile) without changes.
   selectedCounty?: WorkforceCountyFilter;
   onSelectCounty?: (county: WorkforceCountyFilter) => void;
+  // When provided, the anchor chip row is restricted to ZIPs in this list
+  // (intersected with ANCHOR_ZIPS). Used by the Activity map view to surface
+  // only the anchor destinations Placer.ai actually covers (81601/81623).
+  // Free-text search is unaffected.
+  anchorAllowList?: ReadonlyArray<string>;
 }
 
 const COUNTY_OPTIONS: ReadonlyArray<{ key: WorkforceCountyFilter; label: string }> = [
@@ -36,15 +41,16 @@ export function ZipSelector({
   hideSearch = false,
   selectedCounty = 'all',
   onSelectCounty,
+  anchorAllowList,
 }: Props) {
   const [query, setQuery] = useState('');
-  const anchorZips = useMemo(
-    () =>
-      ANCHOR_ZIPS.map((z) => zips.find((x) => x.zip === z))
-        .filter(Boolean)
-        .filter((z) => isAnchorInCounty((z as ZipMeta).zip, selectedCounty)) as ZipMeta[],
-    [zips, selectedCounty],
-  );
+  const anchorZips = useMemo(() => {
+    const allow = anchorAllowList ? new Set(anchorAllowList) : null;
+    return ANCHOR_ZIPS.map((z) => zips.find((x) => x.zip === z))
+      .filter(Boolean)
+      .filter((z) => isAnchorInCounty((z as ZipMeta).zip, selectedCounty))
+      .filter((z) => (allow ? allow.has((z as ZipMeta).zip) : true)) as ZipMeta[];
+  }, [zips, selectedCounty, anchorAllowList]);
 
   const queryLower = query.trim().toLowerCase();
   // Search results dedupe by place name so multi-ZIP places (e.g. Eagle

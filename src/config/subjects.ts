@@ -7,6 +7,7 @@
 
 export type SubjectId =
   | 'workforce'
+  | 'activity'
   | 'demographics'
   | 'housing'
   | 'commerce'
@@ -15,12 +16,19 @@ export type SubjectId =
 export interface Subject {
   id: SubjectId;
   label: string;
-  // Matches the existing <section id="..."> in DashboardView so the
+  // Matches an existing <section id="..."> in DashboardView so the
   // IntersectionObserver and smooth-scroll behavior keep working unchanged.
+  // For map-only subjects whose dashboard surface lives inside another
+  // subject's section (e.g. Activity → Workforce), this can point at the
+  // host section.
   dashboardSectionId: SubjectId;
   hasMap: boolean;
   // Only present when hasMap === true.
   mapPath?: string;
+  // When false, the subject is hidden from the dashboard sidebar top-level
+  // list (it still contributes a sub-anchor via the host section's
+  // subSections). Defaults to true when omitted.
+  hasDashboard?: boolean;
   // Optional dashboard sub-section anchors. Rendered as a nested link list
   // under each top-level entry in DashboardView's left sidebar. Anchors
   // must match `id="…"` attributes on the corresponding DOM wrappers.
@@ -38,7 +46,16 @@ export const SUBJECTS: ReadonlyArray<Subject> = [
       { id: 'workforce-overview', label: 'Workforce' },
       { id: 'workforce-wap', label: 'Work Area Profile' },
       { id: 'workforce-od', label: 'Origin–Destination Flows' },
+      { id: 'workforce-activity', label: 'Activity (Placer)' },
     ],
+  },
+  {
+    id: 'activity',
+    label: 'Activity',
+    dashboardSectionId: 'workforce',
+    hasMap: true,
+    mapPath: '/map/activity',
+    hasDashboard: false,
   },
   {
     id: 'demographics',
@@ -87,6 +104,12 @@ export const SUBJECTS: ReadonlyArray<Subject> = [
 export const MAP_SUBJECTS: ReadonlyArray<Subject & { mapPath: string }> =
   SUBJECTS.filter((s): s is Subject & { mapPath: string } => s.hasMap && !!s.mapPath);
 
+// Subjects that appear in the dashboard sidebar's top-level list. Map-only
+// subjects (hasDashboard: false) are excluded — their dashboard surface
+// lives inside another subject's section as a sub-anchor.
+export const DASHBOARD_SUBJECTS: ReadonlyArray<Subject> =
+  SUBJECTS.filter((s) => s.hasDashboard !== false);
+
 export const SUBJECT_BY_ID: Record<SubjectId, Subject> = SUBJECTS.reduce(
   (acc, s) => {
     acc[s.id] = s;
@@ -96,7 +119,14 @@ export const SUBJECT_BY_ID: Record<SubjectId, Subject> = SUBJECTS.reduce(
 );
 
 export function isSubjectId(value: string | undefined): value is SubjectId {
-  return value === 'workforce' || value === 'demographics' || value === 'housing' || value === 'commerce' || value === 'economic';
+  return (
+    value === 'workforce' ||
+    value === 'activity' ||
+    value === 'demographics' ||
+    value === 'housing' ||
+    value === 'commerce' ||
+    value === 'economic'
+  );
 }
 
 export function isMapSubjectId(value: string | undefined): value is SubjectId {

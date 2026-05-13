@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import type { AppOutletContext } from '../App';
-import { SUBJECTS, type SubjectId } from '../config/subjects';
+import { DASHBOARD_SUBJECTS, type SubjectId } from '../config/subjects';
 import { MapLinkButton } from '../components/MapLinkButton';
 import type {
   DirectionFilter,
@@ -58,15 +58,19 @@ import { WorkAreaProfileSection } from '../components/dashboard/WorkAreaProfileS
 import { CommerceTimeSeriesChart } from '../components/dashboard/CommerceTimeSeriesChart';
 import { CommerceDataSetTile } from '../components/dashboard/CommerceDataSetTile';
 import { EconomicResearchSection } from '../components/dashboard/EconomicResearchSection';
+import { ActivityWorkforceSection } from '../components/dashboard/ActivityWorkforceSection';
 
 // Section iteration order in the dashboard (sidebar nav + top-to-bottom
 // scroll order). Drives off the shared subjects config so any future
 // subject reordering/addition flows automatically into both surfaces.
-const SECTIONS = SUBJECTS;
+// Map-only subjects (hasDashboard: false, e.g., Activity/Placer) are
+// filtered out by DASHBOARD_SUBJECTS — their dashboard surface lives
+// inside the host section's sub-anchor list.
+const SECTIONS = DASHBOARD_SUBJECTS;
 type SectionId = SubjectId;
 
 export function DashboardView() {
-  const { data } = useOutletContext<AppOutletContext>();
+  const { data, placer } = useOutletContext<AppOutletContext>();
   const {
     flowsInbound: rawFlowsInbound,
     flowsOutbound: rawFlowsOutbound,
@@ -686,6 +690,17 @@ export function DashboardView() {
               onSelectPartner={setSelectedPartner}
             />
             </div>
+
+            {/* Activity (Placer.ai) — parallel of the workforce-overview
+                block fed from Placer.ai Employee Counts. Inherits the
+                dashboard's selectedZip / directionFilter; the section
+                handles the Placer-anchor coercion internally. */}
+            <ActivityWorkforceSection
+              data={data}
+              placer={placer}
+              selectedZip={selectedZip}
+              directionFilter={directionFilter}
+            />
 
           </section>
 

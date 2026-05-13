@@ -70,6 +70,9 @@ export interface FlowRow {
   // older cached JSON still type-check; build-data.py emits this on every
   // row from the 2026-04-29 build forward.
   segments?: FlowSegments;
+  // Provenance flag for adapter-fed rows (Placer.ai, etc). Absent on every
+  // build-data.py LODES row — readers default to 'lodes' when undefined.
+  sourceKind?: 'lodes' | 'placer';
 }
 
 export interface ZipMeta {

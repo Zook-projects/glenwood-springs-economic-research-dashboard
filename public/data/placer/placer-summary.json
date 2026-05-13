@@ -1,0 +1,25 @@
+{
+  "destAnchors": [
+    "81601",
+    "81623"
+  ],
+  "lastBuilt": "2026-05-13",
+  "metrics": {
+    "employee-counts": {
+      "label": "Employee Origins \u2014 Employee Counts",
+      "rowCount": 66
+    },
+    "employee-visits": {
+      "label": "Employee Origins \u2014 Employee Visits",
+      "rowCount": 71
+    },
+    "visitor-counts": {
+      "label": "Visitor Origins \u2014 Visitor Counts",
+      "rowCount": 19778
+    },
+    "visitor-visits": {
+      "label": "Visitor Origins \u2014 Visitor Visits",
+      "rowCount": 20136
+    }
+  }
+}

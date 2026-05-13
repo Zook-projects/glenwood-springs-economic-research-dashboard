@@ -28,6 +28,9 @@ data/context-cache/
 # Census ZIP→city crosswalk cache (pulled by scripts/zip_places.py)
 data/uszips-cache/
 
+# Placer.ai source workbook — proprietary, staged manually by the user
+data/placer/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
