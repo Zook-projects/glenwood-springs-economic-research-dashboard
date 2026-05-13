@@ -54,7 +54,6 @@ export function IndustryMapStrip({
 }: Props) {
   const sectorMeta =
     industrySector === 'all' ? null : NAICS20_BY_KEY[industrySector];
-  const sectorLabel = sectorMeta ? sectorMeta.label : 'All Sectors';
   const sectorColor = sectorMeta ? sectorMeta.color : 'var(--accent)';
 
   // Per-anchor totals across every workplace ZIP. Used by the rankings card
