@@ -1729,6 +1729,9 @@ export function WorkplaceMetricsCard({
   flowIndex,
   driveDistance,
   segmentFilter,
+  metricLabels,
+  commuteDistanceMultiplier,
+  commuteDistanceLabel,
 }: {
   scope: string;
   selectedZip: string;
@@ -1756,6 +1759,18 @@ export function WorkplaceMetricsCard({
   flowIndex: Map<CorridorId, CorridorFlowEntry[]>;
   driveDistance: DriveDistanceMap | null;
   segmentFilter: SegmentFilter;
+  // Optional label overrides — the Activity map passes these in when "Avg.
+  // Daily Trips" is active so the card reads in trip units. Each field
+  // falls back to the LODES default ("Total Workers" / "Total Resident
+  // Workers") when omitted.
+  metricLabels?: { total?: string };
+  // Multiplier applied to the Average commute distance metric — Activity
+  // map passes 2 so the value reads as a round-trip figure. Optional label
+  // override pairs with it so the metric row can rename to
+  // "Average roundtrip commute distance". Defaults preserve the LODES
+  // one-way framing.
+  commuteDistanceMultiplier?: number;
+  commuteDistanceLabel?: string;
 }) {
   const isInbound = mode === 'inbound';
 
@@ -1842,7 +1857,9 @@ export function WorkplaceMetricsCard({
   const cardTitle = isInbound
     ? `${scope} · Workplace Metrics`
     : `${scope} · Residence Metrics`;
-  const totalLabel = isInbound ? 'Total Workers' : 'Total Resident Workers';
+  const totalLabel =
+    metricLabels?.total ??
+    (isInbound ? 'Total Workers' : 'Total Resident Workers');
   const totalShareLabel = isInbound ? 'workforce' : 'resident workers';
   const crossShareLabel = isInbound
     ? 'Cross-ZIP commute share'
@@ -1891,15 +1908,18 @@ export function WorkplaceMetricsCard({
         value={fmtPct(isPartnerScoped ? partnerCrossShare : anchorCrossShare)}
         sub={isPartnerScoped ? crossShareSubPartner : crossShareSubAnchor}
       />
-      <MetricRow
-        label="Average commute distance"
-        value={
-          (isPartnerScoped ? partnerAvgMiles : anchorAvgMiles) > 0
-            ? `${(isPartnerScoped ? partnerAvgMiles : anchorAvgMiles).toFixed(1)} mi`
-            : '—'
-        }
-        sub={isPartnerScoped ? distanceSubPartner : distanceSub}
-      />
+      {(() => {
+        const distMul = commuteDistanceMultiplier ?? 1;
+        const rawMiles = isPartnerScoped ? partnerAvgMiles : anchorAvgMiles;
+        const scaled = rawMiles * distMul;
+        return (
+          <MetricRow
+            label={commuteDistanceLabel ?? 'Average commute distance'}
+            value={scaled > 0 ? `${scaled.toFixed(1)} mi` : '—'}
+            sub={isPartnerScoped ? distanceSubPartner : distanceSub}
+          />
+        );
+      })()}
       <MetricRow
         label="Top corridor"
         value={topCorridor?.label ?? '—'}

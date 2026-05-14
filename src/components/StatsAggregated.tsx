@@ -32,6 +32,7 @@ import {
   computeAnchorRankings,
   isAnchorInCounty,
   meanCommuteMiles,
+  sumDistanceWeightedMiles,
   type AnchorRanking,
   type DriveDistanceMap,
 } from '../lib/flowQueries';
@@ -77,6 +78,25 @@ interface Props {
   // whose centroid sits in the selected county. 'all' (default) keeps all 11
   // anchors visible.
   workforceCounty?: WorkforceCountyFilter;
+  // Optional label + copy overrides for the workforce hero. The Activity
+  // view passes 'Average Daily Trips' (or similar) here when a trip metric
+  // is active so the headline + sub-lines read in the right units. Each
+  // field falls back to the LODES default when omitted.
+  metricLabels?: {
+    total?: string;            // default: 'Total Workforce'
+    sub?: string;              // default: 'working within the 11 workplace ZIP codes'
+    descriptor?: string;       // default: 'mapped workforce'
+    // When set, inserts a Vehicle-Miles item after Average commute distance.
+    // Value comes from sumDistanceWeightedMiles against the (already
+    // cross-filtered) inbound flows, so the row tracks the Workplace ZIP
+    // rankings the way the rest of the accordion does.
+    vehicleMiles?: { label: string; sub?: string };
+  };
+  // Multiplier applied to the average commute distance tile. Activity map
+  // passes 2 so the aggregate reads as round-trip miles; LODES Workforce
+  // map leaves it undefined and stays at one-way. The sub-line auto-amends
+  // with "· round-trip" whenever the multiplier doubles the value.
+  commuteDistanceMultiplier?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,10 +138,14 @@ function buildItems(
 
   const summary = computeAggregated(directionFilteredInbound);
   const unfiltered = computeAggregated(flowsInbound);
-  const avgMiles = meanCommuteMiles(flowsInbound, zips, driveDistance ?? undefined);
+  const distanceMultiplier = props.commuteDistanceMultiplier ?? 1;
+  const avgMiles =
+    meanCommuteMiles(flowsInbound, zips, driveDistance ?? undefined) *
+    distanceMultiplier;
+  const roundTripSuffix = distanceMultiplier === 2 ? ' · round-trip' : '';
   const distanceSub = driveDistance
-    ? 'worker-weighted, road miles, cross-ZIP only'
-    : 'worker-weighted, straight-line × 1.25, cross-ZIP only';
+    ? `worker-weighted, road miles, cross-ZIP only${roundTripSuffix}`
+    : `worker-weighted, straight-line × 1.25, cross-ZIP only${roundTripSuffix}`;
   const filterActive = directionFilter !== 'all';
 
   const mappedShare =
@@ -134,6 +158,16 @@ function buildItems(
   // rendering. Keeps the legacy mappedShare computation around so the
   // override has a sensible fallback when axis === 'total'.
   void mappedShare;
+  // Universe word powering the cross-zip / outside-* sub-lines. Activity
+  // view passes "average daily trips" / "trips" when a trip metric is
+  // active so the copy reads "X% of mapped {trips}" instead of "of mapped
+  // workforce". When set, drop the "commutes" verb from the cross-zip
+  // sub-line since "X% of mapped trips commutes" reads ungrammatical.
+  const universe = props.metricLabels?.descriptor;
+  const crossZipSub = universe
+    ? `${fmtPct(summary.crossZipShare)} of mapped ${universe}`
+    : `${fmtPct(summary.crossZipShare)} of mapped workforce commutes`;
+
   const items: StatItem[] = [
     {
       id: 'workforce',
@@ -146,7 +180,7 @@ function buildItems(
       id: 'cross-zip',
       label: 'Cross-ZIP commuters',
       value: fmtInt(summary.crossZipCommuters),
-      sub: `${fmtPct(summary.crossZipShare)} of mapped workforce commutes`,
+      sub: crossZipSub,
     },
     {
       id: 'avg-distance',
@@ -155,6 +189,24 @@ function buildItems(
       sub: distanceSub,
     },
   ];
+
+  // Optional Vehicle Miles row — Activity map passes this in for the trip
+  // metrics. Computed off the already-narrowed flowsInbound so the row
+  // cross-filters with the Workplace ZIP rankings.
+  const vmConfig = props.metricLabels?.vehicleMiles;
+  if (vmConfig) {
+    const vehicleMiles = sumDistanceWeightedMiles(
+      flowsInbound,
+      zips,
+      driveDistance ?? undefined,
+    );
+    items.push({
+      id: 'vehicle-miles',
+      label: vmConfig.label,
+      value: vehicleMiles > 0 ? `${fmtInt(vehicleMiles)} mi` : '—',
+      sub: vmConfig.sub,
+    });
+  }
 
   if (topCorridorInbound) {
     items.push({
@@ -174,13 +226,14 @@ function buildItems(
     });
   }
 
+  const outsideUnitNoun = universe ?? 'workforce';
   items.push({
     id: 'outside-anchors',
     label: 'Outside of the ZIP Codes',
     value: fmtPct(unfiltered.outsideAnchorsShare),
     sub: filterActive
-      ? 'inbound workforce with residence outside the 11 ZIP codes · direction filter N/A'
-      : 'inbound workforce with residence outside the 11 ZIP codes',
+      ? `inbound ${outsideUnitNoun} with residence outside the 11 ZIP codes · direction filter N/A`
+      : `inbound ${outsideUnitNoun} with residence outside the 11 ZIP codes`,
   });
 
   items.push({
@@ -188,8 +241,8 @@ function buildItems(
     label: 'Outside of the State',
     value: fmtPct(unfiltered.outsideStateShare),
     sub: filterActive
-      ? 'inbound workforce with out-of-state or unmappable residence · direction filter N/A'
-      : 'inbound workforce with out-of-state or unmappable residence',
+      ? `inbound ${outsideUnitNoun} with out-of-state or unmappable residence · direction filter N/A`
+      : `inbound ${outsideUnitNoun} with out-of-state or unmappable residence`,
   });
 
   return items;
@@ -830,12 +883,28 @@ export function StatsAggregated(props: Props) {
   );
   const heroAxisShare = heroAxisBaseline > 0 ? heroAxisValue / heroAxisBaseline : 0;
   const heroDescriptor = HERO_BY_AXIS[rankingAxis];
+  // metricLabels override the hero label + sub-lines only when the rankings
+  // axis is 'total' — the inbound/outbound/local hero copies already
+  // describe narrower slices the user wouldn't read as a metric rename.
+  const useMetricCopy = rankingAxis === 'total' && !!props.metricLabels;
+  const heroLabel =
+    useMetricCopy && props.metricLabels?.total
+      ? props.metricLabels.total
+      : heroDescriptor.label;
+  const heroSub =
+    useMetricCopy && props.metricLabels?.sub
+      ? props.metricLabels.sub
+      : heroDescriptor.sub;
+  const heroSecondaryDescriptor =
+    useMetricCopy && props.metricLabels?.descriptor
+      ? props.metricLabels.descriptor
+      : heroDescriptor.secondaryDescriptor;
   const heroItem: StatItem = {
     id: 'workforce',
-    label: heroDescriptor.label,
+    label: heroLabel,
     value: fmtInt(heroAxisValue),
-    sub: heroDescriptor.sub,
-    secondary: `${fmtPct(heroAxisShare)} of ${heroDescriptor.secondaryDescriptor}`,
+    sub: heroSub,
+    secondary: `${fmtPct(heroAxisShare)} of ${heroSecondaryDescriptor}`,
   };
   // Replace the buildItems placeholder workforce row with the axis-aware
   // hero so LayoutHero (which keys off id === 'workforce') picks up the

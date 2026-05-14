@@ -542,6 +542,44 @@ export function meanCommuteMiles(
 }
 
 /**
+ * Sum of (workerCount × one-way miles) across every cross-zip row. Used by
+ * the Activity map's vehicle-miles tiles — multiply by 2 externally if the
+ * caller wants round-trip totals. Self-flows and ALL_OTHER are excluded
+ * (no meaningful distance). Distance source priority matches
+ * meanCommuteMiles.
+ */
+export function sumDistanceWeightedMiles(
+  flows: FlowRow[],
+  zips: ZipMeta[],
+  driveDistance?: DriveDistanceMap,
+): number {
+  const zipIndex = new Map<string, ZipMeta>();
+  for (const z of zips) zipIndex.set(z.zip, z);
+
+  let total = 0;
+  for (const f of flows) {
+    if (f.originZip === f.destZip) continue;
+    if (f.originZip === 'ALL_OTHER' || f.destZip === 'ALL_OTHER') continue;
+
+    let miles: number | null = null;
+    if (driveDistance) {
+      const hit = driveDistance[driveDistanceKey(f.originZip, f.destZip)];
+      if (hit) miles = hit.miles;
+    }
+    if (miles == null) {
+      const o = zipIndex.get(f.originZip);
+      const d = zipIndex.get(f.destZip);
+      if (!o || !d) continue;
+      if (o.lat == null || o.lng == null || d.lat == null || d.lng == null) continue;
+      miles = haversineMiles(o.lat, o.lng, d.lat, d.lng) * HAVERSINE_DETOUR_FACTOR;
+    }
+
+    total += miles * f.workerCount;
+  }
+  return total;
+}
+
+/**
  * Classify an O-D pair by geographic bearing using both axes.
  * Returns 'neutral' for self-flows, ALL_OTHER endpoints, missing centroids,
  * same-cluster pairs (both components small), and pairs where the N-S

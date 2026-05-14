@@ -66,6 +66,38 @@ interface Props {
   // only the dual Top inflow / Top outflow lists. When undefined (default)
   // it renders the full stack — used by CommuteView / DashboardTile.
   slot?: 'tiles' | 'lists';
+  // Optional metric-specific tile rendered after the inbound/outbound tile.
+  // Activity map uses this to surface "Average Commute Distance" (workers),
+  // "Average Daily Vehicle Miles" (daily-trips), or "Total Vehicle Miles"
+  // (annual trips). Hidden when omitted — LODES Workforce map leaves this
+  // null and the section stops at the inbound tile.
+  distanceTile?: { label: string; value: string; sub?: string };
+  // Optional label + sub-line overrides for the tile headers and their
+  // descriptive copy. The Activity view feeds these in when a trip metric
+  // is active so every reference to "workforce" / "workers" reads as
+  // "trips" / "average daily trips" instead. Each field falls back to the
+  // LODES default when omitted.
+  metricLabels?: {
+    total?: string;     // default: 'Total Workforce'
+    inbound?: string;   // default: 'Total Inbound Workers'
+    outbound?: string;  // default: 'Total Outbound Workers'
+    // Substitutes for the universe word in "{X}% of {shareUnitInbound}"
+    // (default 'workforce') and "{X}% of {shareUnitOutbound}" (default
+    // 'residents') under the inbound-tile sub-line.
+    shareUnitInbound?: string;
+    shareUnitOutbound?: string;
+    // Substitutes for the directional phrase under the inbound-tile —
+    // replaces "{N} workers commute INTO {place}" (inbound) and
+    // "{N} residents commute OUT to other valley ZIPs" (outbound). When
+    // set, render as `{N} {directionInbound}` (or outbound).
+    directionInbound?: string;   // e.g. "average daily trips into"
+    directionOutbound?: string;  // e.g. "average daily trips out of"
+    // Substitutes for "people live and work in" in the Total Workforce
+    // tile's sub-line. The value scales with the metric (the within-zip
+    // self-flow goes through the same * 2 / 365 transform), so the phrase
+    // needs to describe trips not people when a trip metric is active.
+    liveAndWorkPhrase?: string;  // e.g. "avg. daily trips within"
+  };
 }
 
 export function StatsForZip({
@@ -87,6 +119,8 @@ export function StatsForZip({
   onSelectPartner,
   onReset,
   slot,
+  metricLabels,
+  distanceTile,
 }: Props) {
   // Block-selection branch — pivot on the synthetic bundle (label, total,
   // top-N partner rows). Mode-aware: outbound (default) shows where the
@@ -217,7 +251,9 @@ export function StatsForZip({
   );
 
   const directionLabel =
-    mode === 'inbound' ? 'workers commute INTO' : 'residents commute OUT to other valley ZIPs';
+    mode === 'inbound'
+      ? metricLabels?.directionInbound ?? 'workers commute INTO'
+      : metricLabels?.directionOutbound ?? 'residents commute OUT to other valley ZIPs';
   const subjectLabel =
     mode === 'inbound' ? meta.place : `${meta.place} residents`;
 
@@ -261,7 +297,7 @@ export function StatsForZip({
       {showTiles ? (
       <div className="py-2.5 border-b" style={{ borderColor: 'var(--rule)' }}>
         <div className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
-          Total Workforce
+          {metricLabels?.total ?? 'Total Workforce'}
         </div>
         <div className="mt-1 flex items-baseline gap-2">
           <span className="text-xl font-semibold tnum" style={{ color: 'var(--text-h)' }}>
@@ -270,14 +306,14 @@ export function StatsForZip({
           <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
             {selectedPartner
               ? `from ${selectedPartner.place} (${fmtPct(partnerWorkers / Math.max(1, workforce))} of ${meta.place} workforce)`
-              : `workers employed in ${meta.place}`}
+              : `${metricLabels?.total ? 'by ' : ''}workers employed in ${meta.place}`}
           </span>
         </div>
         <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-dim)' }}>
           <span className="tnum" style={{ color: 'var(--text-h)' }}>
             {fmtInt(liveAndWork)}
           </span>{' '}
-          people live and work in {meta.place}
+          {metricLabels?.liveAndWorkPhrase ?? 'people live and work in'} {meta.place}
         </div>
       </div>
       ) : null}
@@ -285,7 +321,9 @@ export function StatsForZip({
       {showTiles ? (
       <div className="py-2.5 border-b" style={{ borderColor: 'var(--rule)' }}>
         <div className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
-          {mode === 'inbound' ? 'Total Inbound Workers' : 'Total Outbound Workers'}
+          {mode === 'inbound'
+            ? metricLabels?.inbound ?? 'Total Inbound Workers'
+            : metricLabels?.outbound ?? 'Total Outbound Workers'}
         </div>
         <div className="mt-1 flex items-baseline gap-2">
           <span className="text-xl font-semibold tnum" style={{ color: 'var(--text-h)' }}>
@@ -299,7 +337,9 @@ export function StatsForZip({
             ) : (
               <>
                 {fmtPct(headlineTotal / Math.max(1, anchorTotal))} of{' '}
-                {mode === 'inbound' ? 'workforce' : 'residents'}
+                {mode === 'inbound'
+                  ? metricLabels?.shareUnitInbound ?? 'workforce'
+                  : metricLabels?.shareUnitOutbound ?? 'residents'}
               </>
             )}
           </span>
@@ -312,6 +352,30 @@ export function StatsForZip({
             : `${fmtInt(headlineTotal)} ${directionLabel} ${mode === 'inbound' ? meta.place : ''}`}
         </div>
       </div>
+      ) : null}
+
+      {showTiles && distanceTile ? (
+        <div className="py-2.5 border-b" style={{ borderColor: 'var(--rule)' }}>
+          <div
+            className="text-[10px] font-medium uppercase tracking-wider"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            {distanceTile.label}
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span
+              className="text-xl font-semibold tnum"
+              style={{ color: 'var(--text-h)' }}
+            >
+              {distanceTile.value}
+            </span>
+          </div>
+          {distanceTile.sub ? (
+            <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              {distanceTile.sub}
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {showLists && (() => {

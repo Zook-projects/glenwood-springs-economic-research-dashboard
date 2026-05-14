@@ -51,7 +51,7 @@ export const SUBJECTS: ReadonlyArray<Subject> = [
   },
   {
     id: 'activity',
-    label: 'Activity',
+    label: 'GPS Activity',
     dashboardSectionId: 'workforce',
     hasMap: true,
     mapPath: '/map/activity',

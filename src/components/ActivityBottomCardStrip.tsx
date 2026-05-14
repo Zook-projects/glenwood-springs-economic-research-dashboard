@@ -59,6 +59,16 @@ interface Props {
   flowIndex: Map<CorridorId, CorridorFlowEntry[]>;
   driveDistance: DriveDistanceMap | null;
   directionFilter: DirectionFilter;
+  // Optional override for the WorkplaceMetricsCard's headline label — the
+  // view feeds in "Average Daily Trips" when the daily-trips metric is
+  // active. Falls through to the LODES default ("Total Workers") when
+  // omitted.
+  workplaceMetricLabels?: { total?: string };
+  // Round-trip framing for the Average commute distance row. Activity map
+  // sets these unconditionally so the card reads "Average roundtrip
+  // commute distance · {2 × one-way}".
+  workplaceCommuteDistanceMultiplier?: number;
+  workplaceCommuteDistanceLabel?: string;
   // Pass-through cross-filter state, lifted to the parent so it survives
   // anchor switches.
   passThroughOrigin: { place: string; zips: string[] } | null;
@@ -83,6 +93,9 @@ export function ActivityBottomCardStrip({
   flowIndex,
   driveDistance,
   directionFilter,
+  workplaceMetricLabels,
+  workplaceCommuteDistanceMultiplier,
+  workplaceCommuteDistanceLabel,
   passThroughOrigin,
   passThroughDest,
   onPassThroughOriginChange,
@@ -197,6 +210,9 @@ export function ActivityBottomCardStrip({
         flowIndex={flowIndex}
         driveDistance={driveDistance}
         segmentFilter={{ axis: 'all', buckets: [] }}
+        metricLabels={workplaceMetricLabels}
+        commuteDistanceMultiplier={workplaceCommuteDistanceMultiplier}
+        commuteDistanceLabel={workplaceCommuteDistanceLabel}
       />
       <Card
         title={`${scope} · Top inflow`}

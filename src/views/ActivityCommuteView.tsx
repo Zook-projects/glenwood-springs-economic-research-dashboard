@@ -39,6 +39,8 @@ import {
   filterByDirection,
   filterForSelection,
   isAnchorZip,
+  meanCommuteMiles,
+  sumDistanceWeightedMiles,
 } from '../lib/flowQueries';
 import { buildCorridorFlowIndex, buildVisibleCorridorMap } from '../lib/corridors';
 import { computeBucketBreaks } from '../lib/arcMath';
@@ -99,23 +101,75 @@ export function ActivityCommuteView({ data, placer }: Props) {
     return metric === 'workers' ? placer.employeeCounts : placer.employeeVisits;
   }, [placer, metric]);
 
+  // Stats-panel label + copy overrides used by StatsAggregated, StatsForZip,
+  // and the WorkplaceMetricsCard. Both trip metrics reframe the
+  // worker-counting headlines and sub-lines as trip volumes; workers keeps
+  // the LODES-style copy. `descriptor` is the unit word that replaces
+  // "workforce" / "residents" in cross-zip / outside-* sub-lines (the
+  // "of mapped workforce" / "inbound workforce with residence outside…"
+  // copy is awkward when the values are trips not workers).
+  const statsMetricLabels = useMemo(() => {
+    if (metric === 'workers') return undefined;
+    if (metric === 'daily-trips') {
+      const unit = 'avg. daily trips';
+      return {
+        total: 'Average Daily Trips',
+        inbound: 'Average Daily Inbound Trips',
+        outbound: 'Average Daily Outbound Trips',
+        sub: 'avg. daily trips by workers',
+        descriptor: unit,
+        shareUnitInbound: unit,
+        shareUnitOutbound: unit,
+        directionInbound: 'avg. daily trips into',
+        directionOutbound: 'avg. daily trips out of',
+        liveAndWorkPhrase: 'avg. daily trips within',
+        vehicleMiles: {
+          label: 'Average Daily Vehicle Miles',
+          sub: 'avg. daily trips × one-way distance · cross-ZIP only',
+        },
+      };
+    }
+    // metric === 'trips' — raw annual round-trip volumes.
+    const unit = 'trips';
+    return {
+      total: 'Total Trips',
+      inbound: 'Total Inbound Trips',
+      outbound: 'Total Outbound Trips',
+      sub: 'annual round-trips by workers',
+      descriptor: unit,
+      shareUnitInbound: unit,
+      shareUnitOutbound: unit,
+      directionInbound: 'trips into',
+      directionOutbound: 'trips out of',
+      liveAndWorkPhrase: 'annual round-trips within',
+      vehicleMiles: {
+        label: 'Total Vehicle Miles',
+        sub: 'annual trips × one-way distance · cross-ZIP only',
+      },
+    };
+  }, [metric]);
+
   // Adapt the chosen Placer metric into the FlowRow shape every
   // downstream surface consumes. Placer's workbook publishes one direction
   // (origin = residence, dest = anchor-workplace), so flowsInbound is the
   // canonical projection.
   //
-  // daily-trips scaling: Employee Visits publishes an annual one-way visit
-  // count. Multiplying by 2 captures the return leg of each round-trip
-  // commute and dividing by 365 collapses the annual figure to an
-  // average-daily volume — the framing TMB / transportation partners
-  // actually use. Workers and trips modes pass the raw values through.
-  // Stored as a float; fmtInt rounds at display time so aggregations stay
+  // Trip scaling: Employee Visits publishes an annual one-way visit count.
+  // Both trip metrics multiply by 2 to capture the return leg of each
+  // round-trip commute; daily-trips additionally divides by 365 to
+  // surface an average-daily volume — the framing TMB / transportation
+  // partners actually use. Workers mode passes the raw values through.
+  // Stored as floats; fmtInt rounds at display time so aggregations stay
   // precise even at corridor-level rollups.
   const flowsInbound = useMemo<FlowRow[]>(() => {
     if (!placerMetricFile) return [];
     const rows = toFlowRows(placerMetricFile, zips, flowsByOdKey);
-    if (metric !== 'daily-trips') return rows;
-    return rows.map((r) => ({ ...r, workerCount: (r.workerCount * 2) / 365 }));
+    if (metric === 'workers') return rows;
+    const denom = metric === 'daily-trips' ? 365 : 1;
+    return rows.map((r) => ({
+      ...r,
+      workerCount: (r.workerCount * 2) / denom,
+    }));
   }, [placerMetricFile, zips, flowsByOdKey, metric]);
 
   const destAnchors = useMemo<readonly string[]>(
@@ -229,6 +283,62 @@ export function ActivityCommuteView({ data, placer }: Props) {
     () => filterForSelection(directionFilteredFlows, selectedZip, effectiveMode),
     [directionFilteredFlows, selectedZip, effectiveMode],
   );
+
+  // Per-anchor distance / vehicle-miles tile shown below the inbound tile in
+  // the left panel. Content varies by metric:
+  //   workers     → "Average Commute Distance" (round-trip, miles)
+  //   daily-trips → "Average Daily Vehicle Miles" (sum trips × one-way miles)
+  //   trips       → "Total Vehicle Miles" (sum trips × one-way miles)
+  // Scoped to the selected anchor's flows in the active mode so the tile
+  // tracks the headline above it.
+  const distanceTile = useMemo(() => {
+    if (!selectedZip) return null;
+    const dataset = mode === 'inbound' ? directionFilteredInbound : directionFilteredOutbound;
+    let anchorFlows = dataset.filter((f) =>
+      mode === 'inbound' ? f.destZip === selectedZip : f.originZip === selectedZip,
+    );
+    // Cross-filter by the partner row clicked in the top inflow/outflow
+    // list — matches the narrowing the headline tiles above already
+    // apply when a partner is active.
+    if (selectedPartner) {
+      const partnerSet = new Set(selectedPartner.zips);
+      anchorFlows = anchorFlows.filter((f) =>
+        mode === 'inbound' ? partnerSet.has(f.originZip) : partnerSet.has(f.destZip),
+      );
+    }
+    const dd = driveDistance ?? undefined;
+    if (metric === 'workers') {
+      const roundTrip = meanCommuteMiles(anchorFlows, zips, dd) * 2;
+      return {
+        label: 'Average Commute Distance',
+        value: roundTrip > 0 ? `${roundTrip.toFixed(1)} mi` : '—',
+        sub: 'worker-weighted, round-trip · cross-ZIP only',
+      };
+    }
+    const totalVMT = sumDistanceWeightedMiles(anchorFlows, zips, dd);
+    if (metric === 'daily-trips') {
+      return {
+        label: 'Average Daily Vehicle Miles',
+        value: totalVMT > 0 ? `${fmtInt(totalVMT)} mi` : '—',
+        sub: 'avg. daily trips × one-way distance · cross-ZIP only',
+      };
+    }
+    // metric === 'trips' — annual round-trip volumes × one-way distance.
+    return {
+      label: 'Total Vehicle Miles',
+      value: totalVMT > 0 ? `${fmtInt(totalVMT)} mi` : '—',
+      sub: 'annual trips × one-way distance · cross-ZIP only',
+    };
+  }, [
+    selectedZip,
+    selectedPartner,
+    mode,
+    metric,
+    directionFilteredInbound,
+    directionFilteredOutbound,
+    zips,
+    driveDistance,
+  ]);
 
   const referenceCorridorMap = useMemo(() => {
     if (!corridorIndex || !flowIndex) return null;
@@ -373,7 +483,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
             className="text-[11px] uppercase tracking-widest mb-2"
             style={{ color: 'var(--accent)' }}
           >
-            Placer.ai · Activity Map V1
+            Placer.ai · GPS Activity Map V1
           </div>
           <div className="text-xs normal-case">
             Placer.ai bundle not loaded. Run{' '}
@@ -422,7 +532,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
           / heatmap / industry / segment-filter / block-selection toggles
           are intentionally absent (v1 spec). */}
       <aside
-        className="glass shrink-0 w-full md:w-[320px] md:h-full md:overflow-y-auto"
+        className="glass shrink-0 w-full md:w-[380px] md:h-full md:overflow-y-auto"
         style={{ borderRight: '1px solid var(--panel-border)' }}
       >
         <div className="px-3 md:px-4 py-4 flex flex-col gap-4">
@@ -437,7 +547,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 className="text-[10px] font-semibold uppercase tracking-[0.18em]"
                 style={{ color: 'var(--accent)' }}
               >
-                Placer.ai · Activity Map V1
+                Placer.ai · GPS Activity Map V1
               </span>
             </div>
             <h1
@@ -480,6 +590,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
               directionFilter={directionFilter}
               topCorridorInbound={topCorridorInbound}
               topCorridorOutbound={topCorridorOutbound}
+              metricLabels={statsMetricLabels}
+              commuteDistanceMultiplier={2}
               zips={zips}
               driveDistance={driveDistance}
               layout="stacked"
@@ -503,6 +615,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
               selectedPartner={selectedPartner}
               onSelectPartner={handleSelectPartner}
               onReset={() => handleSelectZip(null)}
+              metricLabels={statsMetricLabels}
+              distanceTile={distanceTile ?? undefined}
             />
           )}
         </div>
@@ -584,6 +698,11 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 placerFlowsInbound={flowsInbound}
                 placerAnchors={destAnchors}
                 placerYear={placerYear}
+                workplaceMetricLabels={
+                  statsMetricLabels && { total: statsMetricLabels.total }
+                }
+                workplaceCommuteDistanceMultiplier={2}
+                workplaceCommuteDistanceLabel="Average roundtrip commute distance"
                 zips={zips}
                 corridorIndex={corridorIndex}
                 corridorNodes={corridorNodes}
