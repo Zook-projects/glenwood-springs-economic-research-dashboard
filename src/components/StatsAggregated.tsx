@@ -204,7 +204,7 @@ function buildItems(
       id: 'vehicle-miles',
       label: vmConfig.label,
       value: vehicleMiles > 0 ? `${fmtInt(vehicleMiles)} mi` : '—',
-      sub: vmConfig.sub,
+      sub: vmConfig.sub ?? '',
     });
   }
 
