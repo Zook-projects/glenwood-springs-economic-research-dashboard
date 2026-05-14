@@ -323,6 +323,10 @@ export function DashboardView() {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Record<SectionId, HTMLElement | null>>({
     workforce: null,
+    // Activity has no top-level dashboard section — its sub-anchor lives
+    // inside Workforce. The key is required by the Record type, but the
+    // ref is never read for Activity.
+    activity: null,
     demographics: null,
     commerce: null,
     economic: null,

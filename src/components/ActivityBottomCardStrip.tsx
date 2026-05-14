@@ -112,25 +112,32 @@ export function ActivityBottomCardStrip({
   // Partner lists. Compute on-the-fly from the Placer flow set since
   // Placer doesn't ship a pre-built od-summary index. Each entry mirrors
   // the LODES OdPartner shape so PartnerList renders without changes.
+  // `zips` and `trend` are required by the LODES OdPartner shape; the empty
+  // trend reflects Placer's single-vintage data (PartnerList ignores it
+  // because we don't pass selectedPartner-trend wiring through the card).
   const topInflowPartners = useMemo<OdPartner[]>(() => {
-    const rows = flowsInbound
+    const rows: OdPartner[] = flowsInbound
       .filter((f) => f.destZip === selectedZip && f.originZip !== selectedZip)
       .map((f) => ({
         zip: f.originZip,
         place: zipPlaces.get(f.originZip) ?? f.originPlace,
         workers: f.workerCount,
+        zips: [f.originZip],
+        trend: [],
       }));
     rows.sort((a, b) => b.workers - a.workers);
     return rows.slice(0, TOP_PARTNER_LIMIT);
   }, [flowsInbound, selectedZip, zipPlaces]);
 
   const topOutflowPartners = useMemo<OdPartner[]>(() => {
-    const rows = flowsOutbound
+    const rows: OdPartner[] = flowsOutbound
       .filter((f) => f.originZip === selectedZip && f.destZip !== selectedZip)
       .map((f) => ({
         zip: f.destZip,
         place: zipPlaces.get(f.destZip) ?? f.destPlace,
         workers: f.workerCount,
+        zips: [f.destZip],
+        trend: [],
       }));
     rows.sort((a, b) => b.workers - a.workers);
     return rows.slice(0, TOP_PARTNER_LIMIT);

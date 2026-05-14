@@ -43,8 +43,18 @@ const WORKFORCE: ColorRamp = {
   accent: '#f0a932',
 };
 
+// Activity — Placer purple sequential. Like WORKFORCE this is present for
+// completeness; the Activity map uses corridor coloring driven by the
+// scoped --accent CSS variable rather than this ramp.
+const ACTIVITY: ColorRamp = {
+  palette: ['#1a0f29', '#2e1d4a', '#4d2f7a', '#7a52b8', '#b794f4'],
+  noData: 'rgba(255,255,255,0.06)',
+  accent: '#b794f4',
+};
+
 export const RAMPS: Record<SubjectId, ColorRamp> = {
   workforce: WORKFORCE,
+  activity: ACTIVITY,
   demographics: DEMOGRAPHICS,
   housing: HOUSING,
   commerce: COMMERCE,
