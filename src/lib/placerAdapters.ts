@@ -1,12 +1,17 @@
 // placerAdapters — projects PlacerRow[] into the FlowRow shape every
 // downstream visualization consumes (MapCanvas corridor pipeline,
-// StatsAggregated, StatsForZip). The corridor path is borrowed from the
-// LODES flow indexed by `flowsByOdKey` so Placer rows ride the same
-// corridor graph without a separate routing pass; rows whose ZIP pair
-// LODES doesn't know about emit an empty corridorPath and become
-// stats-only (the map skips zero-length paths cleanly).
+// StatsAggregated, StatsForZip).
+//
+// Corridor path resolution per row:
+//   1. Baked path from the metric file's interned `paths` table
+//      (build-placer.py routes every row through the corridor graph,
+//      sending out-of-area origins via the appropriate I-70 gateway).
+//   2. Fallback: legacy lookup against the LODES `flowsByOdKey` index for
+//      metric files emitted before routing was baked in (pre-2026-05).
+//   3. Empty path — the row becomes stats-only (zero-length paths are
+//      skipped cleanly by MapCanvas).
 
-import type { FlowRow, ZipMeta } from '../types/flow';
+import type { CorridorId, FlowRow, ZipMeta } from '../types/flow';
 import type { PlacerMetricFile, PlacerRow } from '../types/placer';
 
 function buildPlaceLookup(zips: ZipMeta[]): Map<string, string> {
@@ -34,12 +39,12 @@ export function toFlowRows(
 ): FlowRow[] {
   const placeOf = buildPlaceLookup(zips);
   const year = yearFromIso(metricFile.lastBuilt);
+  const pathTable = metricFile.paths;
   const rows: FlowRow[] = [];
 
   for (const r of metricFile.rows) {
     if (!Number.isFinite(r.value) || r.value <= 0) continue;
-    const key = `${r.originZip}-${r.destZip}`;
-    const lodes = flowsByOdKey.get(key);
+    const corridorPath = resolveCorridorPath(r, pathTable, flowsByOdKey);
     rows.push({
       originZip: r.originZip,
       originPlace: placeOf.get(r.originZip) ?? r.originZip,
@@ -49,10 +54,23 @@ export function toFlowRows(
       year,
       source: 'LEHD',
       sourceKind: 'placer',
-      corridorPath: lodes?.corridorPath ?? [],
+      corridorPath,
     });
   }
   return rows;
+}
+
+function resolveCorridorPath(
+  row: PlacerRow,
+  pathTable: CorridorId[][] | undefined,
+  flowsByOdKey: Map<string, FlowRow>,
+): CorridorId[] {
+  if (pathTable && typeof row.pathId === 'number') {
+    const baked = pathTable[row.pathId];
+    if (baked) return baked;
+  }
+  const lodes = flowsByOdKey.get(`${row.originZip}-${row.destZip}`);
+  return lodes?.corridorPath ?? [];
 }
 
 /**

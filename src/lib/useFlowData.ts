@@ -8,8 +8,10 @@ import type {
   CorridorFlowEntry,
   CorridorGraph,
   CorridorId,
+  CorridorNode,
   CorridorRecord,
   FlowRow,
+  NodeId,
   PassThroughFile,
   ZipMeta,
 } from '../types/flow';
@@ -32,6 +34,11 @@ export interface FlowData {
   flowsRegional: FlowRow[];
   zips: ZipMeta[];
   corridorIndex: Map<CorridorId, CorridorRecord>;
+  // Node-by-id lookup carrying the associated ZIP (when any). Used by the
+  // Placer pass-through derivation to map corridor-path node IDs back to
+  // their anchor ZIP. Empty for the LODES surface — that pipeline reads
+  // pass-through from a pre-built JSON.
+  corridorNodes: Map<NodeId, CorridorNode>;
   flowIndex: Map<CorridorId, CorridorFlowEntry[]>;
   // O(1) lookup of FlowRow by `${originZip}-${destZip}`. Built once from
   // flowsInbound ∪ flowsOutbound (anchor↔anchor pairs dedupe to the inbound
@@ -67,6 +74,8 @@ export function useFlowData(): UseFlowDataResult {
   const [zips, setZips] = useState<ZipMeta[] | null>(null);
   const [corridorIndex, setCorridorIndex] =
     useState<Map<CorridorId, CorridorRecord> | null>(null);
+  const [corridorNodes, setCorridorNodes] =
+    useState<Map<NodeId, CorridorNode> | null>(null);
   const [flowIndex, setFlowIndex] =
     useState<Map<CorridorId, CorridorFlowEntry[]> | null>(null);
   const [racFile, setRacFile] = useState<RacFile | null>(null);
@@ -127,6 +136,9 @@ export function useFlowData(): UseFlowDataResult {
         setFlowsOutbound(fo);
         setZips(z);
         setCorridorIndex(indexCorridors(cg));
+        const nodeMap = new Map<NodeId, CorridorNode>();
+        for (const n of cg.nodes) nodeMap.set(n.id, n);
+        setCorridorNodes(nodeMap);
         setFlowIndex(buildCorridorFlowIndex(fi, fo));
         setRacFile(rac);
         setWacFile(wac);
@@ -232,6 +244,7 @@ export function useFlowData(): UseFlowDataResult {
     !!flowsByOdKey &&
     !!zips &&
     !!corridorIndex &&
+    !!corridorNodes &&
     !!flowIndex &&
     !!racFile &&
     !!wacFile &&
@@ -245,6 +258,7 @@ export function useFlowData(): UseFlowDataResult {
         flowsByOdKey: flowsByOdKey!,
         zips: zips!,
         corridorIndex: corridorIndex!,
+        corridorNodes: corridorNodes!,
         flowIndex: flowIndex!,
         racFile: racFile!,
         wacFile: wacFile!,

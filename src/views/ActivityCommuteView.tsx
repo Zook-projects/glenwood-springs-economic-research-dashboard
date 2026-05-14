@@ -15,6 +15,10 @@ import { ActiveFiltersOverlay } from '../components/ActiveFiltersOverlay';
 import { ZipSelector } from '../components/ZipSelector';
 import { DirectionToggle } from '../components/DirectionToggle';
 import { ModeToggle } from '../components/ModeToggle';
+import {
+  ActivityMetricToggle,
+  type ActivityMetric,
+} from '../components/ActivityMetricToggle';
 import { StatsAggregated } from '../components/StatsAggregated';
 import { StatsForZip } from '../components/StatsForZip';
 import { CorridorTooltipBody } from '../components/CorridorTooltipBody';
@@ -36,7 +40,7 @@ import {
   filterForSelection,
   isAnchorZip,
 } from '../lib/flowQueries';
-import { buildVisibleCorridorMap } from '../lib/corridors';
+import { buildCorridorFlowIndex, buildVisibleCorridorMap } from '../lib/corridors';
 import { computeBucketBreaks } from '../lib/arcMath';
 import { fmtInt } from '../lib/format';
 
@@ -74,21 +78,67 @@ function clampTooltipAnchor(
 }
 
 export function ActivityCommuteView({ data, placer }: Props) {
-  const { zips, corridorIndex, flowIndex, flowsByOdKey, driveDistance, passThrough } = data;
+  // flowIndex from `data` is built from LODES flows only — it doesn't know
+  // about Placer-specific OD pairs (e.g., out-of-state visitor origins
+  // routed through GW_E / GW_W). We rebuild a Placer-scoped flowIndex
+  // below so every Placer flow with a baked corridorPath shows up on the
+  // corridor strokes rather than falling through to the dashed
+  // off-corridor branches.
+  const { zips, corridorIndex, corridorNodes, flowsByOdKey, driveDistance } = data;
 
-  // Adapt Placer Employee Counts rows into the FlowRow shape every
+  // Activity metric the left-panel toggle drives:
+  //   - workers     → Employee Counts (annual unique workers per OD pair)
+  //   - daily-trips → Employee Visits × 2 / 365 (round-trip × annualization)
+  //   - trips       → Employee Visits (annual visit count, unscaled)
+  // Both source sheets share the same row structure, so the pipeline
+  // downstream doesn't care which is active.
+  const [metric, setMetric] = useState<ActivityMetric>('workers');
+
+  const placerMetricFile = useMemo(() => {
+    if (!placer) return null;
+    return metric === 'workers' ? placer.employeeCounts : placer.employeeVisits;
+  }, [placer, metric]);
+
+  // Adapt the chosen Placer metric into the FlowRow shape every
   // downstream surface consumes. Placer's workbook publishes one direction
   // (origin = residence, dest = anchor-workplace), so flowsInbound is the
   // canonical projection.
+  //
+  // daily-trips scaling: Employee Visits publishes an annual one-way visit
+  // count. Multiplying by 2 captures the return leg of each round-trip
+  // commute and dividing by 365 collapses the annual figure to an
+  // average-daily volume — the framing TMB / transportation partners
+  // actually use. Workers and trips modes pass the raw values through.
+  // Stored as a float; fmtInt rounds at display time so aggregations stay
+  // precise even at corridor-level rollups.
   const flowsInbound = useMemo<FlowRow[]>(() => {
-    if (!placer) return [];
-    return toFlowRows(placer.employeeCounts, zips, flowsByOdKey);
-  }, [placer, zips, flowsByOdKey]);
+    if (!placerMetricFile) return [];
+    const rows = toFlowRows(placerMetricFile, zips, flowsByOdKey);
+    if (metric !== 'daily-trips') return rows;
+    return rows.map((r) => ({ ...r, workerCount: (r.workerCount * 2) / 365 }));
+  }, [placerMetricFile, zips, flowsByOdKey, metric]);
 
   const destAnchors = useMemo<readonly string[]>(
     () => placer?.summary.destAnchors ?? [],
     [placer],
   );
+
+  // Data vintage from the workbook's Year column (e.g., 2025). Used by the
+  // Placer pass-through card so its subtitle matches the surrounding cards
+  // ("Placer 2025"). Falls back to the lastBuilt year, then to the calendar
+  // year, for legacy summary files that lack `dataYear`.
+  const placerYear = useMemo<number>(() => {
+    const explicit = placer?.summary.dataYear;
+    if (typeof explicit === 'number' && explicit > 1900 && explicit < 3000) {
+      return explicit;
+    }
+    const iso = placer?.summary.lastBuilt;
+    if (iso) {
+      const y = Number(iso.slice(0, 4));
+      if (Number.isFinite(y) && y > 1900 && y < 3000) return y;
+    }
+    return new Date().getUTCFullYear();
+  }, [placer]);
 
   // Synthetic outbound dataset — same row universe as flowsInbound, but
   // filtered to rows whose origin (= residence) is itself one of Placer's
@@ -103,6 +153,17 @@ export function ActivityCommuteView({ data, placer }: Props) {
     return flowsInbound.filter((f) => anchorSet.has(f.originZip));
   }, [flowsInbound, destAnchors]);
   const flowsRegional = flowsInbound;
+
+  // Placer-scoped corridor flow index. Mirrors the LODES flowIndex built in
+  // useFlowData but spans the Placer flows so corridor aggregation finds
+  // gateway-routed visitor origins (NYC → Aspen via GW_E_GWS, etc).
+  // Without this, only Placer flows whose OD pair LODES happens to share
+  // would land on a corridor; everything else fell through to the dashed
+  // off-corridor branches.
+  const flowIndex = useMemo(
+    () => buildCorridorFlowIndex(flowsInbound, flowsOutbound),
+    [flowsInbound, flowsOutbound],
+  );
 
   // Selection + filter state. Mode = user's Inbound / Outbound choice when
   // an anchor is selected; in the no-selection (aggregate) view effectiveMode
@@ -398,6 +459,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
             aggregate={selectionKind === 'aggregate'}
           />
 
+          <ActivityMetricToggle value={metric} onChange={setMetric} />
+
           <DirectionToggle value={directionFilter} onChange={handleDirectionChange} />
 
           <ZipSelector
@@ -490,19 +553,6 @@ export function ActivityCommuteView({ data, placer }: Props) {
             odBlocks={null}
           />
 
-          {/* Credit chip — docked above the bottom card strip when an
-              anchor is selected (strip height ≈ 240px on desktop), or at
-              the bottom of the map otherwise. */}
-          <div
-            className="absolute right-4 glass rounded-md px-3 py-1.5 text-[11px] z-30 pointer-events-none"
-            style={{
-              color: 'var(--text-h)',
-              bottom: selectedZip ? 252 : 16,
-            }}
-          >
-            Created by Jacob Zook
-          </div>
-
           <ActiveFiltersOverlay
             directionFilter={directionFilter}
             onClearDirection={() => handleDirectionChange('all')}
@@ -531,11 +581,14 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 scope={zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip}
                 flowsInbound={directionFilteredInbound}
                 flowsOutbound={directionFilteredOutbound}
+                placerFlowsInbound={flowsInbound}
+                placerAnchors={destAnchors}
+                placerYear={placerYear}
                 zips={zips}
                 corridorIndex={corridorIndex}
+                corridorNodes={corridorNodes}
                 flowIndex={flowIndex}
                 driveDistance={driveDistance}
-                passThrough={passThrough}
                 directionFilter={directionFilter}
                 passThroughOrigin={passThroughOrigin}
                 passThroughDest={passThroughDest}

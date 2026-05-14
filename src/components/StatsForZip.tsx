@@ -325,41 +325,53 @@ export function StatsForZip({
           directionFilteredOutbound != null;
 
         if (useDualList) {
-          const inflowData = buildTopNData(
-            directionFilteredInbound!,
-            flowsInbound,
-            meta,
-            'inbound',
-          );
-          const outflowData = buildTopNData(
-            directionFilteredOutbound!,
-            flowsOutbound!,
-            meta,
-            'outbound',
-          );
+          // The Activity view also takes this branch but renders only one
+          // list at a time, mode-driven: Inbound shows inflow, Outbound
+          // shows outflow. When mode === 'regional' (no anchor selected)
+          // showLists isn't entered, so we never need to render both here.
+          // The Dashboard view's parallel rendering happens in its own
+          // surface — this component only powers the in-map anchor panel.
+          const showInflow = mode !== 'outbound';
+          const showOutflow = mode !== 'inbound';
+          const inflowData = showInflow
+            ? buildTopNData(directionFilteredInbound!, flowsInbound, meta, 'inbound')
+            : null;
+          const outflowData = showOutflow
+            ? buildTopNData(directionFilteredOutbound!, flowsOutbound!, meta, 'outbound')
+            : null;
+
+          const colCount = (showInflow ? 1 : 0) + (showOutflow ? 1 : 0);
+          const gridClass =
+            colCount === 2
+              ? 'grid grid-cols-1 md:grid-cols-2 gap-x-6'
+              : 'grid grid-cols-1';
 
           return (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-              <TopNList
-                title={`Top inflow into ${meta.place}`}
-                data={inflowData}
-                meta={meta}
-                residualLabel="All Other Locations"
-                emptyMessage="No cross-ZIP flows in this direction."
-                filterActive={filterActive}
-                selectedPartner={selectedPartner}
-                onSelectPartner={onSelectPartner}
-              />
-              <TopNList
-                title={`Top outflow from ${meta.place}`}
-                data={outflowData}
-                meta={meta}
-                residualLabel="Other destinations"
-                emptyMessage="No cross-ZIP flows in this direction."
-                filterActive={filterActive}
-                selectedPartner={null}
-                onSelectPartner={null}
-              />
+            <div className={gridClass}>
+              {inflowData && (
+                <TopNList
+                  title={`Top inflow into ${meta.place}`}
+                  data={inflowData}
+                  meta={meta}
+                  residualLabel="All Other Locations"
+                  emptyMessage="No cross-ZIP flows in this direction."
+                  filterActive={filterActive}
+                  selectedPartner={selectedPartner}
+                  onSelectPartner={onSelectPartner}
+                />
+              )}
+              {outflowData && (
+                <TopNList
+                  title={`Top outflow from ${meta.place}`}
+                  data={outflowData}
+                  meta={meta}
+                  residualLabel="Other destinations"
+                  emptyMessage="No cross-ZIP flows in this direction."
+                  filterActive={filterActive}
+                  selectedPartner={showOutflow && !showInflow ? selectedPartner : null}
+                  onSelectPartner={showOutflow && !showInflow ? onSelectPartner : null}
+                />
+              )}
             </div>
           );
         }

@@ -10,8 +10,10 @@
 //   3. Top inflow — partner ZIPs commuting INTO the selected anchor.
 //   4. Top outflow — partner ZIPs the selected anchor's residents commute
 //      TO (limited to other Placer destination anchors in v1).
-//   5. Pass through traffic — LODES east↔west I-70 transits at the anchor
-//      (regional context; unchanged from the LODES surface).
+//   5. Pass through traffic — derived from Placer flows whose corridor path
+//      passes through the anchor (any intermediate node match). Built
+//      client-side via buildPlacerPassThrough so this card reads from the
+//      same dataset as the rest of the strip rather than the LODES file.
 //
 // Workplace Area Characteristics (Age / Wages / NAICS-3) and the workplace
 // total-jobs sparkline are intentionally absent — Placer doesn't publish
@@ -27,29 +29,35 @@ import {
 import type {
   CorridorFlowEntry,
   CorridorId,
+  CorridorNode,
   CorridorRecord,
   DirectionFilter,
   FlowRow,
-  PassThroughFile,
+  NodeId,
   ZipMeta,
 } from '../types/flow';
 import type { OdPartner } from '../types/lodes';
 import type { DriveDistanceMap } from '../lib/flowQueries';
+import { buildPlacerPassThrough } from '../lib/placerPassThrough';
 import { fmtInt, fmtPct } from '../lib/format';
 
 interface Props {
   selectedZip: string;
   scope: string;                        // place label of the selected anchor
-  flowsInbound: FlowRow[];              // Placer inbound (origin → anchor)
-  flowsOutbound: FlowRow[];             // Placer synthetic outbound (anchor → other anchor)
+  flowsInbound: FlowRow[];              // Placer inbound, direction-filtered
+  flowsOutbound: FlowRow[];             // Placer synthetic outbound, direction-filtered
+  // Full Placer inbound flow set BEFORE the direction filter — drives the
+  // pass-through derivation. Direction filtering inside the PassThroughCard
+  // (East / West / valley) re-applies at render time against the resulting
+  // pair list, so we feed it the unfiltered universe.
+  placerFlowsInbound: FlowRow[];
+  placerAnchors: readonly string[];
+  placerYear: number;
   zips: ZipMeta[];
   corridorIndex: Map<CorridorId, CorridorRecord>;
+  corridorNodes: Map<NodeId, CorridorNode>;
   flowIndex: Map<CorridorId, CorridorFlowEntry[]>;
   driveDistance: DriveDistanceMap | null;
-  // LODES regional pass-through file — unchanged here; the card surfaces
-  // I-70 transits at the anchor regardless of which dataset drives the
-  // surrounding flow viz.
-  passThrough: PassThroughFile | null;
   directionFilter: DirectionFilter;
   // Pass-through cross-filter state, lifted to the parent so it survives
   // anchor switches.
@@ -66,17 +74,33 @@ export function ActivityBottomCardStrip({
   scope,
   flowsInbound,
   flowsOutbound,
+  placerFlowsInbound,
+  placerAnchors,
+  placerYear,
   zips,
   corridorIndex,
+  corridorNodes,
   flowIndex,
   driveDistance,
-  passThrough,
   directionFilter,
   passThroughOrigin,
   passThroughDest,
   onPassThroughOriginChange,
   onPassThroughDestChange,
 }: Props) {
+  // Placer-derived pass-through traffic file. Memoized on the full inbound
+  // set + corridor graph; direction filtering happens inside the card.
+  const passThrough = useMemo(
+    () =>
+      buildPlacerPassThrough(
+        placerFlowsInbound,
+        corridorIndex,
+        corridorNodes,
+        placerAnchors,
+        placerYear,
+      ),
+    [placerFlowsInbound, corridorIndex, corridorNodes, placerAnchors, placerYear],
+  );
   // ZIP → place lookup. Reused by the partner lists + pass-through card.
   const zipPlaces = useMemo(() => {
     const m = new Map<string, string>();
@@ -186,6 +210,7 @@ export function ActivityBottomCardStrip({
           withinZip={
             withinTotal > 0 ? { zip: selectedZip, workers: withinTotal } : undefined
           }
+          totalRow={{ label: 'Total inflow', value: inflowTotal }}
         />
       </Card>
       <Card
@@ -200,6 +225,7 @@ export function ActivityBottomCardStrip({
           withinZip={
             withinTotal > 0 ? { zip: selectedZip, workers: withinTotal } : undefined
           }
+          totalRow={{ label: 'Total outflow', value: outflowTotal }}
         />
       </Card>
       {passThrough && passThrough.byAnchor[selectedZip] && (
@@ -256,8 +282,11 @@ function WorkforceFlowsCard({ scope, inflow, outflow, within }: WorkforceFlowsCa
       subtitle="Placer 2025 · single vintage"
       width={260}
     >
-      <div className="relative flex flex-col gap-2">
-        <div className="flex items-end justify-around gap-2 h-24">
+      <div className="relative flex flex-col gap-2 flex-1 min-h-0">
+        {/* Bar plot fills the remaining vertical space inside the card —
+            heights scale against `max`, so the tallest value reaches the
+            top of the plot regardless of card height. */}
+        <div className="flex items-end justify-around gap-2 flex-1 min-h-0">
           {bars.map((b) => {
             const heightPct = (b.value / max) * 100;
             return (

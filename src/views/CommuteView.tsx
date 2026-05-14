@@ -329,10 +329,7 @@ export function CommuteView({ data }: CommuteViewProps) {
   // tooltip shows the full breakdown; the hover tooltip is a simplified
   // header-only chip that prompts the user to click for more.
   const [pinned, setPinned] = useState<HoverState | null>(null);
-  // Bottom card strip height — tracked so the credit chip can sit just above
-  // it regardless of which view (aggregate / anchor / non-anchor) is active.
   const bottomStripRef = useRef<HTMLDivElement>(null);
-  const [bottomStripHeight, setBottomStripHeight] = useState<number>(348);
   // Cross-filter state for the pass-through traffic card. Either side can be
   // selected independently; when one is set the opposite section's list
   // narrows to ZIPs paired with the selection (and the map switches to
@@ -403,22 +400,6 @@ export function CommuteView({ data }: CommuteViewProps) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [pinned]);
-
-  // Track BottomCardStrip height so the credit chip can hover just above it.
-  // Strip height changes with view type (aggregate / anchor / non-anchor) and
-  // with segment-filter expansion, so a static offset can't keep the chip
-  // pinned correctly across all states. Depends on `flowsInbound` because the
-  // strip is gated behind a loading guard — the ref is null on first mount
-  // and only populates after data resolves and the post-loading tree renders.
-  useEffect(() => {
-    const el = bottomStripRef.current;
-    if (!el) return;
-    const update = () => setBottomStripHeight(el.offsetHeight);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [flowsInbound]);
 
   // (Data loading lifted to App.tsx via useFlowData — see ../lib/useFlowData.ts.)
 
@@ -1208,20 +1189,6 @@ export function CommuteView({ data }: CommuteViewProps) {
           blocksHidden={blocksHidden}
           odBlocks={odBlocks}
         />
-
-        {/* Credit chip — docked to the right edge just above the bottom
-            card strip. Strip height varies by view type (aggregate / anchor
-            / non-anchor) and by segment-filter expansion; the chip's bottom
-            edge sits 8px above the strip's top edge across all states. */}
-        <div
-          className="absolute right-4 glass rounded-md px-3 py-1.5 text-[11px] z-30 pointer-events-none"
-          style={{
-            color: 'var(--text-h)',
-            bottom: bottomStripHeight + 8,
-          }}
-        >
-          Created by Jacob Zook
-        </div>
 
         {/* Active filter chips — pinned top-left of the map. */}
         <ActiveFiltersOverlay

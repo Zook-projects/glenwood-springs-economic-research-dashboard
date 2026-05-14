@@ -23,7 +23,7 @@ import {
   filterByDirection,
   filterForSelection,
 } from '../../lib/flowQueries';
-import { buildVisibleCorridorMap } from '../../lib/corridors';
+import { buildCorridorFlowIndex, buildVisibleCorridorMap } from '../../lib/corridors';
 import { StatsAggregated } from '../StatsAggregated';
 import { StatsForZip } from '../StatsForZip';
 import { MapLinkButton } from '../MapLinkButton';
@@ -43,7 +43,11 @@ export function ActivityWorkforceSection({
   selectedZip,
   directionFilter,
 }: Props) {
-  const { zips, corridorIndex, flowIndex, flowsByOdKey, driveDistance } = data;
+  // flowIndex from `data` is LODES-only and would miss Placer-specific OD
+  // pairs (out-of-state visitor origins, gateway-routed flows). Rebuild a
+  // Placer-scoped index below so corridor strokes pick up every Placer
+  // flow rather than leaving the new ones as dashed off-corridor branches.
+  const { zips, corridorIndex, flowsByOdKey, driveDistance } = data;
 
   // Adapt Placer Employee Counts → FlowRow[] every memo downstream.
   // Returns empty array when the bundle isn't loaded so memos stay stable.
@@ -63,6 +67,12 @@ export function ActivityWorkforceSection({
   const flowsOutbound = useMemo<FlowRow[]>(
     () => flowsInbound.filter((f) => placerAnchors.has(f.originZip)),
     [flowsInbound, placerAnchors],
+  );
+
+  // Placer-scoped corridor flow index — see comment on the destructure above.
+  const flowIndex = useMemo(
+    () => buildCorridorFlowIndex(flowsInbound, flowsOutbound),
+    [flowsInbound, flowsOutbound],
   );
   // Coerce the dashboard's global selectedZip — only the Placer anchors are
   // valid here; everything else degrades to aggregate.

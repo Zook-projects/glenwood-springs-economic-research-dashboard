@@ -1550,10 +1550,16 @@ export function PartnerList({
   partners,
   denominator,
   withinZip,
+  totalRow,
 }: {
   partners: OdPartner[];
   denominator?: number;
   withinZip?: { zip: string; workers: number };
+  // Optional totals line pinned at the card foot — e.g., the Placer Activity
+  // strip uses this to surface "Total inflow / Total outflow" beneath the
+  // partner list. Value is shown verbatim (caller picks the universe);
+  // percent renders as 100% when the value equals the denominator.
+  totalRow?: { label: string; value: number };
 }) {
   if (partners.length === 0) {
     return (
@@ -1571,7 +1577,8 @@ export function PartnerList({
   // list scrolls within the card's existing height.
   const namedPartners = partners.filter((p) => p.zip !== 'ALL_OTHER');
   const allOther = partners.find((p) => p.zip === 'ALL_OTHER');
-  const showFooter = (withinZip && withinZip.workers > 0) || !!allOther;
+  const showFooter =
+    (withinZip && withinZip.workers > 0) || !!allOther || !!totalRow;
   return (
     <div className="flex flex-col h-full min-h-0 text-[11px] tnum">
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -1626,6 +1633,22 @@ export function PartnerList({
                   </td>
                   <td className="text-right" style={{ color: 'var(--text-dim)' }}>
                     {fmtPct(allOther.workers / total)}
+                  </td>
+                </tr>
+              )}
+              {totalRow && (
+                <tr
+                  className="border-t font-semibold"
+                  style={{ borderColor: 'var(--rule)' }}
+                >
+                  <td className="pr-2 truncate pt-1" style={{ color: 'var(--text-h)' }}>
+                    {totalRow.label}
+                  </td>
+                  <td className="text-right pr-2 pt-1" style={{ color: 'var(--text-h)' }}>
+                    {fmtInt(totalRow.value)}
+                  </td>
+                  <td className="text-right pt-1" style={{ color: 'var(--text-dim)' }}>
+                    {fmtPct(totalRow.value / total)}
                   </td>
                 </tr>
               )}

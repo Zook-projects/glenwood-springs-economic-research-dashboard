@@ -1,25 +1,67 @@
 {
+  "dataYear": 2025,
   "destAnchors": [
     "81601",
-    "81623"
+    "81611",
+    "81615",
+    "81621",
+    "81623",
+    "81630",
+    "81635",
+    "81647",
+    "81650",
+    "81652",
+    "81654"
   ],
   "lastBuilt": "2026-05-13",
   "metrics": {
     "employee-counts": {
       "label": "Employee Origins \u2014 Employee Counts",
-      "rowCount": 66
+      "routing": {
+        "lodes_hit": 278,
+        "routed_anchor": 1,
+        "routed_gateway_e": 1,
+        "routed_gateway_w": 17,
+        "self_loop": 0,
+        "unresolved": 0
+      },
+      "rowCount": 297
     },
     "employee-visits": {
       "label": "Employee Origins \u2014 Employee Visits",
-      "rowCount": 71
+      "routing": {
+        "lodes_hit": 289,
+        "routed_anchor": 1,
+        "routed_gateway_e": 2,
+        "routed_gateway_w": 17,
+        "self_loop": 0,
+        "unresolved": 0
+      },
+      "rowCount": 309
     },
     "visitor-counts": {
       "label": "Visitor Origins \u2014 Visitor Counts",
-      "rowCount": 19778
+      "routing": {
+        "lodes_hit": 1780,
+        "routed_anchor": 11,
+        "routed_gateway_e": 52071,
+        "routed_gateway_w": 13961,
+        "self_loop": 0,
+        "unresolved": 0
+      },
+      "rowCount": 67823
     },
     "visitor-visits": {
       "label": "Visitor Origins \u2014 Visitor Visits",
-      "rowCount": 20136
+      "routing": {
+        "lodes_hit": 1986,
+        "routed_anchor": 11,
+        "routed_gateway_e": 56627,
+        "routed_gateway_w": 15086,
+        "self_loop": 0,
+        "unresolved": 0
+      },
+      "rowCount": 73710
     }
   }
 }
