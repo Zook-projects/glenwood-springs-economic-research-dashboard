@@ -12,7 +12,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapCanvas } from '../components/MapCanvas';
 import { DashboardTile } from '../components/DashboardTile';
 import { BottomCardStrip } from '../components/BottomCardStrip';
-import { IndustryMapStrip } from '../components/maps/IndustryMapStrip';
+import {
+  IndustryMapStrip,
+  INDUSTRY_STRIP_CARD_HEIGHT,
+} from '../components/maps/IndustryMapStrip';
+import { IndustrySectorRankingsCard } from '../components/maps/IndustrySectorRankingsCard';
 import { ActiveFiltersOverlay } from '../components/ActiveFiltersOverlay';
 import type { ViewLayer } from '../components/ViewLayerToggle';
 import type { Naics20Key } from '../types/lodes';
@@ -1208,8 +1212,10 @@ export function CommuteView({ data }: CommuteViewProps) {
 
         {/* Region / Workplace export — top-right of the map. Renders for
             aggregate view (Region) and any anchor/non-anchor selection
-            (Workplace). Hidden when no export is available. */}
-        {(selectionKind === 'aggregate' || selectedZip) && (
+            (Workplace). Hidden when no export is available, and hidden in
+            the Industry metric view where the right-rail Industry Sectors
+            card occupies the same screen real estate. */}
+        {viewLayer !== 'industry' && (selectionKind === 'aggregate' || selectedZip) && (
           <div className="absolute top-2 right-2 md:top-3 md:right-4 z-30">
             <button
               type="button"
@@ -1487,21 +1493,46 @@ export function CommuteView({ data }: CommuteViewProps) {
             commuter-flow cards for a 3-card overview/trend/rankings layout
             that mirrors the Demographics / Commerce / Housing strips. */}
         {viewLayer === 'industry' ? (
-          <div
-            ref={bottomStripRef}
-            className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
-            style={{ paddingBottom: 12 }}
-          >
-            <IndustryMapStrip
-              wacFile={wacFile}
-              zips={zips}
-              selectedZip={selectedZip}
-              industrySector={industrySector}
-              onIndustrySectorChange={setIndustrySector}
-              industryCounty={industryCounty}
-              onSelectZip={handleSelectZip}
-            />
-          </div>
+          <>
+            {/* Right-rail sector rankings card — sits above the bottom strip's
+                Anchors-by-sector column, matching its width via the same
+                px-3 + gap-3 math. Clicking a row sets industrySector
+                identically to the chip row in the left panel. Hidden on
+                mobile where the chip row alone provides selection. */}
+            <div
+              className="absolute z-20 pointer-events-auto hidden md:block"
+              style={{
+                top: 12,
+                right: 12,
+                bottom: INDUSTRY_STRIP_CARD_HEIGHT + 12 + 12,
+                width: 'calc((100% - 48px) / 3)',
+              }}
+            >
+              <IndustrySectorRankingsCard
+                wacFile={wacFile}
+                zips={zips}
+                selectedZip={selectedZip}
+                industrySector={industrySector}
+                onIndustrySectorChange={setIndustrySector}
+                industryCounty={industryCounty}
+              />
+            </div>
+            <div
+              ref={bottomStripRef}
+              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
+              style={{ paddingBottom: 12 }}
+            >
+              <IndustryMapStrip
+                wacFile={wacFile}
+                zips={zips}
+                selectedZip={selectedZip}
+                industrySector={industrySector}
+                onIndustrySectorChange={setIndustrySector}
+                industryCounty={industryCounty}
+                onSelectZip={handleSelectZip}
+              />
+            </div>
+          </>
         ) : (
           <BottomCardStrip
             containerRef={bottomStripRef}

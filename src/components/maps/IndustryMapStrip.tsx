@@ -13,7 +13,7 @@
 //                       anchors-by-sector when an anchor is NOT selected
 
 import { useMemo } from 'react';
-import { fmtInt } from '../../lib/format';
+import { fmtInt, fmtPct } from '../../lib/format';
 import { NAICS20_BY_KEY, NAICS20_SECTORS, sumNaics20 } from '../../lib/naics20';
 import type {
   Naics20Block,
@@ -26,7 +26,7 @@ import { isAnchorInCounty } from '../../lib/flowQueries';
 import { SubjectKpiCard } from './SubjectKpiCard';
 import { MiniTrendChart } from './MiniTrendChart';
 
-const STRIP_CARD_HEIGHT = 220;
+export const INDUSTRY_STRIP_CARD_HEIGHT = 220;
 
 interface Props {
   wacFile: WacFile;
@@ -158,7 +158,7 @@ export function IndustryMapStrip({
     <div className="px-3 flex flex-col gap-2">
       <div
         className="grid grid-cols-1 md:grid-cols-3 gap-3"
-        style={{ height: STRIP_CARD_HEIGHT }}
+        style={{ height: INDUSTRY_STRIP_CARD_HEIGHT }}
       >
         {/* Overview card */}
         <div
@@ -263,6 +263,7 @@ export function IndustryMapStrip({
             {anchorRows.map((row) => {
               const max = anchorRows[0]?.value ?? 1;
               const pct = max > 0 ? row.value / max : 0;
+              const sharePct = regionTotal > 0 ? row.value / regionTotal : 0;
               const active = selectedZip === row.zip;
               return (
                 <li key={row.zip}>
@@ -295,10 +296,16 @@ export function IndustryMapStrip({
                       />
                     </span>
                     <span
-                      className="text-[10px] tabular-nums w-[60px] text-right shrink-0"
+                      className="text-[10px] tabular-nums w-[52px] text-right shrink-0"
                       style={{ color: 'var(--text-h)' }}
                     >
                       {fmtInt(row.value)}
+                    </span>
+                    <span
+                      className="text-[10px] tabular-nums w-[42px] text-right shrink-0"
+                      style={{ color: 'var(--text-dim)' }}
+                    >
+                      {fmtPct(sharePct)}
                     </span>
                   </button>
                 </li>
