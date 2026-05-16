@@ -479,7 +479,7 @@ export function driveDistanceKey(originZip: string, destZip: string): string {
 }
 
 /** Haversine great-circle distance in miles between two centroids. */
-function haversineMiles(
+export function haversineMiles(
   lat1Deg: number,
   lng1Deg: number,
   lat2Deg: number,
@@ -577,6 +577,82 @@ export function sumDistanceWeightedMiles(
     total += miles * f.workerCount;
   }
   return total;
+}
+
+// ---------------------------------------------------------------------------
+// Visitor-type filter — Activity map's Visitors metric replaces the direction
+// toggle with Regional / Tourist. Classification is crow-flies origin-to-GWS
+// (81601) distance against a 50-mile radius. A single, consistent reference
+// point keeps the regional/tourist split semantically stable across the
+// aggregate view and per-anchor views — "Regional" always means the visitor
+// lives within 50 mi of Glenwood Springs, irrespective of which valley
+// anchor they happen to be visiting in any given row.
+// ---------------------------------------------------------------------------
+export type VisitorType = 'all' | 'regional' | 'tourist';
+
+export const VISITOR_TYPE_RADIUS_MI = 50;
+
+// Reference ZIP for the regional/tourist crow-flies threshold. GWS is the
+// market focal point and the largest dest anchor in the visitor data; a
+// fixed reference avoids ambiguity that per-row distance would introduce.
+export const VISITOR_TYPE_REFERENCE_ZIP = '81601';
+
+function findReferenceCentroid(
+  zips: ZipMeta[],
+): { lat: number; lng: number } | null {
+  const ref = zips.find((z) => z.zip === VISITOR_TYPE_REFERENCE_ZIP);
+  if (!ref || ref.lat == null || ref.lng == null) return null;
+  return { lat: ref.lat, lng: ref.lng };
+}
+
+/** Classify a single origin centroid against the GWS-based regional/tourist
+ * threshold. Returns null when the origin centroid is missing — callers
+ * decide whether to default to 'tourist' (visitor data) or drop the row. */
+export function classifyVisitorType(
+  originLat: number | null | undefined,
+  originLng: number | null | undefined,
+  reference: { lat: number; lng: number },
+): 'regional' | 'tourist' | null {
+  if (originLat == null || originLng == null) return null;
+  const miles = haversineMiles(originLat, originLng, reference.lat, reference.lng);
+  return miles < VISITOR_TYPE_RADIUS_MI ? 'regional' : 'tourist';
+}
+
+export function filterByVisitorType(
+  flows: FlowRow[],
+  zips: ZipMeta[],
+  visitorType: VisitorType,
+): FlowRow[] {
+  if (visitorType === 'all') return flows;
+  const reference = findReferenceCentroid(zips);
+  // No reference centroid (defensive — 81601 is always present in the
+  // dataset) — pass through; the UI will reflect "All".
+  if (!reference) return flows;
+  const zipIndex = new Map<string, ZipMeta>();
+  for (const z of zips) zipIndex.set(z.zip, z);
+  return flows.filter((f) => {
+    // Resolve origin lat/lng — prefer row-baked coords (visitor rows have
+    // them), fall back to ZipMeta lookup for any non-visitor rows that
+    // sneak in via shared helpers.
+    let lat: number | null = f.originLat ?? null;
+    let lng: number | null = f.originLng ?? null;
+    if (lat == null || lng == null) {
+      const o = zipIndex.get(f.originZip);
+      if (o && o.lat != null && o.lng != null) {
+        lat = o.lat;
+        lng = o.lng;
+      }
+    }
+    // Origin centroid unknown → remote visitor whose home ZIP isn't in
+    // the valley ZipMeta and whose row pre-dates origin-coord baking.
+    // Classify as Tourist by default — the build-time gateway routing
+    // already confirmed these are non-local origins.
+    if (lat == null || lng == null) {
+      return visitorType === 'tourist';
+    }
+    const cls = classifyVisitorType(lat, lng, reference);
+    return cls === visitorType;
+  });
 }
 
 /**

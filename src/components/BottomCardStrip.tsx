@@ -1762,8 +1762,28 @@ export function WorkplaceMetricsCard({
   // Optional label overrides — the Activity map passes these in when "Avg.
   // Daily Trips" is active so the card reads in trip units. Each field
   // falls back to the LODES default ("Total Workers" / "Total Resident
-  // Workers") when omitted.
-  metricLabels?: { total?: string };
+  // Workers") when omitted. The Visitors and Shoppers metrics extend
+  // these to scrub "workers" / "workforce" / "commute" leakage.
+  metricLabels?: {
+    total?: string;
+    // Unit noun used in "X workers commute in" and the Top corridor / Top
+    // O–D sub-lines (defaults to 'workers' for inbound and 'residents' for
+    // outbound). Visitor metric passes 'visitors' / 'visits'; shopper
+    // passes 'visits'.
+    unitNoun?: string;
+    // Share-label noun in "{X%} of {scope} {totalShareNoun}" — replaces
+    // 'workforce' / 'resident workers'.
+    totalShareNoun?: string;
+    // Replaces "Cross-ZIP commute share" / "Cross-ZIP outbound share".
+    crossShareLabel?: string;
+    // Replaces the verb in the cross-ZIP share sub-line. Default: "commute
+    // in" inbound / "commute out" outbound. Visitor metrics pass
+    // "arrive at" so the line reads "X of Y visitors arrive at" instead
+    // of "X of Y visitors commute in".
+    crossShareVerb?: string;
+    // Replaces the distance row's sub-line prefix "Worker-weighted".
+    distanceWeighting?: string;
+  };
   // Multiplier applied to the Average commute distance metric — Activity
   // map passes 2 so the value reads as a round-trip figure. Optional label
   // override pairs with it so the metric row can rename to
@@ -1860,22 +1880,26 @@ export function WorkplaceMetricsCard({
   const totalLabel =
     metricLabels?.total ??
     (isInbound ? 'Total Workers' : 'Total Resident Workers');
-  const totalShareLabel = isInbound ? 'workforce' : 'resident workers';
-  const crossShareLabel = isInbound
-    ? 'Cross-ZIP commute share'
-    : 'Cross-ZIP outbound share';
-  const crossShareSubAnchor = isInbound
-    ? `${fmtInt(directionalFlow)} of ${fmtInt(anchorCrossDenom)} workers commute in`
-    : `${fmtInt(directionalFlow)} of ${fmtInt(anchorCrossDenom)} residents commute out`;
+  const unitNoun =
+    metricLabels?.unitNoun ?? (isInbound ? 'workers' : 'residents');
+  const totalShareLabel =
+    metricLabels?.totalShareNoun ?? (isInbound ? 'workforce' : 'resident workers');
+  const crossShareLabel =
+    metricLabels?.crossShareLabel ??
+    (isInbound ? 'Cross-ZIP commute share' : 'Cross-ZIP outbound share');
+  const crossShareVerb =
+    metricLabels?.crossShareVerb ?? (isInbound ? 'commute in' : 'commute out');
+  const crossShareSubAnchor = `${fmtInt(directionalFlow)} of ${fmtInt(anchorCrossDenom)} ${unitNoun} ${crossShareVerb}`;
   const crossShareSubPartner = isInbound
-    ? `${fmtInt(partnerWorkers)} of ${fmtInt(directionalFlow)} cross-ZIP commuters`
-    : `${fmtInt(partnerWorkers)} of ${fmtInt(directionalFlow)} cross-ZIP outbound residents`;
+    ? `${fmtInt(partnerWorkers)} of ${fmtInt(directionalFlow)} cross-ZIP ${unitNoun}`
+    : `${fmtInt(partnerWorkers)} of ${fmtInt(directionalFlow)} cross-ZIP outbound ${unitNoun}`;
+  const distanceWeighting = metricLabels?.distanceWeighting ?? 'Worker-weighted';
   const distanceSub = isInbound
-    ? 'Worker-weighted · inbound cross-ZIP'
-    : 'Worker-weighted · outbound cross-ZIP';
+    ? `${distanceWeighting} · inbound cross-ZIP`
+    : `${distanceWeighting} · outbound cross-ZIP`;
   const distanceSubPartner = isInbound
-    ? `From ${selectedPartner?.place ?? ''} · worker-weighted`
-    : `To ${selectedPartner?.place ?? ''} · worker-weighted`;
+    ? `From ${selectedPartner?.place ?? ''} · ${distanceWeighting.toLowerCase()}`
+    : `To ${selectedPartner?.place ?? ''} · ${distanceWeighting.toLowerCase()}`;
   const topPartnerArrow = topPartner
     ? isInbound
       ? `${topPartner.place || topPartner.zip} → ${scope}`
@@ -1923,12 +1947,12 @@ export function WorkplaceMetricsCard({
       <MetricRow
         label="Top corridor"
         value={topCorridor?.label ?? '—'}
-        sub={topCorridor ? `${fmtInt(topCorridor.total)} workers` : undefined}
+        sub={topCorridor ? `${fmtInt(topCorridor.total)} ${unitNoun}` : undefined}
       />
       <MetricRow
         label="Top O–D pair"
         value={topPartnerArrow}
-        sub={topPartner ? `${fmtInt(topPartner.workers)} workers` : undefined}
+        sub={topPartner ? `${fmtInt(topPartner.workers)} ${unitNoun}` : undefined}
       />
     </Card>
   );

@@ -91,6 +91,23 @@ interface Props {
     // cross-filtered) inbound flows, so the row tracks the Workplace ZIP
     // rankings the way the rest of the accordion does.
     vehicleMiles?: { label: string; sub?: string };
+    // Replaces hardcoded LODES-flavored copy across the panel. Each field
+    // falls back to the LODES default when omitted. Activity view's
+    // Visitors and Shoppers metrics populate these to wipe "workforce" /
+    // "commuters" / "Workplace Zip Code rankings" copy.
+    crossZipLabel?: string;          // default: 'Cross-ZIP commuters'
+    avgDistanceLabel?: string;       // default: 'Average commute distance'
+    distanceWeighting?: string;      // default: 'worker-weighted'
+    rankingsTitle?: string;          // default: 'Workplace Zip Code rankings'
+    // Per-axis help text shown beneath the rankings axis tabs. Keys map to
+    // RankAxis ('total' | 'inbound' | 'outbound' | 'local'); each axis can
+    // override either or both lines. Omitted axes fall back to the LODES
+    // RANK_HELP defaults.
+    rankingsHelp?: Partial<Record<'total' | 'inbound' | 'outbound' | 'local', { primary?: string; secondary?: string }>>;
+    // Per-axis hero label/sub/secondaryDescriptor overrides. Same key
+    // semantics as rankingsHelp. Mirrors HERO_BY_AXIS so the hero row's
+    // axis-switched copy stays in lockstep with the active metric.
+    heroByAxis?: Partial<Record<'total' | 'inbound' | 'outbound' | 'local', { label?: string; sub?: string; secondaryDescriptor?: string }>>;
   };
   // Multiplier applied to the average commute distance tile. Activity map
   // passes 2 so the aggregate reads as round-trip miles; LODES Workforce
@@ -143,9 +160,10 @@ function buildItems(
     meanCommuteMiles(flowsInbound, zips, driveDistance ?? undefined) *
     distanceMultiplier;
   const roundTripSuffix = distanceMultiplier === 2 ? ' · round-trip' : '';
+  const distanceWeighting = props.metricLabels?.distanceWeighting ?? 'worker-weighted';
   const distanceSub = driveDistance
-    ? `worker-weighted, road miles, cross-ZIP only${roundTripSuffix}`
-    : `worker-weighted, straight-line × 1.25, cross-ZIP only${roundTripSuffix}`;
+    ? `${distanceWeighting}, road miles, cross-ZIP only${roundTripSuffix}`
+    : `${distanceWeighting}, straight-line × 1.25, cross-ZIP only${roundTripSuffix}`;
   const filterActive = directionFilter !== 'all';
 
   const mappedShare =
@@ -178,13 +196,13 @@ function buildItems(
     },
     {
       id: 'cross-zip',
-      label: 'Cross-ZIP commuters',
+      label: props.metricLabels?.crossZipLabel ?? 'Cross-ZIP commuters',
       value: fmtInt(summary.crossZipCommuters),
       sub: crossZipSub,
     },
     {
       id: 'avg-distance',
-      label: 'Average commute distance',
+      label: props.metricLabels?.avgDistanceLabel ?? 'Average commute distance',
       value: `${avgMiles.toFixed(1)} mi`,
       sub: distanceSub,
     },
@@ -528,6 +546,7 @@ function AnchorRankings({
   directionFilter,
   axis,
   onAxisChange,
+  metricLabels,
 }: {
   rankings: AnchorRanking[];
   // Set of currently-selected workplace ZIPs. When non-empty the rows in
@@ -541,6 +560,9 @@ function AnchorRankings({
   // sync with whichever axis tab the user has selected here.
   axis: RankAxis;
   onAxisChange: (next: RankAxis) => void;
+  // Subset of the parent's metricLabels relevant to this component — the
+  // section title and the per-axis help-text overrides.
+  metricLabels?: Props['metricLabels'];
 }) {
   const setAxis = onAxisChange;
   const [sortBy, setSortBy] = useState<RankSortBy>('count');
@@ -578,7 +600,12 @@ function AnchorRankings({
   // visual bar always corresponds to the column the user chose to rank by.
   const max =
     sorted.length > 0 ? Math.max(sortKeyFor(sorted[0]), 1e-9) : 1;
-  const help = RANK_HELP[axis];
+  const baseHelp = RANK_HELP[axis];
+  const helpOverride = metricLabels?.rankingsHelp?.[axis];
+  const help = {
+    primary: helpOverride?.primary ?? baseHelp.primary,
+    secondary: helpOverride?.secondary ?? baseHelp.secondary,
+  };
 
   return (
     <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
@@ -590,7 +617,7 @@ function AnchorRankings({
           className="text-[10px] font-medium uppercase tracking-wider"
           style={{ color: 'var(--text-dim)' }}
         >
-          Workplace Zip Code rankings
+          {metricLabels?.rankingsTitle ?? 'Workplace Zip Code rankings'}
         </div>
         <div
           role="tablist"
@@ -883,22 +910,27 @@ export function StatsAggregated(props: Props) {
   );
   const heroAxisShare = heroAxisBaseline > 0 ? heroAxisValue / heroAxisBaseline : 0;
   const heroDescriptor = HERO_BY_AXIS[rankingAxis];
-  // metricLabels override the hero label + sub-lines only when the rankings
-  // axis is 'total' — the inbound/outbound/local hero copies already
-  // describe narrower slices the user wouldn't read as a metric rename.
+  // metricLabels override the hero label + sub-lines:
+  //   · rankings axis 'total' — top-level total / sub / descriptor slots
+  //     apply (the same fields that drive the un-axis-switched hero).
+  //   · other axes ('inbound' / 'outbound' / 'local') — heroByAxis[axis]
+  //     applies. Without that override the LODES default copy renders, so
+  //     visitor / shopper metrics can override per-axis when the user
+  //     drills into the rankings tabs.
   const useMetricCopy = rankingAxis === 'total' && !!props.metricLabels;
+  const axisOverride = props.metricLabels?.heroByAxis?.[rankingAxis];
   const heroLabel =
     useMetricCopy && props.metricLabels?.total
       ? props.metricLabels.total
-      : heroDescriptor.label;
+      : axisOverride?.label ?? heroDescriptor.label;
   const heroSub =
     useMetricCopy && props.metricLabels?.sub
       ? props.metricLabels.sub
-      : heroDescriptor.sub;
+      : axisOverride?.sub ?? heroDescriptor.sub;
   const heroSecondaryDescriptor =
     useMetricCopy && props.metricLabels?.descriptor
       ? props.metricLabels.descriptor
-      : heroDescriptor.secondaryDescriptor;
+      : axisOverride?.secondaryDescriptor ?? heroDescriptor.secondaryDescriptor;
   const heroItem: StatItem = {
     id: 'workforce',
     label: heroLabel,
@@ -967,6 +999,7 @@ export function StatsAggregated(props: Props) {
               directionFilter={props.directionFilter}
               axis={rankingAxis}
               onAxisChange={setRankingAxis}
+              metricLabels={props.metricLabels}
             />
           </div>
         </div>
@@ -980,6 +1013,7 @@ export function StatsAggregated(props: Props) {
             directionFilter={props.directionFilter}
             axis={rankingAxis}
             onAxisChange={setRankingAxis}
+            metricLabels={props.metricLabels}
           />
         </>
       )}

@@ -73,6 +73,29 @@ export interface FlowRow {
   // Provenance flag for adapter-fed rows (Placer.ai, etc). Absent on every
   // build-data.py LODES row — readers default to 'lodes' when undefined.
   sourceKind?: 'lodes' | 'placer';
+  // Origin centroid carried through when the source data publishes it. Only
+  // the Placer visitor metric files do (visitor-counts / visitor-visits) —
+  // visitor origins span the whole country and most don't appear in the
+  // local ZipMeta universe, so the centroid travels with the row instead
+  // of being looked up downstream. Absent on every LODES row, every Placer
+  // employee/shopper row, and any visitor row predating the 2026-05 build.
+  originLat?: number;
+  originLng?: number;
+  // Origin city + state (visitor rows only). Threaded through so the
+  // origin-symbol overlay can aggregate by city — many big cities span 20+
+  // ZIPs and a per-ZIP rollup fragments the visual story. Absent on every
+  // non-visitor row.
+  originCity?: string;
+  originState?: string;
+  // Shopper-metric fields. Each shopper FlowRow is aggregated by
+  // (residentZip, destZip, category) — `category` is the group category
+  // rollup; `residents` counts the unique residents underneath this
+  // (origin, dest, category) bucket; sub-category and a sample property
+  // name carry through purely for tooltip color.
+  residents?: number;
+  category?: string;
+  subCategory?: string;
+  propertySample?: string;
 }
 
 export interface ZipMeta {

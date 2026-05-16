@@ -125,6 +125,42 @@ interface Props {
   // Block-level lookup — used to project each selected block's centroid for
   // the dashed branch primitive. Null while data is loading.
   odBlocks: OdBlocksFile | null;
+  // Optional origin-symbol overlay. When non-empty, MapCanvas paints a
+  // proportional-symbol circle at each origin's lat/lng, sized by `value`,
+  // and the caller is expected to suppress corridor visuals (pass empty
+  // `visibleCorridorMap` / `flows`). The Activity map's Visitors metric
+  // uses this — visitor origins span the whole country and the drive-vs-
+  // fly question makes corridor strokes misleading. Each entry is
+  // independent; no aggregation happens inside MapCanvas.
+  originSymbols?: Array<{
+    originZip: string;
+    originPlace?: string;
+    lat: number;
+    lng: number;
+    value: number;
+  }>;
+  // Optional label for the symbol-tooltip unit ("visitors" / "visits"). The
+  // hover tooltip reads "{value} {unit}" so the unit matches whatever metric
+  // the symbols represent. Defaults to "visits" when omitted.
+  originSymbolUnit?: string;
+  // When true, suppress the destination anchor node circles + anchor labels
+  // (Glenwood Springs, Aspen, etc.). The Activity map's Visitors metric
+  // passes this so the view reads as "just the origin bubbles" — the
+  // destinations are still implicit from the basemap geography and the
+  // stats panel headline.
+  hideAnchorMarkers?: boolean;
+  // When true, the anchor-selection auto-fit skips its "flyTo the anchor's
+  // centroid at a tighter zoom" branch and the map stays framed to the
+  // regional bounds the user opened with. The Activity map's Visitors
+  // metric passes this so clicking a visit destination chip doesn't zoom
+  // away from the wide regional view that the origin symbols depend on
+  // for spatial context.
+  keepRegionalBounds?: boolean;
+  // When true, the off-corridor render branch is short-circuited so no
+  // dashed organic strands paint. The Activity map's Shoppers metric in
+  // Heatmap view passes this — corridor strokes are suppressed and the
+  // MapLibre heat-blob layer carries the visualization on its own.
+  hideOffCorridor?: boolean;
 }
 
 // CARTO Dark Matter style — open, no API key required.
@@ -156,6 +192,11 @@ export function MapCanvas({
   onSelectZip,
   hoveredCorridorId,
   onHoverCorridor,
+  originSymbols,
+  originSymbolUnit,
+  hideAnchorMarkers,
+  keepRegionalBounds,
+  hideOffCorridor,
   onClickCorridor,
   onClickEmpty,
   heatmapData,
@@ -872,10 +913,17 @@ export function MapCanvas({
           maxZoom: 9,
         },
       );
-    } else if (selectedZip && ANCHOR_ZIPS.includes(selectedZip)) {
+    } else if (
+      selectedZip &&
+      ANCHOR_ZIPS.includes(selectedZip) &&
+      !keepRegionalBounds
+    ) {
       // Zoom into the selected anchor — centroid + a fixed zoom that frames
       // the anchor's block-level structure (downtown core + surrounding
       // residential/employment fabric) without losing nearby context.
+      // Skipped when the caller requests regional bounds (Visitors metric):
+      // there the origin symbols span the country and an anchor zoom would
+      // hide them.
       const meta = zips.find((z) => z.zip === selectedZip);
       if (!meta || meta.lat == null || meta.lng == null) return;
       map.flyTo({
@@ -899,7 +947,7 @@ export function MapCanvas({
         },
       );
     }
-  }, [nonAnchorBundle, selectedZip, zips]);
+  }, [nonAnchorBundle, selectedZip, zips, keepRegionalBounds]);
 
   // ---- Render corridors + centroids on every map move and on data change ---
   useEffect(() => {
@@ -977,6 +1025,14 @@ export function MapCanvas({
         viewLayer === 'industry' ? '' : 'display: none;',
       );
       svg.appendChild(industryGroup);
+
+      // Group: origin-symbol overlay (visitor-metric variant). Painted at
+      // the same z-order as industry bubbles — between arcs and the
+      // click-target nodes so anchor selection still works underneath.
+      // Caller passes empty visibleCorridorMap when this layer is active.
+      const symbolGroup = document.createElementNS(NS, 'g');
+      symbolGroup.setAttribute('data-layer', 'origin-symbols');
+      svg.appendChild(symbolGroup);
 
       // Group: nodes (drawn above corridors)
       const nodeGroup = document.createElementNS(NS, 'g');
@@ -1338,8 +1394,12 @@ export function MapCanvas({
 
       // Source-flow set: bundle flows when present, else off-corridor
       // stragglers from visibleFlows. Prevents double-rendering when a
-      // bundle flow is also off-corridor.
-      const sourceFlows: FlowRow[] = blockScopeActive
+      // bundle flow is also off-corridor. The origin-symbol overlay also
+      // takes precedence over off-corridor strands: when the caller has
+      // provided origin symbols, dashed branches would just clutter the
+      // map underneath the proportional-symbol layer.
+      const symbolLayerActive = !!(originSymbols && originSymbols.length > 0);
+      const sourceFlows: FlowRow[] = blockScopeActive || symbolLayerActive || hideOffCorridor
         ? []
         : bundleFlows.length > 0
         ? bundleFlows.filter((f) => f.originZip !== f.destZip)
@@ -1592,6 +1652,88 @@ export function MapCanvas({
         }
       }
 
+      // ---- Origin-symbol overlay (Visitor metric) ----
+      // Proportional-symbol circles at each origin centroid, sqrt-scaled
+      // for area-perceptual sizing. Visitor data spans the whole country —
+      // origins outside the viewport just project off-screen and stay
+      // clipped by the SVG bounds. Reuses the industry tooltip element for
+      // hover so we don't need a second floating-tip ref.
+      if (originSymbols && originSymbols.length > 0) {
+        const accent = 'var(--accent)';
+        const unit = originSymbolUnit ?? 'visits';
+        let maxValue = 0;
+        for (const s of originSymbols) {
+          if (s.value > maxValue) maxValue = s.value;
+        }
+        const totalValue = originSymbols.reduce((a, s) => a + s.value, 0);
+        const MAX_RADIUS = 22;
+        const MIN_RADIUS = 1.5;
+        for (const s of originSymbols) {
+          if (s.value <= 0) continue;
+          const p = map.project([s.lng, s.lat]);
+          const radius =
+            maxValue > 0
+              ? Math.max(MIN_RADIUS, MAX_RADIUS * Math.sqrt(s.value / maxValue))
+              : MIN_RADIUS;
+          // Opacity scales with rank so the long tail doesn't drown out
+          // the headline origins. Linear blend from 0.32 (smallest) to
+          // 0.78 (largest); strokes always render at 0.9 so even tiny
+          // dots remain locatable.
+          const valueShare = maxValue > 0 ? s.value / maxValue : 0;
+          const fillOpacity = 0.32 + valueShare * 0.46;
+          const dot = document.createElementNS(NS, 'circle');
+          dot.setAttribute('cx', String(p.x));
+          dot.setAttribute('cy', String(p.y));
+          dot.setAttribute('r', String(radius));
+          dot.setAttribute('fill', accent);
+          dot.setAttribute('fill-opacity', fillOpacity.toFixed(2));
+          dot.setAttribute('stroke', accent);
+          dot.setAttribute('stroke-width', '1');
+          dot.setAttribute('stroke-opacity', '0.9');
+          dot.style.pointerEvents = 'auto';
+          dot.style.cursor = 'default';
+          // Stable place label — prefer the place name passed in, else fall
+          // back to the originZip itself.
+          const place = s.originPlace || s.originZip;
+          const share =
+            totalValue > 0
+              ? Math.round((s.value / totalValue) * 1000) / 10
+              : 0;
+          const showTip = (evt: MouseEvent) => {
+            const tip = industryTipRef.current;
+            const containerEl = map.getContainer();
+            if (!tip || !containerEl) return;
+            const rect = containerEl.getBoundingClientRect();
+            const x = evt.clientX - rect.left;
+            const y = evt.clientY - rect.top;
+            tip.innerHTML = `
+              <div style="font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:${accent};margin-bottom:2px;">Origin · ${s.originZip}</div>
+              <div style="font-size:12px;font-weight:600;color:var(--text-h);line-height:1.15;">${place}</div>
+              <div style="font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-h);margin-top:3px;">${s.value.toLocaleString()} ${unit} <span style="color:var(--text-dim);">· ${share}% of total</span></div>
+            `;
+            tip.style.display = 'block';
+            tip.style.left = `${x + 14}px`;
+            tip.style.top = `${y - 12}px`;
+          };
+          const moveTip = (evt: MouseEvent) => {
+            const tip = industryTipRef.current;
+            const containerEl = map.getContainer();
+            if (!tip || !containerEl) return;
+            const rect = containerEl.getBoundingClientRect();
+            tip.style.left = `${evt.clientX - rect.left + 14}px`;
+            tip.style.top = `${evt.clientY - rect.top - 12}px`;
+          };
+          const hideTip = () => {
+            const tip = industryTipRef.current;
+            if (tip) tip.style.display = 'none';
+          };
+          dot.addEventListener('mouseenter', showTip);
+          dot.addEventListener('mousemove', moveTip);
+          dot.addEventListener('mouseleave', hideTip);
+          symbolGroup.appendChild(dot);
+        }
+      }
+
       // ---- ZIP centroid nodes ----
       type Rect = { x: number; y: number; w: number; h: number };
       const placedLabelRects: Rect[] = [];
@@ -1614,7 +1756,14 @@ export function MapCanvas({
         return bw - aw;
       });
 
+      // Anchor markers (small dots) + labels are suppressed when
+      // hideAnchorMarkers is set — the Activity map's Visitors metric
+      // passes this so the view reads as "just the origin bubbles".
+      // Anchor selection still works via the left-panel ZIP chip row.
+      const skipAnchorRender = hideAnchorMarkers === true;
+
       for (const z of nodeOrder) {
+        if (skipAnchorRender) break;
         const p = projected.get(z.zip);
         if (!p) continue;
         const isSelected = selectedZip === z.zip;
@@ -1820,6 +1969,10 @@ export function MapCanvas({
     industrySector,
     industryCounty,
     wacFile,
+    originSymbols,
+    originSymbolUnit,
+    hideAnchorMarkers,
+    hideOffCorridor,
   ]);
 
   return (

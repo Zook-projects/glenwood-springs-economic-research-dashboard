@@ -97,6 +97,17 @@ interface Props {
     // self-flow goes through the same * 2 / 365 transform), so the phrase
     // needs to describe trips not people when a trip metric is active.
     liveAndWorkPhrase?: string;  // e.g. "avg. daily trips within"
+    // Substitutes for "workers employed in {place}" in the Total Workforce
+    // tile's right-side sub-text. Called with the place name so visitor
+    // metrics can frame it as "visitors at {place}" and shopper metrics
+    // can use "out-of-market visits originating in {place}". Default:
+    // 'workers employed in {place}' (with the auto "by " prefix when
+    // `total` override is also set).
+    totalTileSub?: (place: string) => string;
+    // Replaces "of {place} workforce" in the partner-selected total-tile
+    // sub-line. Default: "{place} workforce". Should NOT include the leading
+    // "of " — the caller renders that.
+    partnerOfNoun?: (place: string) => string;
   };
 }
 
@@ -305,8 +316,10 @@ export function StatsForZip({
           </span>
           <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
             {selectedPartner
-              ? `from ${selectedPartner.place} (${fmtPct(partnerWorkers / Math.max(1, workforce))} of ${meta.place} workforce)`
-              : `${metricLabels?.total ? 'by ' : ''}workers employed in ${meta.place}`}
+              ? `from ${selectedPartner.place} (${fmtPct(partnerWorkers / Math.max(1, workforce))} of ${metricLabels?.partnerOfNoun?.(meta.place) ?? `${meta.place} workforce`})`
+              : metricLabels?.totalTileSub
+                ? metricLabels.totalTileSub(meta.place)
+                : `${metricLabels?.total ? 'by ' : ''}workers employed in ${meta.place}`}
           </span>
         </div>
         <div className="mt-0.5 text-[10px]" style={{ color: 'var(--text-dim)' }}>

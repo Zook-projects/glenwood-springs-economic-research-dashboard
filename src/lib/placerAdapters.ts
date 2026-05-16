@@ -55,6 +55,14 @@ export function toFlowRows(
       source: 'LEHD',
       sourceKind: 'placer',
       corridorPath,
+      originLat: r.originLat,
+      originLng: r.originLng,
+      originCity: r.originCity,
+      originState: r.originState,
+      residents: r.residents,
+      category: r.category,
+      subCategory: r.subCategory,
+      propertySample: r.propertySample,
     });
   }
   return rows;

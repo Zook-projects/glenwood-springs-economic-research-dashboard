@@ -9,20 +9,28 @@
 // placerAdapters.toFlowRows so the downstream pipeline (MapCanvas,
 // corridor index, StatsAggregated, StatsForZip) consumes it unchanged.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapCanvas } from '../components/MapCanvas';
 import { ActiveFiltersOverlay } from '../components/ActiveFiltersOverlay';
 import { ZipSelector } from '../components/ZipSelector';
 import { DirectionToggle } from '../components/DirectionToggle';
+import { VisitorTypeToggle } from '../components/VisitorTypeToggle';
+import {
+  ShopperViewToggle,
+  type ShopperViewLayer,
+} from '../components/ShopperViewToggle';
 import { ModeToggle } from '../components/ModeToggle';
 import {
   ActivityMetricToggle,
+  categoryOf,
+  type ActivityCategory,
   type ActivityMetric,
 } from '../components/ActivityMetricToggle';
 import { StatsAggregated } from '../components/StatsAggregated';
 import { StatsForZip } from '../components/StatsForZip';
 import { CorridorTooltipBody } from '../components/CorridorTooltipBody';
 import { ActivityBottomCardStrip } from '../components/ActivityBottomCardStrip';
+import { ShopperBottomCardStrip } from '../components/ShopperBottomCardStrip';
 import type {
   ActiveCorridorAggregation,
   CorridorId,
@@ -35,12 +43,16 @@ import type { PlacerData } from '../types/placer';
 import { toFlowRows } from '../lib/placerAdapters';
 import {
   applySegmentFilter,
+  classifyVisitorType,
   detailForZip,
   filterByDirection,
+  filterByVisitorType,
   filterForSelection,
   isAnchorZip,
   meanCommuteMiles,
   sumDistanceWeightedMiles,
+  VISITOR_TYPE_REFERENCE_ZIP,
+  type VisitorType,
 } from '../lib/flowQueries';
 import { buildCorridorFlowIndex, buildVisibleCorridorMap } from '../lib/corridors';
 import { computeBucketBreaks } from '../lib/arcMath';
@@ -88,93 +100,282 @@ export function ActivityCommuteView({ data, placer }: Props) {
   // off-corridor branches.
   const { zips, corridorIndex, corridorNodes, flowsByOdKey, driveDistance } = data;
 
-  // Activity metric the left-panel toggle drives:
-  //   - workers     → Employee Counts (annual unique workers per OD pair)
-  //   - daily-trips → Employee Visits × 2 / 365 (round-trip × annualization)
-  //   - trips       → Employee Visits (annual visit count, unscaled)
-  // Both source sheets share the same row structure, so the pipeline
-  // downstream doesn't care which is active.
+  // Activity metric the left-panel toggle drives. Categories + sub-options:
+  //   workers     → Employee Counts (raw annual workers)
+  //   daily-trips → Employee Visits × 2 / 365
+  //   trips       → Employee Visits × 2
+  //   visitors    → Visitor Counts (raw annual visitors, no ×2)
+  //   daily-visits→ Visitor Visits / 365
+  //   visits      → Visitor Visits (raw)
+  //   out-of-market-shopping → Resident Top Locations, visits to dest ZIP
+  //                            ≠ resident's home ZIP (flow axis flipped:
+  //                            origin = resident anchor, dest = leakage ZIP)
   const [metric, setMetric] = useState<ActivityMetric>('workers');
+  const activeCategory: ActivityCategory = categoryOf(metric);
+  const isShopperMetric = metric === 'out-of-market-shopping';
 
   const placerMetricFile = useMemo(() => {
     if (!placer) return null;
-    return metric === 'workers' ? placer.employeeCounts : placer.employeeVisits;
+    switch (metric) {
+      case 'workers':
+        return placer.employeeCounts;
+      case 'daily-trips':
+      case 'trips':
+        return placer.employeeVisits;
+      case 'visitors':
+        return placer.visitorCounts;
+      case 'daily-visits':
+      case 'visits':
+        return placer.visitorVisits;
+      case 'out-of-market-shopping':
+        return placer.shoppersTopLocations;
+    }
   }, [placer, metric]);
 
   // Stats-panel label + copy overrides used by StatsAggregated, StatsForZip,
-  // and the WorkplaceMetricsCard. Both trip metrics reframe the
-  // worker-counting headlines and sub-lines as trip volumes; workers keeps
-  // the LODES-style copy. `descriptor` is the unit word that replaces
-  // "workforce" / "residents" in cross-zip / outside-* sub-lines (the
-  // "of mapped workforce" / "inbound workforce with residence outside…"
-  // copy is awkward when the values are trips not workers).
+  // and the WorkplaceMetricsCard. Re-frames "workforce" / "workers" headlines
+  // as visits / trips / shoppers depending on the active metric. Every slot
+  // must be overridden for non-workers metrics or the LODES default copy
+  // leaks through.
   const statsMetricLabels = useMemo(() => {
-    if (metric === 'workers') return undefined;
-    if (metric === 'daily-trips') {
-      const unit = 'avg. daily trips';
-      return {
-        total: 'Average Daily Trips',
-        inbound: 'Average Daily Inbound Trips',
-        outbound: 'Average Daily Outbound Trips',
-        sub: 'avg. daily trips by workers',
-        descriptor: unit,
-        shareUnitInbound: unit,
-        shareUnitOutbound: unit,
-        directionInbound: 'avg. daily trips into',
-        directionOutbound: 'avg. daily trips out of',
-        liveAndWorkPhrase: 'avg. daily trips within',
-        vehicleMiles: {
-          label: 'Average Daily Vehicle Miles',
-          sub: 'avg. daily trips × one-way distance · cross-ZIP only',
-        },
-      };
+    switch (metric) {
+      case 'workers':
+        return undefined;
+      case 'daily-trips': {
+        const unit = 'avg. daily trips';
+        return {
+          total: 'Average Daily Trips',
+          inbound: 'Average Daily Inbound Trips',
+          outbound: 'Average Daily Outbound Trips',
+          sub: 'avg. daily trips by workers',
+          descriptor: unit,
+          shareUnitInbound: unit,
+          shareUnitOutbound: unit,
+          directionInbound: 'avg. daily trips into',
+          directionOutbound: 'avg. daily trips out of',
+          liveAndWorkPhrase: 'avg. daily trips within',
+          vehicleMiles: {
+            label: 'Average Daily Vehicle Miles',
+            sub: 'avg. daily trips × one-way distance · cross-ZIP only',
+          },
+        };
+      }
+      case 'trips': {
+        const unit = 'trips';
+        return {
+          total: 'Total Trips',
+          inbound: 'Total Inbound Trips',
+          outbound: 'Total Outbound Trips',
+          sub: 'annual round-trips by workers',
+          descriptor: unit,
+          shareUnitInbound: unit,
+          shareUnitOutbound: unit,
+          directionInbound: 'trips into',
+          directionOutbound: 'trips out of',
+          liveAndWorkPhrase: 'annual round-trips within',
+          vehicleMiles: {
+            label: 'Total Vehicle Miles',
+            sub: 'annual trips × one-way distance · cross-ZIP only',
+          },
+        };
+      }
+      case 'visitors': {
+        const unit = 'visitors';
+        return {
+          total: 'Total Visitors',
+          inbound: 'Total Inbound Visitors',
+          outbound: 'Total Outbound Visitors',
+          sub: 'annual unique visitors',
+          descriptor: unit,
+          shareUnitInbound: unit,
+          shareUnitOutbound: unit,
+          directionInbound: 'visitors to',
+          directionOutbound: 'visitors from',
+          liveAndWorkPhrase: 'visitors within',
+          crossZipLabel: 'Cross-ZIP visitors',
+          avgDistanceLabel: 'Average visit distance',
+          distanceWeighting: 'visitor-weighted',
+          rankingsTitle: 'Visitor destination rankings',
+          rankingsHelp: {
+            total: {
+              primary: 'Total visitors at each destination = inbound + within-ZIP',
+              secondary: '% of all destinations’ combined visitors',
+            },
+          },
+          heroByAxis: {
+            inbound: { label: 'Inbound Visitors', sub: 'visitors arriving from elsewhere', secondaryDescriptor: 'regional inbound visitors' },
+            outbound: { label: 'Outbound Visitors', sub: 'visitors departing for elsewhere', secondaryDescriptor: 'regional outbound visitors' },
+            local: { label: 'Local Visitors', sub: 'visitors whose origin and destination ZIPs match', secondaryDescriptor: 'regional local visitors' },
+          },
+          totalTileSub: (place: string) => `by visitors at ${place}`,
+          partnerOfNoun: (place: string) => `${place} visitors`,
+        };
+      }
+      case 'daily-visits': {
+        const unit = 'avg. daily visits';
+        return {
+          total: 'Average Daily Visits',
+          inbound: 'Average Daily Inbound Visits',
+          outbound: 'Average Daily Outbound Visits',
+          sub: 'avg. daily visits',
+          descriptor: unit,
+          shareUnitInbound: unit,
+          shareUnitOutbound: unit,
+          directionInbound: 'avg. daily visits to',
+          directionOutbound: 'avg. daily visits from',
+          liveAndWorkPhrase: 'avg. daily visits within',
+          vehicleMiles: {
+            label: 'Average Daily Vehicle Miles',
+            sub: 'avg. daily visits × one-way distance · cross-ZIP only',
+          },
+          crossZipLabel: 'Cross-ZIP avg. daily visits',
+          avgDistanceLabel: 'Average visit distance',
+          distanceWeighting: 'visit-weighted',
+          rankingsTitle: 'Visitor destination rankings',
+          rankingsHelp: {
+            total: {
+              primary: 'Avg. daily visits at each destination = inbound + within-ZIP',
+              secondary: '% of all destinations’ combined avg. daily visits',
+            },
+          },
+          totalTileSub: (place: string) => `by avg. daily visits at ${place}`,
+          partnerOfNoun: (place: string) => `${place} avg. daily visits`,
+        };
+      }
+      case 'visits': {
+        const unit = 'visits';
+        return {
+          total: 'Total Visits',
+          inbound: 'Total Inbound Visits',
+          outbound: 'Total Outbound Visits',
+          sub: 'annual visit count',
+          descriptor: unit,
+          shareUnitInbound: unit,
+          shareUnitOutbound: unit,
+          directionInbound: 'visits to',
+          directionOutbound: 'visits from',
+          liveAndWorkPhrase: 'visits within',
+          vehicleMiles: {
+            label: 'Total Vehicle Miles',
+            sub: 'annual visits × one-way distance · cross-ZIP only',
+          },
+          crossZipLabel: 'Cross-ZIP visits',
+          avgDistanceLabel: 'Average visit distance',
+          distanceWeighting: 'visit-weighted',
+          rankingsTitle: 'Visitor destination rankings',
+          rankingsHelp: {
+            total: {
+              primary: 'Total visits at each destination = inbound + within-ZIP',
+              secondary: '% of all destinations’ combined visits',
+            },
+          },
+          totalTileSub: (place: string) => `by total visits at ${place}`,
+          partnerOfNoun: (place: string) => `${place} visits`,
+        };
+      }
+      case 'out-of-market-shopping': {
+        // Shopper data: origin = resident anchor, dest = out-of-market ZIP.
+        // Direction is always outbound from the resident's perspective, but
+        // the data is plumbed through flowsInbound to reuse the aggregate
+        // pipeline (StatsAggregated is inbound-only by editorial choice).
+        // EVERY slot needs an override so the word "workforce" / "inbound"
+        // never leaks into shopper copy.
+        const unit = 'out-of-market visits';
+        return {
+          total: 'Out-of-Market Shopping Visits',
+          inbound: 'Out-of-Market Visits',
+          outbound: 'Out-of-Market Visits',
+          sub: 'visits by valley residents to ZIPs outside their home',
+          descriptor: unit,
+          shareUnitInbound: unit,
+          shareUnitOutbound: unit,
+          directionInbound: 'out-of-market visits from residents of',
+          directionOutbound: 'out-of-market visits from residents of',
+          liveAndWorkPhrase: 'out-of-market visits originating in',
+          crossZipLabel: 'Cross-ZIP shopping visits',
+          avgDistanceLabel: 'Average shopping trip distance',
+          distanceWeighting: 'visit-weighted',
+          rankingsTitle: 'Resident origin rankings',
+          rankingsHelp: {
+            total: {
+              primary: 'Out-of-market shopping visits originating in each resident ZIP',
+              secondary: '% of all resident origins’ combined out-of-market visits',
+            },
+          },
+          heroByAxis: {
+            inbound: { label: 'Out-of-Market Visits', sub: 'visits to ZIPs outside the resident’s home', secondaryDescriptor: 'regional out-of-market visits' },
+            outbound: { label: 'Out-of-Market Visits', sub: 'visits to ZIPs outside the resident’s home', secondaryDescriptor: 'regional out-of-market visits' },
+            local: { label: 'In-Market Visits', sub: 'visits within the resident’s own ZIP (filtered out in v1)', secondaryDescriptor: 'regional in-market visits' },
+          },
+          totalTileSub: (place: string) => `by out-of-market visits originating in ${place}`,
+          partnerOfNoun: (place: string) => `${place} out-of-market visits`,
+        };
+      }
     }
-    // metric === 'trips' — raw annual round-trip volumes.
-    const unit = 'trips';
-    return {
-      total: 'Total Trips',
-      inbound: 'Total Inbound Trips',
-      outbound: 'Total Outbound Trips',
-      sub: 'annual round-trips by workers',
-      descriptor: unit,
-      shareUnitInbound: unit,
-      shareUnitOutbound: unit,
-      directionInbound: 'trips into',
-      directionOutbound: 'trips out of',
-      liveAndWorkPhrase: 'annual round-trips within',
-      vehicleMiles: {
-        label: 'Total Vehicle Miles',
-        sub: 'annual trips × one-way distance · cross-ZIP only',
-      },
-    };
   }, [metric]);
 
   // Adapt the chosen Placer metric into the FlowRow shape every
-  // downstream surface consumes. Placer's workbook publishes one direction
-  // (origin = residence, dest = anchor-workplace), so flowsInbound is the
-  // canonical projection.
+  // downstream surface consumes. Employee/Visitor workbooks publish one
+  // direction (origin = residence, dest = anchor-workplace/anchor-visit),
+  // so for those metrics flowsInbound is the canonical projection.
+  // Shopper data is direction-flipped (origin = resident anchor, dest =
+  // out-of-market ZIP) and is plumbed through flowsOutbound below;
+  // flowsInbound returns [] for the shopper metric.
   //
-  // Trip scaling: Employee Visits publishes an annual one-way visit count.
-  // Both trip metrics multiply by 2 to capture the return leg of each
-  // round-trip commute; daily-trips additionally divides by 365 to
-  // surface an average-daily volume — the framing TMB / transportation
-  // partners actually use. Workers mode passes the raw values through.
+  // Per-metric scaling:
+  //   workers, visitors, visits, out-of-market-shopping → raw pass-through
+  //   daily-trips → × 2 / 365 (round-trip × annualize daily)
+  //   trips       → × 2      (annual round-trip volume)
+  //   daily-visits→ / 365    (annualize daily; visits are one-way arrivals,
+  //                            no ×2 — Jake's choice; matches "Visits" label)
   // Stored as floats; fmtInt rounds at display time so aggregations stay
-  // precise even at corridor-level rollups.
+  // precise at corridor-level rollups.
   const flowsInbound = useMemo<FlowRow[]>(() => {
     if (!placerMetricFile) return [];
+    // Shopper data is single-directional in the source (origin = resident
+    // anchor, dest = shopping location), but the user can read the same
+    // dataset from either side: Outbound = "where do these residents
+    // shop", Inbound = "who shops here from elsewhere". Pass the full
+    // shopper dataset into BOTH flowsInbound and flowsOutbound; the
+    // mode-aware filterForSelection downstream pivots on selectedZip ±
+    // origin/dest to surface the right slice.
+    if (isShopperMetric) {
+      return toFlowRows(placerMetricFile, zips, flowsByOdKey);
+    }
     const rows = toFlowRows(placerMetricFile, zips, flowsByOdKey);
-    if (metric === 'workers') return rows;
-    const denom = metric === 'daily-trips' ? 365 : 1;
-    return rows.map((r) => ({
-      ...r,
-      workerCount: (r.workerCount * 2) / denom,
-    }));
-  }, [placerMetricFile, zips, flowsByOdKey, metric]);
+    switch (metric) {
+      case 'workers':
+      case 'visitors':
+      case 'visits':
+        return rows;
+      case 'daily-trips':
+        return rows.map((r) => ({ ...r, workerCount: (r.workerCount * 2) / 365 }));
+      case 'trips':
+        return rows.map((r) => ({ ...r, workerCount: r.workerCount * 2 }));
+      case 'daily-visits':
+        return rows.map((r) => ({ ...r, workerCount: r.workerCount / 365 }));
+      default:
+        return rows;
+    }
+  }, [placerMetricFile, zips, flowsByOdKey, metric, isShopperMetric]);
 
+  // destAnchors semantics depend on the active metric. Each metric file
+  // carries its own destAnchors list, which is the right scope for the
+  // ZipSelector chip row — summary.destAnchors is a union across all five
+  // metric files and would incorrectly include the 11 shopper-origin ZIPs
+  // when workers/visitors are active.
+  //   workers / visitors → DESTINATION anchors (typically GWS 81601 +
+  //     81623, depending on the workbook's destination scope).
+  //   shoppers           → ORIGIN anchors (the 11 valley resident ZIPs).
+  //     The selection axis flips: the chip row represents resident bases
+  //     whose outbound shopping leakage you can inspect. All 11 happen to
+  //     live in the global ANCHOR_ZIPS list in flowQueries.ts — load-bearing
+  //     coincidence; if Placer ever publishes shopper data for a different
+  //     anchor set, ZipSelector's intersection-with-ANCHOR_ZIPS filter and
+  //     computeAnchorRankings will both need updates.
   const destAnchors = useMemo<readonly string[]>(
-    () => placer?.summary.destAnchors ?? [],
-    [placer],
+    () => placerMetricFile?.destAnchors ?? [],
+    [placerMetricFile],
   );
 
   // Data vintage from the workbook's Year column (e.g., 2025). Used by the
@@ -194,19 +395,28 @@ export function ActivityCommuteView({ data, placer }: Props) {
     return new Date().getUTCFullYear();
   }, [placer]);
 
-  // Synthetic outbound dataset — same row universe as flowsInbound, but
-  // filtered to rows whose origin (= residence) is itself one of Placer's
-  // destination anchors. computeAnchorRankings consumes flowsOutbound by
-  // origin, so this yields each Placer anchor's outbound commute count to
-  // the other Placer anchor(s). Example: with destAnchors = [81601, 81623],
-  // the row (origin = 81601, dest = 81623, value = V) contributes V to
-  // 81601's outbound ranking total.
+  // flowsOutbound semantics:
+  //   workers / visitors → synthetic anchor-to-anchor subset. Filters
+  //     flowsInbound (origin = residence, dest = anchor) down to rows where
+  //     origin is itself an anchor, surfacing each Placer anchor's outbound
+  //     commute count to the OTHER Placer anchor(s).
+  //   shoppers           → the actual data. Resident anchor → out-of-market
+  //     ZIP is the natural outbound direction for shoppers. flowsInbound
+  //     is empty for this metric, so the regional/aggregate view reads
+  //     from flowsOutbound and the inbound/outbound toggle is hidden.
   const flowsOutbound = useMemo<FlowRow[]>(() => {
+    if (!placerMetricFile) return [];
+    if (isShopperMetric) {
+      const rows = toFlowRows(placerMetricFile, zips, flowsByOdKey);
+      return rows;
+    }
     if (destAnchors.length === 0) return [];
     const anchorSet = new Set(destAnchors);
     return flowsInbound.filter((f) => anchorSet.has(f.originZip));
-  }, [flowsInbound, destAnchors]);
-  const flowsRegional = flowsInbound;
+  }, [flowsInbound, destAnchors, placerMetricFile, zips, flowsByOdKey, isShopperMetric]);
+  // For shoppers the aggregate view reads from the outbound axis (no inbound
+  // data exists for that metric). Everywhere else, regional = inbound.
+  const flowsRegional = isShopperMetric ? flowsOutbound : flowsInbound;
 
   // Placer-scoped corridor flow index. Mirrors the LODES flowIndex built in
   // useFlowData but spans the Placer flows so corridor aggregation finds
@@ -228,6 +438,10 @@ export function ActivityCommuteView({ data, placer }: Props) {
     { place: string; zips: string[] } | null
   >(null);
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('all');
+  // Visitor-type filter — only consumed by the Visitors metric. Replaces the
+  // geographic DirectionToggle in that view with a Regional / Tourist split
+  // (50-mile crow-flies radius from the destination).
+  const [visitorType, setVisitorType] = useState<VisitorType>('all');
   const [mode, setMode] = useState<Mode>('inbound');
   const [hover, setHover] = useState<HoverState | null>(null);
   const [pinned, setPinned] = useState<HoverState | null>(null);
@@ -241,6 +455,25 @@ export function ActivityCommuteView({ data, placer }: Props) {
   const [passThroughDest, setPassThroughDest] = useState<
     { place: string; zips: string[] } | null
   >(null);
+  // Shopper category cross-filter — drives the active row in the Category
+  // Rankings / Pie cards and narrows the corridor render to only flows
+  // matching that group category.
+  const [selectedShopperCategory, setSelectedShopperCategory] = useState<
+    string | null
+  >(null);
+  // Multi-select shopper partners (destinations in outbound mode, origins
+  // in inbound mode). When non-empty, KPI / Pie / Category cards + the
+  // map narrow to flows whose pivot side matches any selected place.
+  const [selectedShopperPartners, setSelectedShopperPartners] = useState<
+    Array<{ place: string; zips: string[] }>
+  >([]);
+  // Shopper view layer — Corridor (default) routes flows on the corridor
+  // graph; Spaghetti renders direct dashed lines from each resident anchor
+  // to each destination's ZIP centroid (suppresses corridor strokes); the
+  // Heatmap option swaps the corridor render for a heat-blob layer
+  // weighted by visit volume per destination ZIP.
+  const [shopperViewLayer, setShopperViewLayer] =
+    useState<ShopperViewLayer>('corridor');
 
   const effectiveMode: Mode = !selectedZip ? 'regional' : mode;
   const selectionKind: 'aggregate' | 'anchor' = selectedZip ? 'anchor' : 'aggregate';
@@ -252,26 +485,29 @@ export function ActivityCommuteView({ data, placer }: Props) {
         ? flowsInbound
         : flowsOutbound;
 
-  // Direction filter pre-applied to both datasets. applySegmentFilter is
-  // called with an inert filter so the call surface mirrors the LODES view
-  // even though segment filtering isn't exposed in this UI.
-  const directionFilteredInbound = useMemo(
-    () =>
-      applySegmentFilter(
-        filterByDirection(flowsInbound, zips, directionFilter),
-        { axis: 'all', buckets: [] },
-      ),
-    [flowsInbound, zips, directionFilter],
-  );
-  const directionFilteredOutbound = useMemo(
-    () =>
-      applySegmentFilter(
-        filterByDirection(flowsOutbound, zips, directionFilter),
-        { axis: 'all', buckets: [] },
-      ),
-    [flowsOutbound, zips, directionFilter],
-  );
-  const directionFilteredRegional = directionFilteredInbound;
+  // Filter strategy depends on the active metric category:
+  //   workers / shoppers → geographic DirectionFilter (East/West/Up/Down)
+  //   visitors           → VisitorType (Regional/Tourist by crow-flies dist)
+  // The two filters are mutually exclusive in the UI (only one toggle renders
+  // at a time), and each branch leaves the other filter inert. applySegment
+  // is called with an inert filter so the call surface mirrors the LODES
+  // view even though segment filtering isn't exposed in this UI.
+  const isVisitorCategory = activeCategory === 'visitors';
+  const directionFilteredInbound = useMemo(() => {
+    const base = isVisitorCategory
+      ? filterByVisitorType(flowsInbound, zips, visitorType)
+      : filterByDirection(flowsInbound, zips, directionFilter);
+    return applySegmentFilter(base, { axis: 'all', buckets: [] });
+  }, [flowsInbound, zips, directionFilter, visitorType, isVisitorCategory]);
+  const directionFilteredOutbound = useMemo(() => {
+    const base = isVisitorCategory
+      ? filterByVisitorType(flowsOutbound, zips, visitorType)
+      : filterByDirection(flowsOutbound, zips, directionFilter);
+    return applySegmentFilter(base, { axis: 'all', buckets: [] });
+  }, [flowsOutbound, zips, directionFilter, visitorType, isVisitorCategory]);
+  const directionFilteredRegional = isShopperMetric
+    ? directionFilteredOutbound
+    : directionFilteredInbound;
   const directionFilteredFlows =
     effectiveMode === 'regional'
       ? directionFilteredRegional
@@ -279,20 +515,44 @@ export function ActivityCommuteView({ data, placer }: Props) {
         ? directionFilteredInbound
         : directionFilteredOutbound;
 
-  const visibleFlows = useMemo(
-    () => filterForSelection(directionFilteredFlows, selectedZip, effectiveMode),
-    [directionFilteredFlows, selectedZip, effectiveMode],
-  );
+  const visibleFlows = useMemo(() => {
+    const base = filterForSelection(directionFilteredFlows, selectedZip, effectiveMode);
+    // Shopper multi-select partner filter — pivot axis follows mode:
+    // inbound + anchor view → match on origin place (which resident
+    // anchors visit this shopping place); otherwise → match on dest
+    // place (the canonical "Top Destinations" pivot).
+    if (isShopperMetric && selectedShopperPartners.length > 0) {
+      const partnerKeys = new Set(
+        selectedShopperPartners.map((p) => p.place),
+      );
+      const pivotOrigin = selectedZip != null && effectiveMode === 'inbound';
+      return base.filter((f) => {
+        const side = pivotOrigin ? f.originPlace : f.destPlace;
+        return partnerKeys.has(side ?? '');
+      });
+    }
+    return base;
+  }, [
+    directionFilteredFlows,
+    selectedZip,
+    effectiveMode,
+    isShopperMetric,
+    selectedShopperPartners,
+  ]);
 
   // Per-anchor distance / vehicle-miles tile shown below the inbound tile in
   // the left panel. Content varies by metric:
-  //   workers     → "Average Commute Distance" (round-trip, miles)
-  //   daily-trips → "Average Daily Vehicle Miles" (sum trips × one-way miles)
-  //   trips       → "Total Vehicle Miles" (sum trips × one-way miles)
-  // Scoped to the selected anchor's flows in the active mode so the tile
-  // tracks the headline above it.
+  //   workers      → "Average Commute Distance" (round-trip miles)
+  //   daily-trips  → "Average Daily Vehicle Miles" (trips × one-way miles)
+  //   trips        → "Total Vehicle Miles" (trips × one-way miles)
+  //   visitors     → "Average Visit Distance" (visitor-weighted one-way miles)
+  //   daily-visits → "Average Daily Vehicle Miles" (visits × one-way miles)
+  //   visits       → "Total Vehicle Miles" (visits × one-way miles)
+  //   out-of-market-shopping → null (source data has its own home-distance
+  //                                  column; v2 can surface it directly)
   const distanceTile = useMemo(() => {
     if (!selectedZip) return null;
+    if (isShopperMetric) return null;
     const dataset = mode === 'inbound' ? directionFilteredInbound : directionFilteredOutbound;
     let anchorFlows = dataset.filter((f) =>
       mode === 'inbound' ? f.destZip === selectedZip : f.originZip === selectedZip,
@@ -315,25 +575,36 @@ export function ActivityCommuteView({ data, placer }: Props) {
         sub: 'worker-weighted, round-trip · cross-ZIP only',
       };
     }
+    if (metric === 'visitors') {
+      const oneWay = meanCommuteMiles(anchorFlows, zips, dd);
+      return {
+        label: 'Average Visit Distance',
+        value: oneWay > 0 ? `${oneWay.toFixed(1)} mi` : '—',
+        sub: 'visitor-weighted, one-way · cross-ZIP only',
+      };
+    }
     const totalVMT = sumDistanceWeightedMiles(anchorFlows, zips, dd);
-    if (metric === 'daily-trips') {
+    if (metric === 'daily-trips' || metric === 'daily-visits') {
+      const unit = metric === 'daily-trips' ? 'avg. daily trips' : 'avg. daily visits';
       return {
         label: 'Average Daily Vehicle Miles',
         value: totalVMT > 0 ? `${fmtInt(totalVMT)} mi` : '—',
-        sub: 'avg. daily trips × one-way distance · cross-ZIP only',
+        sub: `${unit} × one-way distance · cross-ZIP only`,
       };
     }
-    // metric === 'trips' — annual round-trip volumes × one-way distance.
+    // 'trips' or 'visits' — annual volumes × one-way distance.
+    const unit = metric === 'trips' ? 'annual trips' : 'annual visits';
     return {
       label: 'Total Vehicle Miles',
       value: totalVMT > 0 ? `${fmtInt(totalVMT)} mi` : '—',
-      sub: 'annual trips × one-way distance · cross-ZIP only',
+      sub: `${unit} × one-way distance · cross-ZIP only`,
     };
   }, [
     selectedZip,
     selectedPartner,
     mode,
     metric,
+    isShopperMetric,
     directionFilteredInbound,
     directionFilteredOutbound,
     zips,
@@ -342,8 +613,12 @@ export function ActivityCommuteView({ data, placer }: Props) {
 
   const referenceCorridorMap = useMemo(() => {
     if (!corridorIndex || !flowIndex) return null;
-    return buildVisibleCorridorMap(corridorIndex, flowIndex, flowsInbound, 'inbound');
-  }, [corridorIndex, flowIndex, flowsInbound]);
+    // For shoppers, flowsInbound is empty — use the outbound axis as the
+    // reference distribution so bucket breaks reflect actual data.
+    const referenceFlows = isShopperMetric ? flowsOutbound : flowsInbound;
+    const referenceMode: Mode = isShopperMetric ? 'outbound' : 'inbound';
+    return buildVisibleCorridorMap(corridorIndex, flowIndex, referenceFlows, referenceMode);
+  }, [corridorIndex, flowIndex, flowsInbound, flowsOutbound, isShopperMetric]);
 
   // Same two-tier bucket strategy as CommuteView: aggregate breaks scaled
   // against the corridor-edge total distribution; anchor breaks scaled
@@ -367,8 +642,194 @@ export function ActivityCommuteView({ data, placer }: Props) {
 
   const visibleCorridorMap = useMemo(() => {
     if (!corridorIndex || !flowIndex) return new Map<CorridorId, ActiveCorridorAggregation>();
+    // For visitors, corridor strokes are replaced by origin symbols (we
+    // don't know if visitors drove or flew, so a corridor route would
+    // misrepresent the data). Return an empty map so the corridor render
+    // branch is a no-op while the symbol overlay paints in its place.
+    if (isVisitorCategory) return new Map<CorridorId, ActiveCorridorAggregation>();
+    // For shoppers in Spaghetti / Heatmap view modes, suppress corridor
+    // strokes too — Spaghetti relies on the off-corridor render to draw
+    // direct dashed lines, Heatmap replaces the corridor layer with the
+    // MapLibre heat-blob layer entirely.
+    if (isShopperMetric && shopperViewLayer !== 'corridor') {
+      return new Map<CorridorId, ActiveCorridorAggregation>();
+    }
     return buildVisibleCorridorMap(corridorIndex, flowIndex, visibleFlows, effectiveMode);
-  }, [corridorIndex, flowIndex, visibleFlows, effectiveMode]);
+  }, [corridorIndex, flowIndex, visibleFlows, effectiveMode, isVisitorCategory, isShopperMetric, shopperViewLayer]);
+
+  // Origin-symbol overlay for the Visitors metric. Aggregates the
+  // post-filter (selection + visitor-type) visibleFlows by ORIGIN CITY
+  // (state-qualified) rather than ZIP — a big metro like Dallas spreads
+  // across 20+ ZIPs and per-ZIP bubbles fragment the visual story. Each
+  // bubble's position is the visit-weighted mean of its underlying ZIPs'
+  // centroids so a multi-ZIP city anchors near its population mass. Rows
+  // missing a city tag (legacy or non-visitor sneak-throughs) fall back
+  // to per-ZIP grouping so they remain visible. Cap to the top
+  // ORIGIN_SYMBOL_LIMIT by value to keep the SVG performant; the long
+  // tail is omitted (the headline tile still tracks the full universe).
+  const originSymbols = useMemo(() => {
+    if (!isVisitorCategory) return undefined;
+    const ORIGIN_SYMBOL_LIMIT = 300;
+    interface SymbolAgg {
+      key: string;          // city-state or ZIP fallback
+      label: string;        // human-readable place label
+      latWeighted: number;  // running sum of lat × value (for weighted mean)
+      lngWeighted: number;  // running sum of lng × value
+      value: number;        // sum of visits
+      sampleZip: string;    // representative ZIP for tooltip
+    }
+    const agg = new Map<string, SymbolAgg>();
+    for (const f of visibleFlows) {
+      if (f.originLat == null || f.originLng == null) continue;
+      const city = f.originCity?.trim();
+      const state = f.originState?.trim();
+      // Group by "{city}, {state}" when both are present; fall back to
+      // origin ZIP otherwise so rows missing city tags still surface.
+      const key = city
+        ? state
+          ? `${city}, ${state}`
+          : city
+        : f.originZip;
+      const label = city
+        ? state
+          ? `${city}, ${state}`
+          : city
+        : f.originPlace || f.originZip;
+      const existing = agg.get(key);
+      if (existing) {
+        existing.latWeighted += f.originLat * f.workerCount;
+        existing.lngWeighted += f.originLng * f.workerCount;
+        existing.value += f.workerCount;
+      } else {
+        agg.set(key, {
+          key,
+          label,
+          latWeighted: f.originLat * f.workerCount,
+          lngWeighted: f.originLng * f.workerCount,
+          value: f.workerCount,
+          sampleZip: f.originZip,
+        });
+      }
+    }
+    const all = Array.from(agg.values()).map((a) => ({
+      originZip: a.sampleZip,
+      originPlace: a.label,
+      lat: a.latWeighted / Math.max(a.value, 1),
+      lng: a.lngWeighted / Math.max(a.value, 1),
+      value: a.value,
+    }));
+    all.sort((a, b) => b.value - a.value);
+    return all.slice(0, ORIGIN_SYMBOL_LIMIT);
+  }, [isVisitorCategory, visibleFlows]);
+
+  // Tooltip unit follows the active visitor sub-metric so the hover panel
+  // reads "12,345 visitors" (Visitors) / "12,345 visits" (Visits) /
+  // "34 avg. daily visits" (Avg. Daily Visits).
+  const originSymbolUnit =
+    metric === 'visitors'
+      ? 'visitors'
+      : metric === 'daily-visits'
+        ? 'avg. daily visits'
+        : 'visits';
+
+  // Shopper heatmap GeoJSON — when the shopper metric publishes
+  // geocoded property points (placerMetricFile.properties), build the
+  // heatmap from per-property coords so each shopping location lights
+  // up individually. Falls back to dest-ZIP centroid for properties
+  // whose addresses haven't been geocoded yet (run
+  // scripts/geocode-properties.py to fill the cache). Weights are
+  // normalized to 0..1 against the scope max so the heatmap-color step
+  // expression (5 discrete bands at 20/40/60/80%) reads correctly with
+  // sparse shopper point sets — matches heatmapPoints.ts's convention
+  // for the LODES block density layer.
+  const shopperHeatmapData = useMemo(() => {
+    if (!isShopperMetric || shopperViewLayer !== 'heatmap') return null;
+    const zipIndex = new Map<string, typeof zips[number]>();
+    for (const z of zips) zipIndex.set(z.zip, z);
+    const properties = placerMetricFile?.properties ?? [];
+    type Pt = { lat: number; lng: number; weight: number; key: string };
+    const points: Pt[] = [];
+    if (properties.length > 0) {
+      // Property-level points — one feature per geocoded address.
+      for (const p of properties) {
+        if (p.lat == null || p.lng == null) {
+          // Property not geocoded yet — fall back to its dest-ZIP centroid.
+          const meta = zipIndex.get(p.destZip);
+          if (!meta || meta.lat == null || meta.lng == null) continue;
+          points.push({
+            lat: meta.lat,
+            lng: meta.lng,
+            weight: p.visits,
+            key: p.address,
+          });
+          continue;
+        }
+        points.push({ lat: p.lat, lng: p.lng, weight: p.visits, key: p.address });
+      }
+    } else {
+      // No properties array (legacy file) — aggregate visibleFlows by
+      // dest ZIP centroid as a coarser fallback.
+      const byDest = new Map<string, number>();
+      for (const f of visibleFlows) {
+        byDest.set(f.destZip, (byDest.get(f.destZip) ?? 0) + f.workerCount);
+      }
+      for (const [destZip, weight] of byDest) {
+        const meta = zipIndex.get(destZip);
+        if (!meta || meta.lat == null || meta.lng == null) continue;
+        points.push({
+          lat: meta.lat,
+          lng: meta.lng,
+          weight,
+          key: destZip,
+        });
+      }
+    }
+    if (points.length === 0) return { type: 'FeatureCollection' as const, features: [] };
+    const maxValue = Math.max(...points.map((p) => p.weight), 1);
+    return {
+      type: 'FeatureCollection' as const,
+      features: points.map((p) => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [p.lng, p.lat] as [number, number] },
+        properties: { weight: p.weight / maxValue, block: p.key },
+      })),
+    };
+  }, [isShopperMetric, shopperViewLayer, placerMetricFile, visibleFlows, zips]);
+
+  // Visitor-type pie data — Regional vs Tourist split of the UNFILTERED
+  // visitor universe (ignores the active visitor-type chip so the user
+  // can always see the proportional mix). Uses the same GWS-centroid
+  // threshold the filter applies (50 mi crow-flies). Computed from
+  // flowsInbound before any direction/segment/selection narrowing —
+  // mirrors the framing of the headline "Total Visitors" tile so the
+  // pie always reads as "what's the full breakdown of this metric".
+  const visitorTypePieData = useMemo(() => {
+    if (!isVisitorCategory) return null;
+    const ref = zips.find((z) => z.zip === VISITOR_TYPE_REFERENCE_ZIP);
+    if (!ref || ref.lat == null || ref.lng == null) return null;
+    const reference = { lat: ref.lat, lng: ref.lng };
+    const zipIndex = new Map<string, typeof zips[number]>();
+    for (const z of zips) zipIndex.set(z.zip, z);
+    let regional = 0;
+    let tourist = 0;
+    for (const f of flowsInbound) {
+      let lat: number | null = f.originLat ?? null;
+      let lng: number | null = f.originLng ?? null;
+      if (lat == null || lng == null) {
+        const o = zipIndex.get(f.originZip);
+        if (o && o.lat != null && o.lng != null) {
+          lat = o.lat;
+          lng = o.lng;
+        }
+      }
+      const cls = classifyVisitorType(lat, lng, reference);
+      // Origin with no centroid → treat as Tourist, matching the filter's
+      // default for remote/national origins.
+      if (cls === 'regional') regional += f.workerCount;
+      else tourist += f.workerCount;
+    }
+    return { regional, tourist };
+  }, [isVisitorCategory, flowsInbound, zips]);
 
   // Top corridor across the active direction filter (no selection narrowing)
   // — drives the inbound + outbound "Top corridor" tiles in StatsAggregated.
@@ -434,6 +895,66 @@ export function ActivityCommuteView({ data, placer }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [pinned]);
 
+  // Visitor metrics have only inbound data (origin = visitor home, dest =
+  // anchor), so when a visitor metric is active LOCK mode='inbound' to
+  // keep the underlying selection state aligned with what the UI shows.
+  useEffect(() => {
+    if (activeCategory === 'visitors' && mode !== 'inbound') {
+      setMode('inbound');
+    }
+  }, [activeCategory, mode]);
+
+  // The shopper metric exposes the full Inbound/Outbound toggle in anchor
+  // view so the user can switch between "who shops here" (inbound) and
+  // "where do residents shop elsewhere" (outbound). On first entry to
+  // shopper view, default mode to 'outbound' so the landing experience
+  // matches the source-data orientation; afterwards the user is free to
+  // toggle. Tracked via a ref so within-session toggles aren't clobbered.
+  const wasShopperRef = useRef(isShopperMetric);
+  useEffect(() => {
+    if (isShopperMetric && !wasShopperRef.current) {
+      setMode('outbound');
+    }
+    wasShopperRef.current = isShopperMetric;
+  }, [isShopperMetric]);
+
+  // Clear shopper-only filters when metric leaves shoppers — keeps them
+  // from carrying state into other metric views that don't surface those
+  // controls.
+  useEffect(() => {
+    if (!isShopperMetric) {
+      if (selectedShopperCategory !== null) setSelectedShopperCategory(null);
+      if (selectedShopperPartners.length > 0) setSelectedShopperPartners([]);
+    }
+  }, [isShopperMetric, selectedShopperCategory, selectedShopperPartners.length]);
+
+  // When mode changes (Inbound ↔ Outbound) inside the shopper view, clear
+  // the partner multi-select — the pivot axis is now origin-vs-dest, so
+  // a "Rifle" destination selection makes no sense in inbound mode (where
+  // Rifle would mean origin).
+  useEffect(() => {
+    if (isShopperMetric && selectedShopperPartners.length > 0) {
+      setSelectedShopperPartners([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: only fire when mode flips
+  }, [mode, isShopperMetric]);
+
+  // When the destAnchors set changes (workers/visitors → shoppers or back),
+  // clear any stale selection that no longer belongs to the active anchor
+  // set. e.g. switching from Shoppers (with Aspen 81611 selected) back to
+  // Workers (anchors = 81601/81623 only) should drop the selection rather
+  // than carry an unselectable chip into the new view.
+  useEffect(() => {
+    if (selectedZip && !destAnchors.includes(selectedZip)) {
+      setSelectedZip(null);
+      setSelectedPartner(null);
+      setPassThroughOrigin(null);
+      setPassThroughDest(null);
+      setHover(null);
+      setPinned(null);
+    }
+  }, [destAnchors, selectedZip]);
+
   const handleSelectZip = (z: string | null) => {
     setHover(null);
     setPinned(null);
@@ -452,6 +973,11 @@ export function ActivityCommuteView({ data, placer }: Props) {
   const handleDirectionChange = (d: DirectionFilter) => {
     setHover(null);
     setDirectionFilter(d);
+    setSelectedPartner(null);
+  };
+  const handleVisitorTypeChange = (v: VisitorType) => {
+    setHover(null);
+    setVisitorType(v);
     setSelectedPartner(null);
   };
   const handleModeChange = (m: Mode) => {
@@ -507,15 +1033,51 @@ export function ActivityCommuteView({ data, placer }: Props) {
       : null;
   void partnerHeader; // currently surfaced only via ActiveFiltersOverlay
 
+  // Category-driven copy for the left-panel header + corridor tooltip text.
+  // Headline noun follows the category; subtitle prefix follows the metric
+  // role (Origins vs. Destinations).
+  const headlineNoun =
+    activeCategory === 'workers'
+      ? 'Valley Commuters'
+      : activeCategory === 'visitors'
+        ? 'Valley Visitors'
+        : 'Valley Shoppers';
+  const subtitleCategory =
+    activeCategory === 'workers'
+      ? 'Employee Origins by ZIP'
+      : activeCategory === 'visitors'
+        ? 'Visitor Origins by ZIP'
+        : 'Out-of-Market Shopping Destinations';
+
+  // Hover/pinned tooltip header. Unit word follows the active metric so the
+  // corridor count reads correctly across categories.
+  const tooltipUnit =
+    activeCategory === 'workers'
+      ? statsMetricLabels?.descriptor ?? 'employees'
+      : activeCategory === 'visitors'
+        ? statsMetricLabels?.descriptor ?? 'visitors'
+        : 'visits';
   const headerFor = (s: HoverState) =>
-    `${s.aggregation.corridor.label} — ${fmtInt(s.aggregation.total)} employees`;
+    `${s.aggregation.corridor.label} — ${fmtInt(s.aggregation.total)} ${tooltipUnit}`;
   const subheadForDirection = (
     s: HoverState,
     direction: 'residence' | 'workplace',
-  ) =>
-    direction === 'residence'
-      ? `Employees come from ${s.aggregation.byOriginZip.size} home ZIP(s) through this segment`
-      : `Employees travel through here to ${s.aggregation.byDestZip.size} workplace ZIP(s)`;
+  ): string => {
+    if (activeCategory === 'workers') {
+      return direction === 'residence'
+        ? `Employees come from ${s.aggregation.byOriginZip.size} home ZIP(s) through this segment`
+        : `Employees travel through here to ${s.aggregation.byDestZip.size} workplace ZIP(s)`;
+    }
+    if (activeCategory === 'visitors') {
+      return direction === 'residence'
+        ? `Visitors come from ${s.aggregation.byOriginZip.size} home ZIP(s) through this segment`
+        : `Visitors travel through here to ${s.aggregation.byDestZip.size} destination ZIP(s)`;
+    }
+    // shoppers — origin = resident ZIP, dest = out-of-market property ZIP
+    return direction === 'residence'
+      ? `Residents come from ${s.aggregation.byOriginZip.size} home ZIP(s) through this segment`
+      : `Residents travel through here to ${s.aggregation.byDestZip.size} out-of-market ZIP(s)`;
+  };
 
   const showHover =
     hover &&
@@ -556,22 +1118,48 @@ export function ActivityCommuteView({ data, placer }: Props) {
             >
               Roaring Fork & Colorado River
               <br />
-              Valley Commuters
+              {headlineNoun}
             </h1>
             <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
-              Employee Origins by ZIP — 2025
+              {subtitleCategory} — {placerYear}
             </div>
           </header>
 
+          {/* Mode toggle behavior is metric-aware:
+              · Workers           — aggregate label / Inbound|Outbound toggle (default).
+              · Visitors aggregate— aggregate label (no toggle).
+              · Visitors workplace— static "Inbound (To)" (outbound has no data).
+              · Shoppers aggregate— static "Outbound (From)" (flows are valley-out).
+              · Shoppers workplace— interactive Inbound|Outbound toggle so
+                the user can read the same source rows from either side
+                ("who shops here" vs. "where do residents shop"). */}
           <ModeToggle
             mode={mode}
             onChange={handleModeChange}
-            aggregate={selectionKind === 'aggregate'}
+            aggregate={selectionKind === 'aggregate' && !isShopperMetric}
+            staticDirection={
+              isShopperMetric && selectionKind === 'aggregate'
+                ? 'outbound'
+                : activeCategory === 'visitors' && selectionKind === 'anchor'
+                  ? 'inbound'
+                  : undefined
+            }
           />
 
           <ActivityMetricToggle value={metric} onChange={setMetric} />
 
-          <DirectionToggle value={directionFilter} onChange={handleDirectionChange} />
+          {isVisitorCategory ? (
+            <VisitorTypeToggle value={visitorType} onChange={handleVisitorTypeChange} />
+          ) : (
+            <DirectionToggle value={directionFilter} onChange={handleDirectionChange} />
+          )}
+
+          {isShopperMetric && (
+            <ShopperViewToggle
+              value={shopperViewLayer}
+              onChange={setShopperViewLayer}
+            />
+          )}
 
           <ZipSelector
             zips={zips}
@@ -579,19 +1167,43 @@ export function ActivityCommuteView({ data, placer }: Props) {
             onSelectZip={handleSelectZip}
             hideSearch
             anchorAllowList={destAnchors}
+            label={
+              isShopperMetric
+                ? 'Resident - ZIP Codes'
+                : isVisitorCategory
+                  ? 'Visit Destinations - ZIP Codes'
+                  : 'Workplaces - Zip Codes'
+            }
+            groupAriaLabel={
+              isShopperMetric
+                ? 'Resident anchor ZIPs'
+                : isVisitorCategory
+                  ? 'Visit destination ZIPs'
+                  : 'Workplace ZIPs'
+            }
           />
 
           {selectedZip == null ? (
+            // StatsAggregated reads exclusively from its `*Inbound` slots
+            // (inbound-only by editorial choice). For the shopper metric the
+            // direction axis is flipped — origin = resident anchor, dest =
+            // out-of-market ZIP — so we feed the outbound dataset into the
+            // inbound slots. The metricLabels override every string slot so
+            // the copy reads correctly regardless of which dataset arrived.
             <StatsAggregated
-              flowsInbound={flowsInbound}
+              flowsInbound={isShopperMetric ? flowsOutbound : flowsInbound}
               flowsOutbound={flowsOutbound}
-              directionFilteredInbound={directionFilteredInbound}
+              directionFilteredInbound={
+                isShopperMetric ? directionFilteredOutbound : directionFilteredInbound
+              }
               directionFilteredOutbound={directionFilteredOutbound}
               directionFilter={directionFilter}
-              topCorridorInbound={topCorridorInbound}
+              topCorridorInbound={
+                isShopperMetric ? topCorridorOutbound : topCorridorInbound
+              }
               topCorridorOutbound={topCorridorOutbound}
               metricLabels={statsMetricLabels}
-              commuteDistanceMultiplier={2}
+              commuteDistanceMultiplier={isShopperMetric ? 1 : 2}
               zips={zips}
               driveDistance={driveDistance}
               layout="stacked"
@@ -600,9 +1212,11 @@ export function ActivityCommuteView({ data, placer }: Props) {
             <StatsForZip
               flows={flows}
               directionFilteredFlows={directionFilteredFlows}
-              flowsInbound={flowsInbound}
+              flowsInbound={isShopperMetric ? flowsOutbound : flowsInbound}
               flowsOutbound={flowsOutbound}
-              directionFilteredInbound={directionFilteredInbound}
+              directionFilteredInbound={
+                isShopperMetric ? directionFilteredOutbound : directionFilteredInbound
+              }
               directionFilteredOutbound={directionFilteredOutbound}
               directionFilter={directionFilter}
               zips={zips}
@@ -625,7 +1239,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
       <main className="relative w-full md:flex-1">
         <div className="relative w-full h-[80vh] md:h-auto md:absolute md:inset-0">
           <MapCanvas
-            flows={flowsInbound}
+            flows={isShopperMetric ? flowsOutbound : flowsInbound}
             zips={zips}
             visibleFlows={visibleFlows}
             bundleFlows={[]}
@@ -653,9 +1267,13 @@ export function ActivityCommuteView({ data, placer }: Props) {
               setPinned(null);
               setSuppressedHover(hover?.corridorId ?? null);
             }}
-            heatmapData={null}
+            heatmapData={shopperHeatmapData}
             selectionData={null}
-            viewLayer="corridor"
+            viewLayer={
+              isShopperMetric && shopperViewLayer === 'heatmap'
+                ? 'heatmap'
+                : 'corridor'
+            }
             industrySector="all"
             industryCounty="all"
             wacFile={null}
@@ -665,10 +1283,19 @@ export function ActivityCommuteView({ data, placer }: Props) {
             blockScopeActive={false}
             blocksHidden={false}
             odBlocks={null}
+            originSymbols={originSymbols}
+            originSymbolUnit={originSymbolUnit}
+            hideAnchorMarkers={isVisitorCategory}
+            keepRegionalBounds={isVisitorCategory}
+            hideOffCorridor={isShopperMetric && shopperViewLayer === 'heatmap'}
           />
 
           <ActiveFiltersOverlay
-            directionFilter={directionFilter}
+            // For visitors the geographic direction filter isn't surfaced —
+            // suppress its chip so the overlay doesn't reflect a stale East /
+            // West / Up Valley selection left over from a workers session.
+            // (visitor-type chip is a v2 enhancement.)
+            directionFilter={isVisitorCategory ? 'all' : directionFilter}
             onClearDirection={() => handleDirectionChange('all')}
             selectedPartner={selectedPartner}
             onClearPartner={() => handleSelectPartner(null)}
@@ -680,29 +1307,84 @@ export function ActivityCommuteView({ data, placer }: Props) {
             onClearSelectedBlocks={() => {}}
           />
 
-          {/* Bottom card strip — visible only when an anchor is selected.
-              Mirrors the LODES BottomCardStrip layout: 5 cards (Workforce
-              Flows, Workplace Metrics, Top Inflow, Top Outflow, Pass
-              Through) docked at the bottom of the map, glass-backed so
-              the corridor render shows through. */}
-          {selectedZip && (
+          {/* Shopper bottom strip — KPI / Pie / Place Rankings docked at
+              the bottom of the map area, plus a floating Category Rankings
+              card pinned to the right rail above the strip's third column
+              (the strip itself renders both elements via absolute
+              positioning). Renders for the shopper metric whether or not
+              an anchor is selected; when an anchor is selected the cards
+              scope to that resident anchor's outbound shopping. */}
+          {isShopperMetric && (
+            <ShopperBottomCardStrip
+              // Pass the SELECTION-narrowed flows (not partner-narrowed)
+              // so Place Rankings can list the full set of clickable
+              // partners; the strip applies its own partner filter for
+              // the KPI / Pie / Category cards.
+              flows={filterForSelection(directionFilteredFlows, selectedZip, effectiveMode)}
+              selectedZip={selectedZip}
+              scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : 'All Residents'}
+              selectedCategory={selectedShopperCategory}
+              onSelectCategory={setSelectedShopperCategory}
+              selectedPartners={selectedShopperPartners}
+              onSelectPartners={setSelectedShopperPartners}
+              zips={zips}
+              placerYear={placerYear}
+              mode={effectiveMode}
+            />
+          )}
+
+          {/* Bottom card strip (Workers / Visitors).
+              · Workers / Visitors with an anchor selected → full anchor
+                card set (Workplace Metrics + Top Inflow [+ Outflow / Pass
+                Through depending on metric guards]).
+              · Visitors with NO anchor selected → strip still renders so
+                the Visitor-Type Mix pie card stays visible (anchor-
+                specific cards are gated inside the strip on selectedZip).
+              · Shoppers → uses ShopperBottomCardStrip above. */}
+          {!isShopperMetric && (selectedZip || isVisitorCategory) && (
             <div
               className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
               style={{ paddingBottom: 8 }}
             >
               <ActivityBottomCardStrip
                 selectedZip={selectedZip}
-                scope={zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip}
+                scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : ''}
                 flowsInbound={directionFilteredInbound}
                 flowsOutbound={directionFilteredOutbound}
                 placerFlowsInbound={flowsInbound}
                 placerAnchors={destAnchors}
                 placerYear={placerYear}
-                workplaceMetricLabels={
-                  statsMetricLabels && { total: statsMetricLabels.total }
+                visitorTypePieData={
+                  isVisitorCategory && visitorTypePieData
+                    ? {
+                        regional: visitorTypePieData.regional,
+                        tourist: visitorTypePieData.tourist,
+                        unit: originSymbolUnit,
+                      }
+                    : undefined
                 }
-                workplaceCommuteDistanceMultiplier={2}
-                workplaceCommuteDistanceLabel="Average roundtrip commute distance"
+                workplaceMetricLabels={
+                  statsMetricLabels
+                    ? isVisitorCategory
+                      ? {
+                          total: statsMetricLabels.total,
+                          unitNoun: metric === 'visitors' ? 'visitors' : 'visits',
+                          totalShareNoun:
+                            metric === 'visitors' ? 'visitors' : 'visits',
+                          crossShareLabel: 'Cross-ZIP visit share',
+                          crossShareVerb: 'arrive at',
+                          distanceWeighting:
+                            metric === 'visitors' ? 'Visitor-weighted' : 'Visit-weighted',
+                        }
+                      : { total: statsMetricLabels.total }
+                    : undefined
+                }
+                workplaceCommuteDistanceMultiplier={isVisitorCategory ? 1 : 2}
+                workplaceCommuteDistanceLabel={
+                  isVisitorCategory
+                    ? 'Average one-way visit distance'
+                    : 'Average roundtrip commute distance'
+                }
                 zips={zips}
                 corridorIndex={corridorIndex}
                 corridorNodes={corridorNodes}
@@ -713,6 +1395,15 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 passThroughDest={passThroughDest}
                 onPassThroughOriginChange={setPassThroughOrigin}
                 onPassThroughDestChange={setPassThroughDest}
+                hideWorkforceFlows={isVisitorCategory}
+                hidePassThrough={isVisitorCategory}
+                hideTopOutflow={isVisitorCategory}
+                topInflowSubtitle={
+                  isVisitorCategory ? 'Where visitors come from' : undefined
+                }
+                topOutflowSubtitle={
+                  isVisitorCategory ? 'Where this destination’s visitors also go' : undefined
+                }
               />
             </div>
           )}
@@ -765,7 +1456,10 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 </button>
               </div>
 
-              {/* Card 1 — Places of Residence (byOriginZip). */}
+              {/* Card 1 — origin side. Always "Places of Residence" for
+                  visitors/workers (origin = home ZIP). For shoppers the
+                  origin is the resident anchor that the visitor lives in,
+                  so the label still describes residences. */}
               <div
                 className="rounded px-2 py-1.5 mb-2"
                 style={{
@@ -791,7 +1485,9 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 />
               </div>
 
-              {/* Card 2 — Places of Work (byDestZip). */}
+              {/* Card 2 — destination side. Workers/visitors → places of
+                  work (commute / visit destinations). Shoppers → shopping
+                  locations (where the residents are spending). */}
               <div
                 className="rounded px-2 py-1.5"
                 style={{
@@ -803,7 +1499,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
                   className="text-[9px] font-semibold uppercase tracking-wider mb-0.5"
                   style={{ color: 'var(--text-h)' }}
                 >
-                  Places of Work
+                  {isShopperMetric ? 'Shopping Locations' : 'Places of Work'}
                 </div>
                 <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
                   {subheadForDirection({ ...pinned, aggregation: live }, 'workplace')}

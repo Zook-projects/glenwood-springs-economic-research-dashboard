@@ -26,6 +26,7 @@ import {
   PassThroughCard,
   WorkplaceMetricsCard,
 } from './BottomCardStrip';
+import { VisitorTypePieChart } from './VisitorTypePieChart';
 import type {
   CorridorFlowEntry,
   CorridorId,
@@ -42,8 +43,12 @@ import { buildPlacerPassThrough } from '../lib/placerPassThrough';
 import { fmtInt, fmtPct } from '../lib/format';
 
 interface Props {
-  selectedZip: string;
-  scope: string;                        // place label of the selected anchor
+  // null when the Activity map is in aggregate (no-anchor) view. The strip
+  // still renders if it has any always-visible card to show (e.g., the
+  // visitor-type pie). Anchor-specific cards (Workplace Metrics, Top
+  // Inflow / Outflow, Pass Through) are gated on a non-null selectedZip.
+  selectedZip: string | null;
+  scope: string;                        // place label of the selected anchor (or '')
   flowsInbound: FlowRow[];              // Placer inbound, direction-filtered
   flowsOutbound: FlowRow[];             // Placer synthetic outbound, direction-filtered
   // Full Placer inbound flow set BEFORE the direction filter — drives the
@@ -62,8 +67,17 @@ interface Props {
   // Optional override for the WorkplaceMetricsCard's headline label — the
   // view feeds in "Average Daily Trips" when the daily-trips metric is
   // active. Falls through to the LODES default ("Total Workers") when
-  // omitted.
-  workplaceMetricLabels?: { total?: string };
+  // omitted. Visitor / shopper metrics extend with additional noun slots
+  // (unitNoun, totalShareNoun, etc.) — see BottomCardStrip's
+  // WorkplaceMetricsCard for the full interface.
+  workplaceMetricLabels?: {
+    total?: string;
+    unitNoun?: string;
+    totalShareNoun?: string;
+    crossShareLabel?: string;
+    crossShareVerb?: string;
+    distanceWeighting?: string;
+  };
   // Round-trip framing for the Average commute distance row. Activity map
   // sets these unconditionally so the card reads "Average roundtrip
   // commute distance · {2 × one-way}".
@@ -75,6 +89,34 @@ interface Props {
   passThroughDest: { place: string; zips: string[] } | null;
   onPassThroughOriginChange: (sel: { place: string; zips: string[] } | null) => void;
   onPassThroughDestChange: (sel: { place: string; zips: string[] } | null) => void;
+  // When true, suppress the leftmost 3-bar "Workforce Flows" card. The
+  // Activity map's Visitors metric passes this — that card's
+  // inflow/outflow/within decomposition assumes a workforce framing the
+  // visitor data doesn't fit.
+  hideWorkforceFlows?: boolean;
+  // When true, suppress the trailing Pass-Through Traffic card. Same
+  // motivation as above for the Visitors metric — pass-through-of-workers
+  // is the framing the card communicates.
+  hidePassThrough?: boolean;
+  // When true, suppress the Top Outflow partner list. The Activity map's
+  // Visitors metric passes this — visitor data only carries inbound
+  // origin→anchor flows so a Top Outflow card has nothing meaningful to
+  // show (the synthetic anchor↔anchor subset isn't representative).
+  hideTopOutflow?: boolean;
+  // Optional visitor-type pie data. When provided, renders a "Visitor Type
+  // Mix" card at the head of the strip showing the Regional vs Tourist
+  // split of the metric's unfiltered universe. Always visible regardless
+  // of the Visitor Type chip selection so the user can see the
+  // proportional mix at a glance. `unit` follows the active sub-metric
+  // ("visitors" / "visits" / "avg. daily visits").
+  visitorTypePieData?: { regional: number; tourist: number; unit?: string };
+  // Optional subtitle overrides for the Top inflow / Top outflow cards.
+  // Default: "Where workers commute from · Placer YYYY" /
+  // "Where residents commute to · Placer YYYY". Visitor metric uses these
+  // to swap "workers / residents" for "visitors". `placerYear` is rendered
+  // in both, so callers omit the year piece.
+  topInflowSubtitle?: string;
+  topOutflowSubtitle?: string;
 }
 
 const TOP_PARTNER_LIMIT = 10;
@@ -100,6 +142,12 @@ export function ActivityBottomCardStrip({
   passThroughDest,
   onPassThroughOriginChange,
   onPassThroughDestChange,
+  hideWorkforceFlows = false,
+  hidePassThrough = false,
+  hideTopOutflow = false,
+  topInflowSubtitle,
+  topOutflowSubtitle,
+  visitorTypePieData,
 }: Props) {
   // Placer-derived pass-through traffic file. Memoized on the full inbound
   // set + corridor graph; direction filtering happens inside the card.
@@ -185,78 +233,102 @@ export function ActivityBottomCardStrip({
 
   return (
     <div className="flex gap-3 px-3 md:px-4 pb-3 pt-2 overflow-x-auto">
-      <WorkforceFlowsCard
-        scope={scope}
-        inflow={inflowTotal}
-        outflow={outflowTotal}
-        within={withinTotal}
-      />
-      <WorkplaceMetricsCard
-        scope={scope}
-        selectedZip={selectedZip}
-        selectedPartner={null}
-        mode="inbound"
-        wacLatest={null}
-        racLatest={null}
-        inflowLatest={{ totalJobs: inflowTotal }}
-        outflowLatest={{ totalJobs: outflowTotal }}
-        withinLatest={{ totalJobs: withinTotal }}
-        topInflowPartner={topInflowPartner}
-        topOutflowPartner={topOutflowPartner}
-        flowsInbound={flowsInbound}
-        flowsOutbound={flowsOutbound}
-        zips={zips}
-        corridorIndex={corridorIndex}
-        flowIndex={flowIndex}
-        driveDistance={driveDistance}
-        segmentFilter={{ axis: 'all', buckets: [] }}
-        metricLabels={workplaceMetricLabels}
-        commuteDistanceMultiplier={workplaceCommuteDistanceMultiplier}
-        commuteDistanceLabel={workplaceCommuteDistanceLabel}
-      />
-      <Card
-        title={`${scope} · Top inflow`}
-        subtitle="Where workers commute from · Placer 2025"
-        width={260}
-        maxHeight={320}
-      >
-        <PartnerList
-          partners={topInflowPartners}
-          denominator={inflowTotal + withinTotal}
-          withinZip={
-            withinTotal > 0 ? { zip: selectedZip, workers: withinTotal } : undefined
-          }
-          totalRow={{ label: 'Total inflow', value: inflowTotal }}
-        />
-      </Card>
-      <Card
-        title={`${scope} · Top outflow`}
-        subtitle="Where residents commute to · Placer 2025"
-        width={260}
-        maxHeight={320}
-      >
-        <PartnerList
-          partners={topOutflowPartners}
-          denominator={outflowTotal + withinTotal}
-          withinZip={
-            withinTotal > 0 ? { zip: selectedZip, workers: withinTotal } : undefined
-          }
-          totalRow={{ label: 'Total outflow', value: outflowTotal }}
-        />
-      </Card>
-      {passThrough && passThrough.byAnchor[selectedZip] && (
-        <PassThroughCard
-          anchorZip={selectedZip}
-          anchorPlace={scope}
-          passThrough={passThrough}
-          zipPlaces={zipPlaces}
-          zips={zips}
-          directionFilter={directionFilter}
-          origin={passThroughOrigin}
-          dest={passThroughDest}
-          onOriginChange={onPassThroughOriginChange}
-          onDestChange={onPassThroughDestChange}
-        />
+      {/* Visitor-type pie — always-on card (renders even without an anchor
+          selected). Placed first so the user reads the proportional mix
+          before the anchor-specific cards. */}
+      {visitorTypePieData && (
+        <Card title="Visitor Type Mix" width={260}>
+          <VisitorTypePieChart
+            regionalValue={visitorTypePieData.regional}
+            touristValue={visitorTypePieData.tourist}
+            unit={visitorTypePieData.unit}
+            size={108}
+          />
+        </Card>
+      )}
+      {/* Anchor-specific cards — only render when an anchor is selected.
+          In the visitor metric's aggregate view selectedZip is null and
+          only the pie card above renders. */}
+      {selectedZip && (
+        <>
+          {!hideWorkforceFlows && (
+            <WorkforceFlowsCard
+              scope={scope}
+              inflow={inflowTotal}
+              outflow={outflowTotal}
+              within={withinTotal}
+            />
+          )}
+          <WorkplaceMetricsCard
+            scope={scope}
+            selectedZip={selectedZip}
+            selectedPartner={null}
+            mode="inbound"
+            wacLatest={null}
+            racLatest={null}
+            inflowLatest={{ totalJobs: inflowTotal }}
+            outflowLatest={{ totalJobs: outflowTotal }}
+            withinLatest={{ totalJobs: withinTotal }}
+            topInflowPartner={topInflowPartner}
+            topOutflowPartner={topOutflowPartner}
+            flowsInbound={flowsInbound}
+            flowsOutbound={flowsOutbound}
+            zips={zips}
+            corridorIndex={corridorIndex}
+            flowIndex={flowIndex}
+            driveDistance={driveDistance}
+            segmentFilter={{ axis: 'all', buckets: [] }}
+            metricLabels={workplaceMetricLabels}
+            commuteDistanceMultiplier={workplaceCommuteDistanceMultiplier}
+            commuteDistanceLabel={workplaceCommuteDistanceLabel}
+          />
+          <Card
+            title={`${scope} · Top inflow`}
+            subtitle={`${topInflowSubtitle ?? 'Where workers commute from'} · Placer ${placerYear}`}
+            width={260}
+            maxHeight={320}
+          >
+            <PartnerList
+              partners={topInflowPartners}
+              denominator={inflowTotal + withinTotal}
+              withinZip={
+                withinTotal > 0 ? { zip: selectedZip, workers: withinTotal } : undefined
+              }
+              totalRow={{ label: 'Total inflow', value: inflowTotal }}
+            />
+          </Card>
+          {!hideTopOutflow && (
+            <Card
+              title={`${scope} · Top outflow`}
+              subtitle={`${topOutflowSubtitle ?? 'Where residents commute to'} · Placer ${placerYear}`}
+              width={260}
+              maxHeight={320}
+            >
+              <PartnerList
+                partners={topOutflowPartners}
+                denominator={outflowTotal + withinTotal}
+                withinZip={
+                  withinTotal > 0 ? { zip: selectedZip, workers: withinTotal } : undefined
+                }
+                totalRow={{ label: 'Total outflow', value: outflowTotal }}
+              />
+            </Card>
+          )}
+          {!hidePassThrough && passThrough && passThrough.byAnchor[selectedZip] && (
+            <PassThroughCard
+              anchorZip={selectedZip}
+              anchorPlace={scope}
+              passThrough={passThrough}
+              zipPlaces={zipPlaces}
+              zips={zips}
+              directionFilter={directionFilter}
+              origin={passThroughOrigin}
+              dest={passThroughDest}
+              onOriginChange={onPassThroughOriginChange}
+              onDestChange={onPassThroughDestChange}
+            />
+          )}
+        </>
       )}
     </div>
   );

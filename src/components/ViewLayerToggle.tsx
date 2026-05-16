@@ -28,14 +28,14 @@ export function ViewLayerToggle({ value, onChange }: Props) {
         className="text-[10px] font-medium uppercase tracking-wider"
         style={{ color: 'var(--text-dim)' }}
       >
-        Metric
+        View
       </span>
       <MapToggleSegmented
         options={OPTIONS}
         value={value}
         onChange={onChange}
         accent="var(--accent)"
-        ariaLabel="Map visualization metric"
+        ariaLabel="Map visualization view"
       />
     </div>
   );

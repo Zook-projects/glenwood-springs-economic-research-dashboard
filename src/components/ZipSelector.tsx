@@ -25,6 +25,17 @@ interface Props {
   // only the anchor destinations Placer.ai actually covers (81601/81623).
   // Free-text search is unaffected.
   anchorAllowList?: ReadonlyArray<string>;
+  // Override for the chip-row label and aria text. Defaults to
+  // "Workplaces - Zip Codes". The Activity map's Visitors metric passes
+  // "Visit Destinations - ZIP Codes"; Shoppers passes "Resident ZIP Codes".
+  label?: string;
+  // Aria label for the chip group (defaults to "Workplace ZIPs"). Mirrors
+  // `label` semantically so screen readers stay in sync with the visible
+  // label when the metric changes.
+  groupAriaLabel?: string;
+  // Reset button aria + tooltip. Defaults to LODES-flavored copy.
+  resetAriaLabel?: string;
+  resetTitle?: string;
 }
 
 const COUNTY_OPTIONS: ReadonlyArray<{ key: WorkforceCountyFilter; label: string }> = [
@@ -42,6 +53,10 @@ export function ZipSelector({
   selectedCounty = 'all',
   onSelectCounty,
   anchorAllowList,
+  label = 'Workplaces - Zip Codes',
+  groupAriaLabel = 'Workplace ZIPs',
+  resetAriaLabel = 'Reset workplace selection',
+  resetTitle = 'Clear the selected workplace',
 }: Props) {
   const [query, setQuery] = useState('');
   const anchorZips = useMemo(() => {
@@ -89,22 +104,22 @@ export function ZipSelector({
           className="block text-[10px] font-medium uppercase tracking-wider"
           style={{ color: 'var(--text-dim)' }}
         >
-          Workplaces - Zip Codes
+          {label}
         </label>
         {selectedZip && (
           <button
             type="button"
             onClick={() => onSelectZip(null)}
-            aria-label="Reset workplace selection"
+            aria-label={resetAriaLabel}
             className="text-[10px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded transition-colors focus:outline-none focus-visible:ring-1"
             style={{ color: 'var(--accent)' }}
-            title="Clear the selected workplace"
+            title={resetTitle}
           >
             Reset
           </button>
         )}
       </div>
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Workplace ZIPs">
+      <div className="flex flex-wrap gap-1.5" role="group" aria-label={groupAriaLabel}>
         {anchorZips.map((z) => {
           const active = selectedZip === z.zip;
           return (

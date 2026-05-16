@@ -7,6 +7,10 @@
 //    coming in is ignored on this branch.
 //  • non-anchor view → disabled (locked to inbound — anchor-inbound is the
 //    only dataset whose origins include non-anchor places).
+//  • static direction → renders a single non-interactive label ("Inbound
+//    (To)" or "Outbound (From)") in place of the toggle. Used by the
+//    Activity view's Visitors and Shoppers metrics, where the data is
+//    single-direction and the other half of the toggle has no meaning.
 
 import type { Mode } from '../types/flow';
 
@@ -26,9 +30,49 @@ interface Props {
   // controlled by the View Layer toggle and the heatmap-specific
   // Residence / Workplace toggle below it).
   aggregate?: boolean;
+  // When set, the toggle renders a single static label ("Inbound (To)" or
+  // "Outbound (From)") instead of the toggle buttons. Takes precedence over
+  // `aggregate`. The Activity view passes this when the active metric is
+  // single-direction (Visitors workplace view, all Shoppers views) — the
+  // other direction has no underlying data so the toggle is replaced with
+  // a directional label that documents which axis the flows represent.
+  staticDirection?: Mode;
 }
 
-export function ModeToggle({ mode, onChange, disabled = false, aggregate = false }: Props) {
+const DIRECTION_LABEL: Record<Mode, string> = {
+  inbound: 'Inbound (To)',
+  outbound: 'Outbound (From)',
+  regional: 'Aggregate Regional Flows',
+};
+
+export function ModeToggle({
+  mode,
+  onChange,
+  disabled = false,
+  aggregate = false,
+  staticDirection,
+}: Props) {
+  if (staticDirection) {
+    const label = DIRECTION_LABEL[staticDirection];
+    return (
+      <div
+        role="status"
+        aria-label={label}
+        className="flex p-1 rounded-lg border"
+        style={{
+          background: 'rgba(255,255,255,0.03)',
+          borderColor: 'var(--panel-border)',
+        }}
+      >
+        <div
+          className="flex-1 px-3 py-1.5 text-xs font-medium rounded-md text-center"
+          style={{ background: 'var(--accent)', color: '#1a1207' }}
+        >
+          {label}
+        </div>
+      </div>
+    );
+  }
   if (aggregate) {
     return (
       <div

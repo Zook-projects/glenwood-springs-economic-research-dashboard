@@ -44,10 +44,11 @@ export function usePlacerData(): UsePlacerDataResult {
       fetchOrNull<PlacerMetricFile>(`${DATA_BASE}/placer/placer-employee-visits.json`),
       fetchOrNull<PlacerMetricFile>(`${DATA_BASE}/placer/placer-visitor-counts.json`),
       fetchOrNull<PlacerMetricFile>(`${DATA_BASE}/placer/placer-visitor-visits.json`),
+      fetchOrNull<PlacerMetricFile>(`${DATA_BASE}/placer/placer-shoppers-toplocations.json`),
     ])
-      .then(([summary, ec, ev, vc, vv]) => {
+      .then(([summary, ec, ev, vc, vv, st]) => {
         if (cancelled) return;
-        if (!summary || !ec || !ev || !vc || !vv) {
+        if (!summary || !ec || !ev || !vc || !vv || !st) {
           setData(null);
         } else {
           setData({
@@ -56,6 +57,7 @@ export function usePlacerData(): UsePlacerDataResult {
             employeeVisits: ev,
             visitorCounts: vc,
             visitorVisits: vv,
+            shoppersTopLocations: st,
           });
         }
         setIsLoading(false);

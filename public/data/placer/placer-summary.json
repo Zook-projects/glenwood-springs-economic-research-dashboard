@@ -13,11 +13,13 @@
     "81652",
     "81654"
   ],
-  "lastBuilt": "2026-05-13",
+  "lastBuilt": "2026-05-16",
   "metrics": {
     "employee-counts": {
       "label": "Employee Origins \u2014 Employee Counts",
       "routing": {
+        "dest_gateway_e": 0,
+        "dest_gateway_w": 0,
         "lodes_hit": 278,
         "routed_anchor": 1,
         "routed_gateway_e": 1,
@@ -30,6 +32,8 @@
     "employee-visits": {
       "label": "Employee Origins \u2014 Employee Visits",
       "routing": {
+        "dest_gateway_e": 0,
+        "dest_gateway_w": 0,
         "lodes_hit": 289,
         "routed_anchor": 1,
         "routed_gateway_e": 2,
@@ -39,9 +43,26 @@
       },
       "rowCount": 309
     },
+    "shoppers-toplocations": {
+      "droppedNoZip": 17,
+      "label": "Resident Top Locations \u2014 Out of Market Shopping",
+      "routing": {
+        "dest_gateway_e": 52,
+        "dest_gateway_w": 39,
+        "lodes_hit": 1681,
+        "routed_anchor": 101,
+        "routed_gateway_e": 0,
+        "routed_gateway_w": 0,
+        "self_loop": 0,
+        "unresolved": 18
+      },
+      "rowCount": 1800
+    },
     "visitor-counts": {
       "label": "Visitor Origins \u2014 Visitor Counts",
       "routing": {
+        "dest_gateway_e": 0,
+        "dest_gateway_w": 0,
         "lodes_hit": 1780,
         "routed_anchor": 11,
         "routed_gateway_e": 52071,
@@ -54,6 +75,8 @@
     "visitor-visits": {
       "label": "Visitor Origins \u2014 Visitor Visits",
       "routing": {
+        "dest_gateway_e": 0,
+        "dest_gateway_w": 0,
         "lodes_hit": 1986,
         "routed_anchor": 11,
         "routed_gateway_e": 56627,
