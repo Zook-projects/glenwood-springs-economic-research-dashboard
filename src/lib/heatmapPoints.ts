@@ -56,6 +56,14 @@ import {
   isSegmentFilterAll,
   sumBucketsFromAllAxes,
 } from './flowQueries';
+import {
+  quintileBinPoints,
+  type HeatmapFeatureCollection,
+} from './heatmapBinning';
+export type {
+  HeatmapPointFeature,
+  HeatmapFeatureCollection,
+} from './heatmapBinning';
 
 export type HeatmapSide = 'workplace' | 'residence';
 
@@ -85,17 +93,6 @@ function classifyPartnerBearing(
   }
   if (Math.abs(dy) > Math.abs(dx) * NS_DOMINANCE_RATIO) return 'neutral';
   return dLng > 0 ? 'east' : 'west';
-}
-
-export interface HeatmapPointFeature {
-  type: 'Feature';
-  geometry: { type: 'Point'; coordinates: [number, number] };
-  properties: { weight: number; block: string };
-}
-
-export interface HeatmapFeatureCollection {
-  type: 'FeatureCollection';
-  features: HeatmapPointFeature[];
 }
 
 export interface BuildHeatmapArgs {
@@ -347,36 +344,5 @@ export function buildHeatmapGeoJson(
     }
   }
 
-  // ----- Quintile binning (LEHD OnTheMap–style discrete bands) --------------
-  // Every surviving point is placed into one of 5 bands by its rank within
-  // the active scope. Bin centers 0.10 / 0.30 / 0.50 / 0.70 / 0.90 line up
-  // with the heatmap-color step cutoffs (0.20 / 0.40 / 0.60 / 0.80) so each
-  // quintile renders in its own discrete white alpha level.
-  const sorted = resolved.map((r) => r.weight).sort((a, b) => a - b);
-  const cutoffAt = (frac: number): number => {
-    if (sorted.length === 0) return 0;
-    const idx = Math.min(sorted.length - 1, Math.floor(frac * sorted.length));
-    return sorted[idx];
-  };
-  const t20 = cutoffAt(0.2);
-  const t40 = cutoffAt(0.4);
-  const t60 = cutoffAt(0.6);
-  const t80 = cutoffAt(0.8);
-  const bandCenter = (w: number): number => {
-    if (w <= t20) return 0.1;
-    if (w <= t40) return 0.3;
-    if (w <= t60) return 0.5;
-    if (w <= t80) return 0.7;
-    return 0.9;
-  };
-
-  const features: HeatmapPointFeature[] = [];
-  for (const r of resolved) {
-    features.push({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
-      properties: { weight: bandCenter(r.weight), block: r.key },
-    });
-  }
-  return { type: 'FeatureCollection', features };
+  return quintileBinPoints(resolved);
 }

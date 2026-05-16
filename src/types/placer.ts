@@ -62,6 +62,12 @@ export interface ShopperProperty {
   destZip: string;
   visits: number;
   residents: number;
+  // Per-resident-anchor breakdown so the client can re-rank properties
+  // for a single selected anchor without re-aggregating raw rows. Keys
+  // are resident-anchor ZIPs (e.g., 81601); values are that anchor's
+  // contribution to the property's total visits / residents.
+  visitsByAnchor?: Record<string, number>;
+  residentsByAnchor?: Record<string, number>;
   lat: number | null;
   lng: number | null;
 }

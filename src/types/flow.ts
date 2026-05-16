@@ -212,3 +212,17 @@ export interface ActiveCorridorAggregation {
   byOriginZip: Map<string, number>;           // inbound: origin → workers
   flows: CorridorFlowEntry[];                 // raw entries used for the rollup
 }
+
+// Single origin → destination ZIP pair, aggregated across any internal
+// splits (e.g., the shopper view's per-category FlowRows for the same
+// OD). Used by the off-corridor / spaghetti hover + pinned tooltip so a
+// branch click reads as one OD pair, not as the category-split flows
+// behind it.
+export interface ActiveOdAggregation {
+  originZip: string;
+  destZip: string;
+  originPlace: string;
+  destPlace: string;
+  total: number;          // sum of workerCount across the included flows
+  flows: FlowRow[];       // raw flows (one per category for shoppers)
+}

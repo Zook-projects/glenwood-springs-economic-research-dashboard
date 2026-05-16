@@ -24,14 +24,25 @@ import { RAMPS } from '../lib/subjectColorRamps';
 import type { FlowRow, ZipMeta } from '../types/flow';
 
 const STRIP_CARD_HEIGHT = 220;
-// Category Rankings sits as a floating right-rail card above the bottom
-// strip. Taller than STRIP_CARD_HEIGHT so all ~11 group categories fit
-// without scrolling.
-const CATEGORY_RANKINGS_HEIGHT = 320;
 
 interface PartnerSelection {
   place: string;
   zips: string[];
+}
+
+// Top-10 property row computed in the parent (ActivityCommuteView).
+// `score` is the visit count attributed to the active scope — anchor's
+// contribution when a resident anchor is selected, otherwise the
+// property's total visits. `totalVisits` always carries the raw total
+// for hover context.
+export interface TopShopperPropertyRow {
+  address: string;
+  property?: string | null;
+  destZip: string;
+  destPlace: string;
+  category: string;
+  score: number;
+  totalVisits: number;
 }
 
 interface Props {
@@ -44,15 +55,22 @@ interface Props {
   selectedZip: string | null;
   // Place label of the selected resident anchor.
   scope: string;
-  // Selected category filter (group category string) — controls the
-  // active row in CategoryRankings. null = no category filter.
-  selectedCategory: string | null;
-  onSelectCategory: (next: string | null) => void;
+  // Multi-select set of group categories — controls the active rows in
+  // CategoryRankings + Pie. Empty array = no category filter. Click-to-
+  // toggle on either card adds/removes the category; a "Clear (N)"
+  // chip resets the set, mirroring the Top Destinations interaction.
+  selectedCategories: string[];
+  onSelectCategories: (next: string[]) => void;
   // Selected destination partners (Rifle, Aspen, …) — multi-select set
   // keyed by place name. When non-empty, the cards + map narrow to flows
   // that touch any of the selected places.
   selectedPartners: PartnerSelection[];
   onSelectPartners: (next: PartnerSelection[]) => void;
+  // Top 10 properties for the right-rail Property Rankings card.
+  // Pre-narrowed by direction / anchor / partner / category in the
+  // parent. Same-name-different-city properties retain separate rows
+  // (dedup is by address).
+  topProperties: TopShopperPropertyRow[];
   // ZipMeta lookup for place names.
   zips: ZipMeta[];
   placerYear: number;
@@ -86,14 +104,26 @@ export function ShopperBottomCardStrip({
   flows,
   selectedZip,
   scope,
-  selectedCategory,
-  onSelectCategory,
+  selectedCategories,
+  onSelectCategories,
   selectedPartners,
   onSelectPartners,
+  topProperties,
   zips,
   placerYear,
   mode,
 }: Props) {
+  const selectedCategoriesSet = useMemo(
+    () => new Set(selectedCategories),
+    [selectedCategories],
+  );
+  const toggleCategory = (cat: string) => {
+    if (selectedCategoriesSet.has(cat)) {
+      onSelectCategories(selectedCategories.filter((c) => c !== cat));
+    } else {
+      onSelectCategories([...selectedCategories, cat]);
+    }
+  };
   // Pivot axis: in inbound + anchor view we rank by origin (which resident
   // anchors visit this place); otherwise rank by destination (the
   // canonical "Top Destinations" view).
@@ -117,21 +147,44 @@ export function ShopperBottomCardStrip({
   }, [zips]);
 
   // ---- Aggregates --------------------------------------------------------
-  // KPI / Pie / Category Rankings honor the multi-select partner filter
-  // so the headline KPIs and category breakdowns narrow to the selected
-  // destinations. Place Rankings reads off the un-filtered `flows` so
-  // the full list of clickable destinations remains visible (the user
-  // toggles selections by clicking rows).
+  // Two layered filters drive the strip:
+  //   · partnerFiltered = `flows` narrowed by the multi-select partner
+  //     chips (KPIs / breakdowns narrow; Place Rankings stays interactive)
+  //   · categoryFiltered = partnerFiltered narrowed by the multi-select
+  //     category set (KPIs + Place Rankings narrow; Pie + Category
+  //     Rankings keep showing all categories so the user can switch /
+  //     add more)
+  const categoryFiltered = useMemo(() => {
+    if (selectedCategoriesSet.size === 0) return partnerFiltered;
+    return partnerFiltered.filter(
+      (f) => selectedCategoriesSet.has(f.category || 'Other'),
+    );
+  }, [partnerFiltered, selectedCategoriesSet]);
+
+  // KPIs reflect both filters — total visits / residents for the active
+  // partner + category scope.
   const totalVisits = useMemo(
-    () => partnerFiltered.reduce((s, f) => s + f.workerCount, 0),
-    [partnerFiltered],
+    () => categoryFiltered.reduce((s, f) => s + f.workerCount, 0),
+    [categoryFiltered],
   );
   const totalResidents = useMemo(
-    () => partnerFiltered.reduce((s, f) => s + (f.residents ?? 0), 0),
+    () => categoryFiltered.reduce((s, f) => s + (f.residents ?? 0), 0),
+    [categoryFiltered],
+  );
+  // Universe total across the partner-filtered set — used as the
+  // denominator for the pie / category-ranking percentages so a slice
+  // always represents "X% of the partner-filtered total" regardless of
+  // whether a category is selected.
+  const partnerTotal = useMemo(
+    () => partnerFiltered.reduce((s, f) => s + f.workerCount, 0),
     [partnerFiltered],
   );
 
   const categoryRows = useMemo(() => {
+    // Breakdowns intentionally read from partnerFiltered (NOT
+    // categoryFiltered) so the pie + rankings keep showing the full
+    // category mix. The active category is visually highlighted via
+    // selectedCategoriesSet.
     const agg = new Map<string, number>();
     for (const f of partnerFiltered) {
       const cat = f.category || 'Other';
@@ -146,19 +199,37 @@ export function ShopperBottomCardStrip({
     return rows;
   }, [partnerFiltered]);
 
-  const topCategory = categoryRows[0]?.category ?? '—';
+  // Top-category tile reports the top among the SELECTED categories
+  // when any are active (ranked by their breakdown value within the
+  // partner-filtered universe); otherwise reports the overall top.
+  // Share is always computed against the partner-filtered total so the
+  // number reads as "this category accounts for X% of all shopping in
+  // scope".
+  const topCategoryRow = useMemo(() => {
+    if (selectedCategoriesSet.size > 0) {
+      const selected = categoryRows.filter((r) => selectedCategoriesSet.has(r.category));
+      return selected[0] ?? null;
+    }
+    return categoryRows[0] ?? null;
+  }, [categoryRows, selectedCategoriesSet]);
+  const topCategory = topCategoryRow?.category ?? '—';
   const topCategoryShare =
-    categoryRows[0] && totalVisits > 0
-      ? categoryRows[0].value / totalVisits
+    topCategoryRow && partnerTotal > 0
+      ? topCategoryRow.value / partnerTotal
       : 0;
 
   // Place rankings — aggregate on the configured axis (origin/dest) and
-  // read from the un-filtered `flows` so multi-select toggle stays
-  // interactive even when partners are active.
+  // read from the un-partner-filtered `flows` so multi-select toggle
+  // stays interactive even when partners are active. Layer the
+  // category multi-select on top so selecting categories narrows the
+  // place counts (e.g., "Top Destinations for Food & Dining + Retail").
   const placeRows = useMemo(() => {
+    const source = selectedCategoriesSet.size === 0
+      ? flows
+      : flows.filter((f) => selectedCategoriesSet.has(f.category || 'Other'));
     type Agg = { place: string; zips: string[]; value: number };
     const byPlace = new Map<string, Agg>();
-    for (const f of flows) {
+    for (const f of source) {
       const side = placeAxis === 'origin' ? f.originZip : f.destZip;
       const sidePlace =
         placeAxis === 'origin'
@@ -179,35 +250,43 @@ export function ShopperBottomCardStrip({
     const rows = Array.from(byPlace.values());
     rows.sort((a, b) => b.value - a.value);
     return rows;
-  }, [flows, zipPlaces, placeAxis]);
+  }, [flows, zipPlaces, placeAxis, selectedCategoriesSet]);
 
   const avgPerDay = totalVisits / 365;
   const avgPerResident = totalResidents > 0 ? totalVisits / totalResidents : 0;
 
   return (
     <>
-      {/* Floating Category Rankings — sits in the bottom-right of the
-          map area, directly above the Top Destinations card. Same width
-          as one strip column ((100% - 2×outer-padding − 2×inter-card-gap)/3)
-          and the same fixed height as the strip cards, so the two cards
-          stack as a tidy right-rail without dominating the map. Hidden
-          on mobile where the strip already stacks vertically. */}
+      {/* Floating right-rail stack — Property Rankings sits above
+          Category Rankings, both pinned above the bottom strip's
+          third column. Both cards are content-sized with their own
+          internal overflow:auto fallback; the outer wrapper caps the
+          combined stack at 85vh so the map breathes on short screens.
+          Hidden on mobile where the strip already stacks vertically. */}
       <div
-        className="absolute z-20 pointer-events-auto hidden md:block"
+        className="absolute z-20 pointer-events-auto hidden md:flex flex-col gap-2"
         style={{
           // Bottom strip occupies 12 (paddingBottom) + STRIP_CARD_HEIGHT;
-          // park this card immediately above with another 12px gap.
+          // park this stack immediately above with another 12px gap.
           bottom: STRIP_CARD_HEIGHT + 12 + 12,
           right: 12,
-          height: CATEGORY_RANKINGS_HEIGHT,
+          maxHeight: '85vh',
           width: 'calc((100% - 48px) / 3)',
         }}
       >
+        <PropertyRankings
+          rows={topProperties}
+          selectedZip={selectedZip}
+          scope={scope}
+          placerYear={placerYear}
+        />
         <CategoryRankings
           rows={categoryRows}
-          total={totalVisits}
-          selectedCategory={selectedCategory}
-          onSelectCategory={onSelectCategory}
+          total={partnerTotal}
+          selectedCategories={selectedCategories}
+          selectedCategoriesSet={selectedCategoriesSet}
+          onToggleCategory={toggleCategory}
+          onClearCategories={() => onSelectCategories([])}
         />
       </div>
 
@@ -231,14 +310,15 @@ export function ShopperBottomCardStrip({
               avgPerDay={avgPerDay}
               avgPerResident={avgPerResident}
               totalResidents={totalResidents}
+              selectedCategories={selectedCategories}
             />
             <CategoryPieCard
               rows={categoryRows}
-              total={totalVisits}
+              total={partnerTotal}
               scope={scope}
               placerYear={placerYear}
-              selectedCategory={selectedCategory}
-              onSelectCategory={onSelectCategory}
+              selectedCategoriesSet={selectedCategoriesSet}
+              onToggleCategory={toggleCategory}
             />
             <PlaceRankings
               rows={placeRows}
@@ -268,6 +348,7 @@ function ShopperKpis({
   avgPerDay,
   avgPerResident,
   totalResidents,
+  selectedCategories,
 }: {
   scope: string;
   totalVisits: number;
@@ -276,7 +357,15 @@ function ShopperKpis({
   avgPerDay: number;
   avgPerResident: number;
   totalResidents: number;
+  selectedCategories: string[];
 }) {
+  // Subtitle reflects the active category set: empty → aggregate;
+  // single → that category's name; multiple → "N categories".
+  const subtitle = selectedCategories.length === 0
+    ? 'aggregate'
+    : selectedCategories.length === 1
+      ? selectedCategories[0]
+      : `${selectedCategories.length} categories`;
   return (
     <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
       <div className="flex items-baseline justify-between">
@@ -287,10 +376,11 @@ function ShopperKpis({
           {scope} · Shopping KPIs
         </div>
         <div
-          className="text-[9px] tracking-wider"
+          className="text-[9px] tracking-wider truncate"
           style={{ color: 'var(--text-dim)' }}
+          title={selectedCategories.join(', ') || undefined}
         >
-          aggregate
+          {subtitle}
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
@@ -340,16 +430,17 @@ function CategoryPieCard({
   total,
   scope,
   placerYear,
-  selectedCategory,
-  onSelectCategory,
+  selectedCategoriesSet,
+  onToggleCategory,
 }: {
   rows: ReadonlyArray<{ category: string; value: number; color: string }>;
   total: number;
   scope: string;
   placerYear: number;
-  selectedCategory: string | null;
-  onSelectCategory: (next: string | null) => void;
+  selectedCategoriesSet: Set<string>;
+  onToggleCategory: (cat: string) => void;
 }) {
+  const hasSelection = selectedCategoriesSet.size > 0;
   const size = 130;
   const radius = size / 2;
   const innerRadius = radius * 0.58;
@@ -399,8 +490,8 @@ function CategoryPieCard({
             const cat = a.data.category;
             const d = arcGen({ startAngle: a.startAngle, endAngle: a.endAngle });
             if (!d) return null;
-            const active = selectedCategory === cat;
-            const dim = selectedCategory != null && !active;
+            const active = selectedCategoriesSet.has(cat);
+            const dim = hasSelection && !active;
             return (
               <path
                 key={cat}
@@ -410,7 +501,7 @@ function CategoryPieCard({
                 stroke="rgba(0,0,0,0.25)"
                 strokeWidth={0.5}
                 style={{ cursor: 'pointer' }}
-                onClick={() => onSelectCategory(active ? null : cat)}
+                onClick={() => onToggleCategory(cat)}
               >
                 <title>{`${cat}: ${fmtInt(a.data.value)} trips (${fmtPct(a.data.value / Math.max(total, 1))})`}</title>
               </path>
@@ -419,12 +510,12 @@ function CategoryPieCard({
         </svg>
         <ul className="flex-1 min-w-0 overflow-y-auto flex flex-col gap-0.5">
           {rows.slice(0, 8).map((r) => {
-            const active = selectedCategory === r.category;
+            const active = selectedCategoriesSet.has(r.category);
             return (
               <li key={r.category}>
                 <button
                   type="button"
-                  onClick={() => onSelectCategory(active ? null : r.category)}
+                  onClick={() => onToggleCategory(r.category)}
                   className="w-full text-left flex items-center gap-1.5 px-1 py-0.5 rounded hover:bg-white/[0.04]"
                   style={{ background: active ? `${r.color}26` : 'transparent' }}
                 >
@@ -461,42 +552,61 @@ function CategoryPieCard({
 }
 
 // ---------------------------------------------------------------------------
-// Category Rankings — compact rollup card (top of right column). Mirrors
-// the Workforce map's IndustrySectorRankingsCard visual + interaction
-// language: row click toggles the filter on/off.
+// Category Rankings — compact rollup card. Multi-select via row click;
+// a "Clear (N)" chip in the header resets the set. Mirrors the Top
+// Destinations interaction language (PlaceRankings below) so the two
+// cross-filters feel identical to a user dragging across them.
 // ---------------------------------------------------------------------------
 function CategoryRankings({
   rows,
   total,
-  selectedCategory,
-  onSelectCategory,
+  selectedCategories,
+  selectedCategoriesSet,
+  onToggleCategory,
+  onClearCategories,
 }: {
   rows: ReadonlyArray<{ category: string; value: number; color: string }>;
   total: number;
-  selectedCategory: string | null;
-  onSelectCategory: (next: string | null) => void;
+  selectedCategories: string[];
+  selectedCategoriesSet: Set<string>;
+  onToggleCategory: (cat: string) => void;
+  onClearCategories: () => void;
 }) {
+  const accent = RAMPS.activity.accent;
   const maxValue = rows[0]?.value ?? 0;
-  // `h-full` (not `flex-1`) so this card respects the wrapping
-  // absolute-positioned container's fixed height — `flex-1` only fills
-  // when the parent is display:flex, which the absolute wrapper isn't.
+  // Card sizes to its content — the absolute wrapper applies a
+  // `maxHeight: 50vh` cap so unusual category counts fall back to
+  // scrolling via `overflow-y-auto` on the list.
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden h-full">
-      <div
-        className="text-[10px] font-semibold uppercase tracking-wider truncate"
-        style={{ color: 'var(--text-h)' }}
-      >
-        Category Rankings
+    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden">
+      <div className="flex items-baseline justify-between gap-2">
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider truncate"
+          style={{ color: 'var(--text-h)' }}
+        >
+          Category Rankings
+        </div>
+        {selectedCategories.length > 0 && (
+          <button
+            type="button"
+            onClick={onClearCategories}
+            className="text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+            style={{ color: accent }}
+            title="Clear all selected categories"
+          >
+            Clear ({selectedCategories.length})
+          </button>
+        )}
       </div>
-      <ul className="flex flex-col gap-0.5 flex-1 min-h-0 overflow-y-auto pr-0.5">
+      <ul className="flex flex-col gap-0.5 overflow-y-auto pr-0.5">
         {rows.map((row) => {
-          const active = selectedCategory === row.category;
+          const active = selectedCategoriesSet.has(row.category);
           const barPct = maxValue > 0 ? (row.value / maxValue) * 100 : 0;
           return (
             <li key={row.category}>
               <button
                 type="button"
-                onClick={() => onSelectCategory(active ? null : row.category)}
+                onClick={() => onToggleCategory(row.category)}
                 className="w-full text-left flex items-center gap-2 px-1 py-0.5 rounded transition-colors hover:bg-white/[0.04]"
                 style={{ background: active ? `${row.color}29` : 'transparent' }}
                 aria-pressed={active}
@@ -656,6 +766,118 @@ function PlaceRankings({
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Property Rankings — top 10 individual shopping properties by visits.
+// Pre-narrowed by the parent (direction / anchor / partner / category).
+// Properties with the same display name in different cities keep their
+// own row (dedup is by address upstream). The card is display-only:
+// clicks on properties don't toggle a filter, but the rendered scope
+// reflects every active selection at a glance.
+// ---------------------------------------------------------------------------
+function PropertyRankings({
+  rows,
+  selectedZip,
+  scope,
+  placerYear,
+}: {
+  rows: ReadonlyArray<TopShopperPropertyRow>;
+  selectedZip: string | null;
+  scope: string;
+  placerYear: number;
+}) {
+  const accent = RAMPS.activity.accent;
+  const maxScore = rows[0]?.score ?? 0;
+  // Sub-label clarifies the score's meaning. When an anchor is selected
+  // the row count = "X resident's visits to that property"; otherwise
+  // it's the property's universe-wide annual visits.
+  const scopeBlurb = selectedZip
+    ? `${scope} residents · Placer ${placerYear}`
+    : `All residents · Placer ${placerYear}`;
+  return (
+    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden">
+      <div className="flex items-baseline justify-between gap-2">
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider truncate"
+          style={{ color: 'var(--text-h)' }}
+        >
+          Top 10 Properties
+        </div>
+        <div
+          className="text-[9px] tracking-wider truncate"
+          style={{ color: 'var(--text-dim)' }}
+          title={scopeBlurb}
+        >
+          {scopeBlurb}
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <div
+          className="text-[10px] py-2"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          No properties match the active filters.
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-0.5 overflow-y-auto pr-0.5">
+          {rows.map((row, idx) => {
+            const barPct = maxScore > 0 ? (row.score / maxScore) * 100 : 0;
+            const label = row.property?.trim() || row.address;
+            return (
+              <li key={row.address}>
+                <div
+                  className="w-full text-left flex items-center gap-2 px-1 py-0.5 rounded"
+                  title={`${label} · ${row.address}\nCategory: ${row.category}`}
+                >
+                  <span
+                    className="text-[10px] tabular-nums w-[14px] text-right shrink-0"
+                    style={{ color: 'var(--text-dim)' }}
+                    aria-hidden
+                  >
+                    {idx + 1}
+                  </span>
+                  <span className="flex-1 min-w-0 flex flex-col leading-tight">
+                    <span
+                      className="text-[10px] truncate"
+                      style={{ color: 'var(--text-h)' }}
+                    >
+                      {label}
+                    </span>
+                    <span
+                      className="text-[9px] truncate"
+                      style={{ color: 'var(--text-dim)' }}
+                    >
+                      {row.destPlace}
+                    </span>
+                  </span>
+                  <span
+                    className="hidden lg:block h-2 rounded-full overflow-hidden shrink-0"
+                    style={{ width: 36, background: 'rgba(255,255,255,0.05)' }}
+                  >
+                    <span
+                      className="block h-full"
+                      style={{
+                        width: `${barPct}%`,
+                        background: accent,
+                        opacity: 0.85,
+                      }}
+                    />
+                  </span>
+                  <span
+                    className="text-[10px] tabular-nums w-[60px] text-right shrink-0"
+                    style={{ color: 'var(--text-h)' }}
+                  >
+                    {fmtInt(row.score)}
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

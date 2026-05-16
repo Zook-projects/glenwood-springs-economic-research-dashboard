@@ -360,6 +360,10 @@ def read_resident_toplocations(ws) -> tuple[list[dict], list[str], int | None, i
         # Property-level rollup for the heatmap. Aggregate across all
         # resident ZIPs that visit the same address — the heatmap weight
         # is total foot traffic per property, not per (origin,property).
+        # The per-anchor maps (`visitsByAnchor`, `residentsByAnchor`)
+        # preserve the resident-ZIP breakdown so the client can re-rank
+        # properties for a single selected anchor without re-aggregating
+        # raw rows.
         if isinstance(address, str):
             addr_key = address.strip()
             if addr_key:
@@ -373,10 +377,18 @@ def read_resident_toplocations(ws) -> tuple[list[dict], list[str], int | None, i
                         "destZip": dest,
                         "visits": visits,
                         "residents": residents,
+                        "visitsByAnchor": {origin: visits},
+                        "residentsByAnchor": {origin: residents},
                     }
                 else:
                     prop_entry["visits"] += visits
                     prop_entry["residents"] += residents
+                    prop_entry["visitsByAnchor"][origin] = (
+                        prop_entry["visitsByAnchor"].get(origin, 0) + visits
+                    )
+                    prop_entry["residentsByAnchor"][origin] = (
+                        prop_entry["residentsByAnchor"].get(origin, 0) + residents
+                    )
 
     # Attach geocode (if available) to each property entry.
     properties: list[dict] = []
@@ -399,6 +411,8 @@ def read_resident_toplocations(ws) -> tuple[list[dict], list[str], int | None, i
             "destZip": prop["destZip"],
             "visits": prop["visits"],
             "residents": prop["residents"],
+            "visitsByAnchor": prop["visitsByAnchor"],
+            "residentsByAnchor": prop["residentsByAnchor"],
             "lat": round(float(lat), 6) if isinstance(lat, (int, float)) else None,
             "lng": round(float(lng), 6) if isinstance(lng, (int, float)) else None,
         })

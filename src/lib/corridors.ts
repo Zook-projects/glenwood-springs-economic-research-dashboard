@@ -164,9 +164,15 @@ export function buildVisibleCorridorMap(
   // Carry filter-rewritten workerCounts (e.g., segment filter narrowed a
   // FlowRow's total to a bucket sum) through to aggregateCorridor so corridor
   // line widths and totals reflect the active filter rather than the cached
-  // S000 in the static flowIndex.
+  // S000 in the static flowIndex. Shopper-style category splits emit
+  // multiple FlowRows per (origin, dest) — sum across them so the
+  // workerCount for a flowId reflects the full multi-category total
+  // rather than an arbitrary single category's contribution.
   const workerCountByFlowId = new Map<string, number>();
-  for (const f of visibleFlows) workerCountByFlowId.set(flowIdOf(f), f.workerCount);
+  for (const f of visibleFlows) {
+    const id = flowIdOf(f);
+    workerCountByFlowId.set(id, (workerCountByFlowId.get(id) ?? 0) + f.workerCount);
+  }
   const out = new Map<CorridorId, ActiveCorridorAggregation>();
 
   for (const [cid, corridor] of corridorIndex) {

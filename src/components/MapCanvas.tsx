@@ -13,6 +13,7 @@ import { flowIdOf } from '../lib/corridors';
 import { ANCHOR_ZIPS, isAnchorInCounty } from '../lib/flowQueries';
 import type {
   ActiveCorridorAggregation,
+  ActiveOdAggregation,
   CorridorId,
   CorridorRecord,
   FlowRow,
@@ -60,6 +61,19 @@ interface Props {
   onClickCorridor: (
     corridorId: CorridorId,
     payload: { aggregation: ActiveCorridorAggregation; clientX: number; clientY: number },
+  ) => void;
+  // Optional off-corridor branch hover/click. When both callbacks are
+  // wired, the off-corridor render combines flows by (origin, dest)
+  // pair and emits hover/click events with the OD aggregation — the
+  // SVG <title> minimalist tooltip is suppressed so the parent can
+  // render its own substantive tooltip (matches the corridor UX).
+  onHoverOffCorridor?: (
+    od: { originZip: string; destZip: string } | null,
+    payload?: { aggregation: ActiveOdAggregation; clientX: number; clientY: number },
+  ) => void;
+  onClickOffCorridor?: (
+    od: { originZip: string; destZip: string },
+    payload: { aggregation: ActiveOdAggregation; clientX: number; clientY: number },
   ) => void;
   onClickEmpty: () => void;
   // Heatmap data — workplace/residential block density, latest LODES year.
@@ -198,6 +212,8 @@ export function MapCanvas({
   keepRegionalBounds,
   hideOffCorridor,
   onClickCorridor,
+  onHoverOffCorridor,
+  onClickOffCorridor,
   onClickEmpty,
   heatmapData,
   selectionData,
@@ -1409,15 +1425,40 @@ export function MapCanvas({
               !corridorFlowIds.has(flowIdOf(f)),
           );
 
-      // Group by origin ZIP so each origin renders as one tree.
-      const flowsByOrigin = new Map<string, FlowRow[]>();
+      // Pre-aggregate flows by (originZip, destZip). For shoppers each
+      // OD pair surfaces as one FlowRow per group category, so this
+      // collapses the per-category fan-out to a single branch per OD —
+      // matches user expectation that spaghetti reads one line per
+      // (origin, destination) pair. The aggregation also feeds the
+      // off-corridor hover/click tooltip with the underlying flows
+      // (e.g., per-category breakdown).
+      const odMap = new Map<string, ActiveOdAggregation>();
       for (const f of sourceFlows) {
-        const list = flowsByOrigin.get(f.originZip);
-        if (list) list.push(f);
-        else flowsByOrigin.set(f.originZip, [f]);
+        const key = `${f.originZip}|${f.destZip}`;
+        const existing = odMap.get(key);
+        if (existing) {
+          existing.total += f.workerCount;
+          existing.flows.push(f);
+        } else {
+          odMap.set(key, {
+            originZip: f.originZip,
+            destZip: f.destZip,
+            originPlace: f.originPlace ?? f.originZip,
+            destPlace: f.destPlace ?? f.destZip,
+            total: f.workerCount,
+            flows: [f],
+          });
+        }
+      }
+      // Group aggregations by origin ZIP so each origin renders as one tree.
+      const flowsByOrigin = new Map<string, ActiveOdAggregation[]>();
+      for (const agg of odMap.values()) {
+        const list = flowsByOrigin.get(agg.originZip);
+        if (list) list.push(agg);
+        else flowsByOrigin.set(agg.originZip, [agg]);
       }
 
-      for (const [originZip, originFlows] of flowsByOrigin.entries()) {
+      for (const [originZip, originAggs] of flowsByOrigin.entries()) {
         const o = projected.get(originZip);
         if (!o) continue;
 
@@ -1427,14 +1468,14 @@ export function MapCanvas({
         let cxSum = 0;
         let cySum = 0;
         let wSum = 0;
-        const branches: Array<{ d: { x: number; y: number }; flow: FlowRow }> = [];
-        for (const f of originFlows) {
-          const d = projected.get(f.destZip);
+        const branches: Array<{ d: { x: number; y: number }; agg: ActiveOdAggregation }> = [];
+        for (const agg of originAggs) {
+          const d = projected.get(agg.destZip);
           if (!d) continue;
-          branches.push({ d, flow: f });
-          cxSum += d.x * f.workerCount;
-          cySum += d.y * f.workerCount;
-          wSum += f.workerCount;
+          branches.push({ d, agg });
+          cxSum += d.x * agg.total;
+          cySum += d.y * agg.total;
+          wSum += agg.total;
         }
         if (branches.length === 0 || wSum <= 0) continue;
         const cx = cxSum / wSum;
@@ -1446,14 +1487,15 @@ export function MapCanvas({
         const jx = o.x + (cx - o.x) * 0.35;
         const jy = o.y + (cy - o.y) * 0.35;
 
-        for (const { d, flow } of branches) {
-          const ocStyle = corridorStyle(flow.workerCount, bucketBreaks);
+        const interactive = !!(onHoverOffCorridor || onClickOffCorridor);
+        for (const { d, agg } of branches) {
+          const ocStyle = corridorStyle(agg.total, bucketBreaks);
 
           // Per-branch organic perpendicular jitter so two branches with
           // very similar destination vectors don't paint on top of each
           // other. Hash combines origin+dest so the jitter is stable
           // across renders.
-          const hashStr = `${flow.originZip}|${flow.destZip}`;
+          const hashStr = `${agg.originZip}|${agg.destZip}`;
           let hash = 0;
           for (let i = 0; i < hashStr.length; i++) {
             hash = (hash * 31 + hashStr.charCodeAt(i)) | 0;
@@ -1493,12 +1535,46 @@ export function MapCanvas({
           ocHalo.setAttribute('stroke-linecap', 'round');
           ocHalo.setAttribute('stroke-linejoin', 'round');
           ocHalo.style.pointerEvents = 'stroke';
-          ocHalo.style.cursor = 'default';
-          const ocTitle = document.createElementNS(NS, 'title');
-          ocTitle.textContent =
-            `${flow.originPlace || flow.originZip} → ${flow.destPlace || flow.destZip}: ` +
-            `${flow.workerCount.toLocaleString()} workers`;
-          ocHalo.appendChild(ocTitle);
+          ocHalo.style.cursor = interactive ? 'pointer' : 'default';
+          if (interactive) {
+            // Substantive hover/pinned tooltip is rendered by the parent —
+            // suppress the SVG <title> chip so we don't double up.
+            const odKey = { originZip: agg.originZip, destZip: agg.destZip };
+            ocHalo.addEventListener('mouseenter', (ev) => {
+              const me = ev as MouseEvent;
+              onHoverOffCorridor?.(odKey, {
+                aggregation: agg,
+                clientX: me.clientX,
+                clientY: me.clientY,
+              });
+            });
+            ocHalo.addEventListener('mousemove', (ev) => {
+              const me = ev as MouseEvent;
+              onHoverOffCorridor?.(odKey, {
+                aggregation: agg,
+                clientX: me.clientX,
+                clientY: me.clientY,
+              });
+            });
+            ocHalo.addEventListener('mouseleave', () => {
+              onHoverOffCorridor?.(null);
+            });
+            ocHalo.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              const me = ev as MouseEvent;
+              onClickOffCorridor?.(odKey, {
+                aggregation: agg,
+                clientX: me.clientX,
+                clientY: me.clientY,
+              });
+            });
+          } else {
+            const ocTitle = document.createElementNS(NS, 'title');
+            ocTitle.textContent =
+              `${agg.originPlace} → ${agg.destPlace}: ` +
+              `${agg.total.toLocaleString()} workers`;
+            ocHalo.appendChild(ocTitle);
+          }
           offCorridorGroup.appendChild(ocHalo);
 
           const ocPath = document.createElementNS(NS, 'path');
@@ -1518,8 +1594,8 @@ export function MapCanvas({
           ocPath.setAttribute('role', 'img');
           ocPath.setAttribute(
             'aria-label',
-            `${flow.originPlace || flow.originZip} to ${flow.destPlace || flow.destZip}: ` +
-              `${flow.workerCount.toLocaleString()} workers, off-corridor flow`,
+            `${agg.originPlace} to ${agg.destPlace}: ` +
+              `${agg.total.toLocaleString()} ${interactive ? 'visits' : 'workers'}, off-corridor flow`,
           );
           offCorridorGroup.appendChild(ocPath);
         }
@@ -1961,6 +2037,8 @@ export function MapCanvas({
     onSelectZip,
     onHoverCorridor,
     onClickCorridor,
+    onHoverOffCorridor,
+    onClickOffCorridor,
     prefersReducedMotion,
     blockScopeActive,
     selectedBlocks,

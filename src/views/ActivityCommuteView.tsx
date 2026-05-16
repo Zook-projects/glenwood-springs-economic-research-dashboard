@@ -33,6 +33,7 @@ import { ActivityBottomCardStrip } from '../components/ActivityBottomCardStrip';
 import { ShopperBottomCardStrip } from '../components/ShopperBottomCardStrip';
 import type {
   ActiveCorridorAggregation,
+  ActiveOdAggregation,
   CorridorId,
   DirectionFilter,
   FlowRow,
@@ -54,13 +55,28 @@ import {
   VISITOR_TYPE_REFERENCE_ZIP,
   type VisitorType,
 } from '../lib/flowQueries';
-import { buildCorridorFlowIndex, buildVisibleCorridorMap } from '../lib/corridors';
+import {
+  buildCorridorFlowIndex,
+  buildVisibleCorridorMap,
+  flowIdOf,
+} from '../lib/corridors';
 import { computeBucketBreaks } from '../lib/arcMath';
-import { fmtInt } from '../lib/format';
+import { fmtInt, fmtPct } from '../lib/format';
+import { quintileBinPoints } from '../lib/heatmapBinning';
 
 interface HoverState {
   corridorId: CorridorId;
   aggregation: ActiveCorridorAggregation;
+  clientX: number;
+  clientY: number;
+}
+
+// Off-corridor (spaghetti) tooltip state — mirrors HoverState but keyed
+// to a single origin → destination ZIP pair.
+interface OdHoverState {
+  originZip: string;
+  destZip: string;
+  aggregation: ActiveOdAggregation;
   clientX: number;
   clientY: number;
 }
@@ -89,6 +105,42 @@ function clampTooltipAnchor(
   left = Math.max(margin, Math.min(left, vw - estWidth - margin));
   top = Math.max(margin, Math.min(top, vh - estHeight - margin));
   return { left, top };
+}
+
+// Drag-to-move helper for pinned tooltip panels. Returns a transform
+// offset that the caller applies via style, plus a mousedown handler
+// to attach to the panel's drag handle (typically the header row).
+// Resets the offset when `resetKey` changes — i.e., each new pin
+// starts at its default position.
+function useDraggable(resetKey: string | null) {
+  const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  useEffect(() => {
+    setOffset({ x: 0, y: 0 });
+  }, [resetKey]);
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    // Buttons inside the drag handle (e.g. close X) keep their own
+    // click semantics — don't hijack them with a drag.
+    if ((e.target as Element).closest('button')) return;
+    e.preventDefault();
+    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: offset.x, oy: offset.y };
+    const move = (mv: MouseEvent) => {
+      if (!dragRef.current) return;
+      setOffset({
+        x: dragRef.current.ox + (mv.clientX - dragRef.current.sx),
+        y: dragRef.current.oy + (mv.clientY - dragRef.current.sy),
+      });
+    };
+    const up = () => {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  return { offset, onMouseDown };
 }
 
 export function ActivityCommuteView({ data, placer }: Props) {
@@ -446,6 +498,63 @@ export function ActivityCommuteView({ data, placer }: Props) {
   const [hover, setHover] = useState<HoverState | null>(null);
   const [pinned, setPinned] = useState<HoverState | null>(null);
   const [suppressedHover, setSuppressedHover] = useState<CorridorId | null>(null);
+  // Off-corridor (spaghetti) tooltip state — same UX pattern as the
+  // corridor hover/pinned, but keyed to a single OD pair.
+  const [odHover, setOdHover] = useState<OdHoverState | null>(null);
+  const [odPinned, setOdPinned] = useState<OdHoverState | null>(null);
+
+  // Drag-to-move offsets for the two pinned tooltip panels. Each
+  // resets to (0, 0) when a new selection is pinned so the user
+  // always starts from the default placement.
+  const corridorPinnedDrag = useDraggable(pinned?.corridorId ?? null);
+  const odPinnedDrag = useDraggable(
+    odPinned ? `${odPinned.originZip}-${odPinned.destZip}` : null,
+  );
+
+  // Derived cross-filter from the pinned corridor or OD branch. When a
+  // shopper user pins a corridor or a spaghetti branch, the strip cards
+  // (KPIs / Pie / Category Rankings / Top Destinations) + Top 10
+  // Properties + heatmap narrow to flows touching that selection so the
+  // numbers match the visual context. Cleared when the tooltip is
+  // dismissed.
+  const pinnedFlowFilter = useMemo<
+    | { kind: 'corridor'; flowIds: Set<string>; destZips: Set<string>; originZips: Set<string> }
+    | { kind: 'od'; originZip: string; destZip: string }
+    | null
+  >(() => {
+    if (odPinned) {
+      return { kind: 'od', originZip: odPinned.originZip, destZip: odPinned.destZip };
+    }
+    if (pinned) {
+      const flowIds = new Set<string>();
+      const destZips = new Set<string>();
+      const originZips = new Set<string>();
+      for (const f of pinned.aggregation.flows) {
+        flowIds.add(f.flowId);
+        destZips.add(f.destZip);
+        originZips.add(f.originZip);
+      }
+      return { kind: 'corridor', flowIds, destZips, originZips };
+    }
+    return null;
+  }, [pinned, odPinned]);
+
+  // Helper — apply the pinned filter to an arbitrary FlowRow set.
+  // Defined as a pure useMemo factory so consumers can call it from
+  // their own deps lists without re-running on every render.
+  const applyPinnedFlowFilter = useMemo(() => {
+    return (rows: FlowRow[]): FlowRow[] => {
+      if (!pinnedFlowFilter) return rows;
+      if (pinnedFlowFilter.kind === 'od') {
+        return rows.filter(
+          (r) =>
+            r.originZip === pinnedFlowFilter.originZip
+            && r.destZip === pinnedFlowFilter.destZip,
+        );
+      }
+      return rows.filter((r) => pinnedFlowFilter.flowIds.has(flowIdOf(r)));
+    };
+  }, [pinnedFlowFilter]);
   // Pass-through cross-filter state for the ActivityBottomCardStrip's
   // PassThroughCard. Shape mirrors LODES — clearing on anchor change keeps
   // the filter from carrying stale selections across switches.
@@ -455,12 +564,14 @@ export function ActivityCommuteView({ data, placer }: Props) {
   const [passThroughDest, setPassThroughDest] = useState<
     { place: string; zips: string[] } | null
   >(null);
-  // Shopper category cross-filter — drives the active row in the Category
-  // Rankings / Pie cards and narrows the corridor render to only flows
-  // matching that group category.
-  const [selectedShopperCategory, setSelectedShopperCategory] = useState<
-    string | null
-  >(null);
+  // Shopper category cross-filter — multi-select set of group categories
+  // active in the Category Rankings / Pie cards. When non-empty the
+  // corridor render, KPIs, place rankings, and property heatmap narrow
+  // to flows / properties whose category is in the set. Empty array =
+  // no filter.
+  const [selectedShopperCategories, setSelectedShopperCategories] = useState<
+    string[]
+  >([]);
   // Multi-select shopper partners (destinations in outbound mode, origins
   // in inbound mode). When non-empty, KPI / Pie / Category cards + the
   // map narrow to flows whose pivot side matches any selected place.
@@ -515,8 +626,41 @@ export function ActivityCommuteView({ data, placer }: Props) {
         ? directionFilteredInbound
         : directionFilteredOutbound;
 
+  // Shopper category cross-filter — when a category is selected via the
+  // Category Rankings or Pie cards, the map + stats narrow to flows in
+  // that group category. Pie + Category Rankings themselves continue to
+  // read off the unfiltered `directionFiltered*` datasets so the
+  // breakdown stays visible and the user can switch categories.
+  const categoryFilteredOutbound = useMemo(() => {
+    if (!isShopperMetric || selectedShopperCategories.length === 0) {
+      return directionFilteredOutbound;
+    }
+    const set = new Set(selectedShopperCategories);
+    return directionFilteredOutbound.filter(
+      (f) => set.has(f.category || 'Other'),
+    );
+  }, [directionFilteredOutbound, isShopperMetric, selectedShopperCategories]);
+  const categoryFilteredInbound = useMemo(() => {
+    if (!isShopperMetric || selectedShopperCategories.length === 0) {
+      return directionFilteredInbound;
+    }
+    const set = new Set(selectedShopperCategories);
+    return directionFilteredInbound.filter(
+      (f) => set.has(f.category || 'Other'),
+    );
+  }, [directionFilteredInbound, isShopperMetric, selectedShopperCategories]);
+  const categoryFilteredRegional = isShopperMetric
+    ? categoryFilteredOutbound
+    : categoryFilteredInbound;
+  const categoryFilteredFlows =
+    effectiveMode === 'regional'
+      ? categoryFilteredRegional
+      : effectiveMode === 'inbound'
+        ? categoryFilteredInbound
+        : categoryFilteredOutbound;
+
   const visibleFlows = useMemo(() => {
-    const base = filterForSelection(directionFilteredFlows, selectedZip, effectiveMode);
+    const base = filterForSelection(categoryFilteredFlows, selectedZip, effectiveMode);
     // Shopper multi-select partner filter — pivot axis follows mode:
     // inbound + anchor view → match on origin place (which resident
     // anchors visit this shopping place); otherwise → match on dest
@@ -533,7 +677,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
     }
     return base;
   }, [
-    directionFilteredFlows,
+    categoryFilteredFlows,
     selectedZip,
     effectiveMode,
     isShopperMetric,
@@ -737,38 +881,131 @@ export function ActivityCommuteView({ data, placer }: Props) {
   // heatmap from per-property coords so each shopping location lights
   // up individually. Falls back to dest-ZIP centroid for properties
   // whose addresses haven't been geocoded yet (run
-  // scripts/geocode-properties.py to fill the cache). Weights are
-  // normalized to 0..1 against the scope max so the heatmap-color step
-  // expression (5 discrete bands at 20/40/60/80%) reads correctly with
-  // sparse shopper point sets — matches heatmapPoints.ts's convention
-  // for the LODES block density layer.
+  // scripts/geocode-properties.py to fill the cache). The point list is
+  // handed to quintileBinPoints() so the resulting weights land in the
+  // same 5 discrete bands the Workforce heatmap uses — both maps then
+  // read with the same LEHD-style visual language.
   const shopperHeatmapData = useMemo(() => {
     if (!isShopperMetric || shopperViewLayer !== 'heatmap') return null;
     const zipIndex = new Map<string, typeof zips[number]>();
     for (const z of zips) zipIndex.set(z.zip, z);
-    const properties = placerMetricFile?.properties ?? [];
+    const rawProperties = placerMetricFile?.properties ?? [];
+
+    // Anchor + mode pivot determines the heatmap's scope and per-property
+    // weight. Same semantics as the corridor map's inbound/outbound axis:
+    //   no anchor (aggregate) → universe view, weight = property.visits
+    //   anchor X + outbound   → properties X's residents visit;
+    //                           weight = visitsByAnchor[X]
+    //   anchor X + inbound    → properties IN X visited by other anchors
+    //                           (destZip = X); weight = property.visits
+    //                           (the sum across all other anchors, since
+    //                           the source data is strictly out-of-market)
+    const anchor = selectedZip;
+    const anchorMode: 'inbound' | 'outbound' | null =
+      anchor != null
+        ? (effectiveMode === 'inbound' ? 'inbound' : 'outbound')
+        : null;
+
+    const allowedPlaces: Set<string> | null =
+      selectedShopperPartners.length > 0
+        ? new Set(selectedShopperPartners.map((p) => p.place))
+        : null;
+    const allowedPartnerZips: Set<string> | null =
+      selectedShopperPartners.length > 0
+        ? new Set(selectedShopperPartners.flatMap((p) => p.zips))
+        : null;
+    const allowedCategories: Set<string> | null =
+      selectedShopperCategories.length > 0
+        ? new Set(selectedShopperCategories)
+        : null;
+    // Pinned-flow narrowing — limit properties to destZips on the
+    // pinned corridor/OD, and weight by visits from contributing
+    // origins only (so the heatmap reads as "the flow we clicked").
+    let pinnedDestZips: Set<string> | null = null;
+    let pinnedOriginZips: Set<string> | null = null;
+    if (pinnedFlowFilter) {
+      if (pinnedFlowFilter.kind === 'od') {
+        pinnedDestZips = new Set([pinnedFlowFilter.destZip]);
+        pinnedOriginZips = new Set([pinnedFlowFilter.originZip]);
+      } else {
+        pinnedDestZips = pinnedFlowFilter.destZips;
+        pinnedOriginZips = pinnedFlowFilter.originZips;
+      }
+    }
+
     type Pt = { lat: number; lng: number; weight: number; key: string };
     const points: Pt[] = [];
-    if (properties.length > 0) {
-      // Property-level points — one feature per geocoded address.
-      for (const p of properties) {
-        if (p.lat == null || p.lng == null) {
-          // Property not geocoded yet — fall back to its dest-ZIP centroid.
-          const meta = zipIndex.get(p.destZip);
-          if (!meta || meta.lat == null || meta.lng == null) continue;
-          points.push({
-            lat: meta.lat,
-            lng: meta.lng,
-            weight: p.visits,
-            key: p.address,
-          });
-          continue;
-        }
-        points.push({ lat: p.lat, lng: p.lng, weight: p.visits, key: p.address });
+
+    for (const p of rawProperties) {
+      if (
+        allowedCategories
+        && !allowedCategories.has(p.category || 'Other')
+      ) {
+        continue;
       }
-    } else {
-      // No properties array (legacy file) — aggregate visibleFlows by
-      // dest ZIP centroid as a coarser fallback.
+      if (pinnedDestZips && !pinnedDestZips.has(p.destZip)) continue;
+
+      // Compute the weight + scope filter from the anchor/mode pivot,
+      // overridden by the pinned-flow filter when active.
+      let weight: number;
+      if (pinnedOriginZips) {
+        let s = 0;
+        for (const oz of pinnedOriginZips) s += p.visitsByAnchor?.[oz] ?? 0;
+        if (s <= 0) continue;
+        weight = s;
+      } else if (anchorMode === 'outbound') {
+        const v = p.visitsByAnchor?.[anchor!] ?? 0;
+        if (v <= 0) continue;
+        weight = v;
+      } else if (anchorMode === 'inbound') {
+        if (p.destZip !== anchor) continue;
+        weight = p.visits;
+      } else {
+        weight = p.visits;
+      }
+
+      // Partner filter — in inbound + anchor mode the partner axis is the
+      // ORIGIN side (which other anchor's residents visited X), so we
+      // restrict the weight to visits from the selected partner anchors.
+      // Outbound + aggregate keep the canonical destination-place filter.
+      if (allowedPlaces) {
+        if (anchorMode === 'inbound') {
+          if (!allowedPartnerZips || allowedPartnerZips.size === 0) {
+            // partner places list with no matching anchor zips → nothing
+            // can satisfy the filter
+            continue;
+          }
+          let partnerWeight = 0;
+          for (const partnerZip of allowedPartnerZips) {
+            partnerWeight += p.visitsByAnchor?.[partnerZip] ?? 0;
+          }
+          if (partnerWeight <= 0) continue;
+          weight = partnerWeight;
+        } else {
+          const meta = zipIndex.get(p.destZip);
+          if (!meta || !allowedPlaces.has(meta.place)) continue;
+        }
+      }
+
+      // Resolve to lat/lng — property coords when geocoded, else dest-ZIP
+      // centroid fallback. Ungeocoded properties still contribute weight
+      // (pile up on the ZIP centroid until scripts/geocode-properties.py
+      // resolves them).
+      let lat = p.lat;
+      let lng = p.lng;
+      if (lat == null || lng == null) {
+        const meta = zipIndex.get(p.destZip);
+        if (!meta || meta.lat == null || meta.lng == null) continue;
+        lat = meta.lat;
+        lng = meta.lng;
+      }
+      points.push({ lat, lng, weight, key: p.address });
+    }
+
+    // Legacy fallback — no properties array on the file (older builds).
+    // Coarse aggregate by dest-ZIP centroid; honors the same anchor/mode
+    // pivot via visibleFlows (which already encodes selection).
+    if (rawProperties.length === 0) {
       const byDest = new Map<string, number>();
       for (const f of visibleFlows) {
         byDest.set(f.destZip, (byDest.get(f.destZip) ?? 0) + f.workerCount);
@@ -784,17 +1021,129 @@ export function ActivityCommuteView({ data, placer }: Props) {
         });
       }
     }
-    if (points.length === 0) return { type: 'FeatureCollection' as const, features: [] };
-    const maxValue = Math.max(...points.map((p) => p.weight), 1);
-    return {
-      type: 'FeatureCollection' as const,
-      features: points.map((p) => ({
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: [p.lng, p.lat] as [number, number] },
-        properties: { weight: p.weight / maxValue, block: p.key },
-      })),
+    return quintileBinPoints(points);
+  }, [
+    isShopperMetric,
+    shopperViewLayer,
+    effectiveMode,
+    selectedZip,
+    placerMetricFile,
+    visibleFlows,
+    zips,
+    selectedShopperCategories,
+    selectedShopperPartners,
+    pinnedFlowFilter,
+  ]);
+
+  // Top 10 properties for the right-rail card. Reflects ALL active
+  // filters: direction (via directionFilteredOutbound's destZip
+  // universe), anchor selection (when set, ranks by visitsByAnchor[X]
+  // and hides properties X never visits), partner places (Top
+  // Destinations multi-select), and category (Category Rankings / Pie).
+  // Properties with the same display name in different cities (e.g.
+  // City Market in Rifle vs Carbondale) keep their own row — dedup is
+  // by `address`, never by `property`.
+  const topShopperProperties = useMemo(() => {
+    if (!isShopperMetric) return [];
+    const allProps = placerMetricFile?.properties ?? [];
+    if (allProps.length === 0) return [];
+
+    // Allowed destZips under the active direction filter. Narrow to the
+    // selected anchor's outbound flows when one is selected. A pinned
+    // corridor/OD further narrows this to just the destZips on that
+    // flow.
+    let scopeFlows = directionFilteredOutbound;
+    if (selectedZip) {
+      scopeFlows = scopeFlows.filter((f) => f.originZip === selectedZip);
+    }
+    const inScopeDestZips = new Set<string>();
+    for (const f of scopeFlows) inScopeDestZips.add(f.destZip);
+    // Pinned-flow narrowing — limit the destZip universe to whatever the
+    // pinned corridor or OD touches. Also drives per-property score
+    // weighting (corridor: sum visits from contributing origins;
+    // OD: visits from the one origin anchor).
+    let pinnedDestZips: Set<string> | null = null;
+    let pinnedOriginZips: Set<string> | null = null;
+    if (pinnedFlowFilter) {
+      if (pinnedFlowFilter.kind === 'od') {
+        pinnedDestZips = new Set([pinnedFlowFilter.destZip]);
+        pinnedOriginZips = new Set([pinnedFlowFilter.originZip]);
+      } else {
+        pinnedDestZips = pinnedFlowFilter.destZips;
+        pinnedOriginZips = pinnedFlowFilter.originZips;
+      }
+    }
+
+    const allowedPlaces: Set<string> | null =
+      selectedShopperPartners.length > 0
+        ? new Set(selectedShopperPartners.map((p) => p.place))
+        : null;
+    const allowedCategories: Set<string> | null =
+      selectedShopperCategories.length > 0
+        ? new Set(selectedShopperCategories)
+        : null;
+    const zipPlace = new Map<string, string>();
+    for (const z of zips) zipPlace.set(z.zip, z.place);
+
+    type Scored = {
+      address: string;
+      property: string | null | undefined;
+      destZip: string;
+      destPlace: string;
+      category: string;
+      score: number;        // visits attributed to active scope (anchor or total)
+      totalVisits: number;  // raw total visits (for share denominator hints)
     };
-  }, [isShopperMetric, shopperViewLayer, placerMetricFile, visibleFlows, zips]);
+    const scored: Scored[] = [];
+    for (const p of allProps) {
+      if (
+        allowedCategories
+        && !allowedCategories.has(p.category || 'Other')
+      ) {
+        continue;
+      }
+      if (!inScopeDestZips.has(p.destZip)) continue;
+      if (pinnedDestZips && !pinnedDestZips.has(p.destZip)) continue;
+      const destPlace = zipPlace.get(p.destZip) ?? p.destZip;
+      if (allowedPlaces && !allowedPlaces.has(destPlace)) continue;
+      let score: number;
+      if (pinnedOriginZips) {
+        // Pinned flow — score is the sum of visits from the contributing
+        // origin anchors only. Drops properties X never visited.
+        let s = 0;
+        for (const oz of pinnedOriginZips) {
+          s += p.visitsByAnchor?.[oz] ?? 0;
+        }
+        if (s <= 0) continue;
+        score = s;
+      } else if (selectedZip) {
+        score = p.visitsByAnchor?.[selectedZip] ?? 0;
+        if (score <= 0) continue;
+      } else {
+        score = p.visits;
+      }
+      scored.push({
+        address: p.address,
+        property: p.property,
+        destZip: p.destZip,
+        destPlace,
+        category: p.category || 'Other',
+        score,
+        totalVisits: p.visits,
+      });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 10);
+  }, [
+    isShopperMetric,
+    placerMetricFile,
+    directionFilteredOutbound,
+    selectedZip,
+    selectedShopperCategories,
+    selectedShopperPartners,
+    pinnedFlowFilter,
+    zips,
+  ]);
 
   // Visitor-type pie data — Regional vs Tourist split of the UNFILTERED
   // visitor universe (ignores the active visitor-type chip so the user
@@ -840,16 +1189,16 @@ export function ActivityCommuteView({ data, placer }: Props) {
     let best: ActiveCorridorAggregation | null = null;
     for (const agg of map.values()) if (!best || agg.total > best.total) best = agg;
     return best ? { label: best.corridor.label, total: best.total } : null;
-  }, [corridorIndex, flowIndex, directionFilteredInbound]);
+  }, [corridorIndex, flowIndex, categoryFilteredInbound]);
 
   const topCorridorOutbound = useMemo<{ label: string; total: number } | null>(() => {
-    if (!corridorIndex || !flowIndex || directionFilteredOutbound.length === 0) return null;
-    const map = buildVisibleCorridorMap(corridorIndex, flowIndex, directionFilteredOutbound, 'outbound');
+    if (!corridorIndex || !flowIndex || categoryFilteredOutbound.length === 0) return null;
+    const map = buildVisibleCorridorMap(corridorIndex, flowIndex, categoryFilteredOutbound, 'outbound');
     if (map.size === 0) return null;
     let best: ActiveCorridorAggregation | null = null;
     for (const agg of map.values()) if (!best || agg.total > best.total) best = agg;
     return best ? { label: best.corridor.label, total: best.total } : null;
-  }, [corridorIndex, flowIndex, directionFilteredOutbound]);
+  }, [corridorIndex, flowIndex, categoryFilteredOutbound]);
 
   // Direction-chip counts mirror the LODES view's overlay so the
   // "X of Y flows shown" sub-label stays accurate against the Placer
@@ -885,15 +1234,28 @@ export function ActivityCommuteView({ data, placer }: Props) {
     flowsRegional,
   ]);
 
-  // ESC closes the pinned tooltip from anywhere on the page.
+  // ESC closes the pinned tooltip (corridor or OD) from anywhere on the page.
   useEffect(() => {
-    if (!pinned) return;
+    if (!pinned && !odPinned) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPinned(null);
+      if (e.key === 'Escape') {
+        setPinned(null);
+        setOdPinned(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pinned]);
+  }, [pinned, odPinned]);
+
+  // Clear OD hover + pinned state when leaving the spaghetti view layer
+  // (or the shopper metric entirely) so stale tooltips don't linger over
+  // the corridor / heatmap renders.
+  useEffect(() => {
+    if (!isShopperMetric || shopperViewLayer !== 'spaghetti') {
+      setOdHover(null);
+      setOdPinned(null);
+    }
+  }, [isShopperMetric, shopperViewLayer]);
 
   // Visitor metrics have only inbound data (origin = visitor home, dest =
   // anchor), so when a visitor metric is active LOCK mode='inbound' to
@@ -923,10 +1285,10 @@ export function ActivityCommuteView({ data, placer }: Props) {
   // controls.
   useEffect(() => {
     if (!isShopperMetric) {
-      if (selectedShopperCategory !== null) setSelectedShopperCategory(null);
+      if (selectedShopperCategories.length > 0) setSelectedShopperCategories([]);
       if (selectedShopperPartners.length > 0) setSelectedShopperPartners([]);
     }
-  }, [isShopperMetric, selectedShopperCategory, selectedShopperPartners.length]);
+  }, [isShopperMetric, selectedShopperCategories.length, selectedShopperPartners.length]);
 
   // When mode changes (Inbound ↔ Outbound) inside the shopper view, clear
   // the partner multi-select — the pivot axis is now origin-vs-dest, so
@@ -1194,9 +1556,9 @@ export function ActivityCommuteView({ data, placer }: Props) {
               flowsInbound={isShopperMetric ? flowsOutbound : flowsInbound}
               flowsOutbound={flowsOutbound}
               directionFilteredInbound={
-                isShopperMetric ? directionFilteredOutbound : directionFilteredInbound
+                isShopperMetric ? categoryFilteredOutbound : categoryFilteredInbound
               }
-              directionFilteredOutbound={directionFilteredOutbound}
+              directionFilteredOutbound={categoryFilteredOutbound}
               directionFilter={directionFilter}
               topCorridorInbound={
                 isShopperMetric ? topCorridorOutbound : topCorridorInbound
@@ -1211,13 +1573,13 @@ export function ActivityCommuteView({ data, placer }: Props) {
           ) : (
             <StatsForZip
               flows={flows}
-              directionFilteredFlows={directionFilteredFlows}
+              directionFilteredFlows={categoryFilteredFlows}
               flowsInbound={isShopperMetric ? flowsOutbound : flowsInbound}
               flowsOutbound={flowsOutbound}
               directionFilteredInbound={
-                isShopperMetric ? directionFilteredOutbound : directionFilteredInbound
+                isShopperMetric ? categoryFilteredOutbound : categoryFilteredInbound
               }
-              directionFilteredOutbound={directionFilteredOutbound}
+              directionFilteredOutbound={categoryFilteredOutbound}
               directionFilter={directionFilter}
               zips={zips}
               selectedZip={selectedZip}
@@ -1262,9 +1624,31 @@ export function ActivityCommuteView({ data, placer }: Props) {
             onClickCorridor={(corridorId, payload) => {
               setPinned({ corridorId, ...payload });
               setSuppressedHover(null);
+              setOdPinned(null);
             }}
+            onHoverOffCorridor={
+              isShopperMetric && shopperViewLayer === 'spaghetti'
+                ? (od, payload) => {
+                    if (!od || !payload) {
+                      setOdHover(null);
+                      return;
+                    }
+                    setOdHover({ ...od, ...payload });
+                  }
+                : undefined
+            }
+            onClickOffCorridor={
+              isShopperMetric && shopperViewLayer === 'spaghetti'
+                ? (od, payload) => {
+                    setOdPinned({ ...od, ...payload });
+                    setOdHover(null);
+                    setPinned(null);
+                  }
+                : undefined
+            }
             onClickEmpty={() => {
               setPinned(null);
+              setOdPinned(null);
               setSuppressedHover(hover?.corridorId ?? null);
             }}
             heatmapData={shopperHeatmapData}
@@ -1319,14 +1703,19 @@ export function ActivityCommuteView({ data, placer }: Props) {
               // Pass the SELECTION-narrowed flows (not partner-narrowed)
               // so Place Rankings can list the full set of clickable
               // partners; the strip applies its own partner filter for
-              // the KPI / Pie / Category cards.
-              flows={filterForSelection(directionFilteredFlows, selectedZip, effectiveMode)}
+              // the KPI / Pie / Category cards. When a corridor or OD
+              // branch is pinned, layer the click-to-filter on top so
+              // every card reads against the pinned flow.
+              flows={applyPinnedFlowFilter(
+                filterForSelection(directionFilteredFlows, selectedZip, effectiveMode),
+              )}
               selectedZip={selectedZip}
               scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : 'All Residents'}
-              selectedCategory={selectedShopperCategory}
-              onSelectCategory={setSelectedShopperCategory}
+              selectedCategories={selectedShopperCategories}
+              onSelectCategories={setSelectedShopperCategories}
               selectedPartners={selectedShopperPartners}
               onSelectPartners={setSelectedShopperPartners}
+              topProperties={topShopperProperties}
               zips={zips}
               placerYear={placerYear}
               mode={effectiveMode}
@@ -1426,14 +1815,30 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 setSelectedPartner(isSame ? null : p);
               }
             : undefined;
+          // Shopper view docks the pinned tooltip to the LEFT side of
+          // the map (directly to the right of the left-rail panel) so
+          // the floating Property/Category Rankings + bottom strip
+          // stay visible. Other metrics keep the canonical top-right
+          // dock. The user can drag from the header to reposition.
+          const dockClass = isShopperMetric
+            ? "absolute glass rounded-md px-3 py-2 text-[11px] z-50 top-3 left-3 md:w-[320px] max-h-[70vh] md:max-h-[calc(100vh-280px)] overflow-y-auto"
+            : "fixed glass rounded-md px-3 py-2 text-[11px] z-50 top-12 left-2 right-2 md:top-[60px] md:right-4 md:left-auto md:w-[320px] max-h-[70vh] md:max-h-[calc(100vh-280px)] overflow-y-auto";
           return (
             <div
-              className="fixed glass rounded-md px-3 py-2 text-[11px] z-50 top-12 left-2 right-2 md:top-[60px] md:right-4 md:left-auto md:w-[320px] max-h-[70vh] md:max-h-[calc(100vh-280px)] overflow-y-auto"
+              className={dockClass}
               role="dialog"
               aria-label="Corridor breakdown"
-              style={{ border: '1px solid var(--accent)' }}
+              style={{
+                border: '1px solid var(--accent)',
+                transform: `translate(${corridorPinnedDrag.offset.x}px, ${corridorPinnedDrag.offset.y}px)`,
+              }}
             >
-              <div className="flex items-start justify-between gap-2 mb-2">
+              <div
+                className="flex items-start justify-between gap-2 mb-2"
+                style={{ cursor: 'move', userSelect: 'none' }}
+                onMouseDown={corridorPinnedDrag.onMouseDown}
+                title="Drag to reposition"
+              >
                 <div className="flex-1 min-w-0">
                   <div
                     className="text-[9px] font-semibold uppercase tracking-wider mb-0.5"
@@ -1535,6 +1940,143 @@ export function ActivityCommuteView({ data, placer }: Props) {
               {headerFor(hover)}
               <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
                 Click corridor for breakdown
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Spaghetti hover chip — single-line "Origin → Destination: N
+            visits" + nudge to click for breakdown. Suppressed when an OD
+            tooltip is pinned to keep the click experience uncluttered. */}
+        {odHover && !odPinned && (() => {
+          const a = clampTooltipAnchor(odHover.clientX, odHover.clientY, 280, 36);
+          return (
+            <div
+              className="fixed glass rounded-md px-3 py-1.5 text-[11px] z-40 pointer-events-none"
+              style={{
+                left: a.left,
+                top: a.top,
+                border: '1px solid var(--accent)',
+                color: 'var(--text-h)',
+              }}
+            >
+              <div className="font-medium">
+                {odHover.aggregation.originPlace} → {odHover.aggregation.destPlace}
+                {' '}— {fmtInt(odHover.aggregation.total)} {tooltipUnit}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                Click branch for breakdown
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Spaghetti pinned tooltip — substantive panel anchored near the
+            click point with a category breakdown table. Mirrors the
+            corridor pinned tooltip's chrome (Pinned label + X to close +
+            card containers) so the two views feel like one interaction. */}
+        {odPinned && (() => {
+          const total = Math.max(odPinned.aggregation.total, 1);
+          // Roll the OD's per-category flows into a sorted breakdown.
+          const catMap = new Map<string, number>();
+          for (const f of odPinned.aggregation.flows) {
+            const cat = f.category || 'Other';
+            catMap.set(cat, (catMap.get(cat) ?? 0) + f.workerCount);
+          }
+          const categoryRows = Array.from(catMap.entries())
+            .map(([category, value]) => ({ category, value }))
+            .sort((x, y) => y.value - x.value);
+          // Spaghetti view only exists in shopper mode, so the OD pinned
+          // tooltip always docks to the LEFT of the map (same rationale
+          // as the corridor pinned override above — keep the floating
+          // right-rail cards readable). Drag handle on the header lets
+          // the user move it anywhere.
+          return (
+            <div
+              className="absolute glass rounded-md p-3 text-[11px] z-50 top-3 left-3 md:w-[320px] max-h-[70vh] md:max-h-[calc(100vh-280px)] overflow-y-auto"
+              role="dialog"
+              aria-label="Branch breakdown"
+              style={{
+                border: '1px solid var(--accent)',
+                color: 'var(--text-h)',
+                transform: `translate(${odPinnedDrag.offset.x}px, ${odPinnedDrag.offset.y}px)`,
+              }}
+            >
+              <div
+                className="flex items-start justify-between gap-2 mb-2"
+                style={{ cursor: 'move', userSelect: 'none' }}
+                onMouseDown={odPinnedDrag.onMouseDown}
+                title="Drag to reposition"
+              >
+                <div className="min-w-0">
+                  <div
+                    className="text-[9px] font-semibold uppercase tracking-wider mb-0.5"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    Pinned
+                  </div>
+                  <span className="font-medium" style={{ color: 'var(--text-h)' }}>
+                    {odPinned.aggregation.originPlace} → {odPinned.aggregation.destPlace}
+                    {' '}— {fmtInt(odPinned.aggregation.total)} {tooltipUnit}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOdPinned(null)}
+                  aria-label="Close pinned tooltip"
+                  className="-mr-1 -mt-1 px-2 py-1 rounded text-xl hover:bg-white/10 shrink-0"
+                  style={{ color: 'var(--text-h)', lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </div>
+              <div
+                className="rounded px-2 py-1.5"
+                style={{
+                  background: 'var(--bg-card, rgba(255,255,255,0.03))',
+                  border: '1px solid var(--border-soft, rgba(255,255,255,0.08))',
+                }}
+              >
+                <div
+                  className="text-[9px] font-semibold uppercase tracking-wider mb-1"
+                  style={{ color: 'var(--text-h)' }}
+                >
+                  Categories
+                </div>
+                {categoryRows.length === 0 ? (
+                  <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                    No category data for this branch.
+                  </div>
+                ) : (
+                  <ul className="flex flex-col gap-0.5">
+                    {categoryRows.map((r) => (
+                      <li
+                        key={r.category}
+                        className="flex items-center gap-2 px-1 py-0.5 rounded"
+                      >
+                        <span
+                          className="text-[10px] truncate flex-1 min-w-0"
+                          style={{ color: 'var(--text-h)' }}
+                          title={r.category}
+                        >
+                          {r.category}
+                        </span>
+                        <span
+                          className="text-[10px] tabular-nums w-[60px] text-right shrink-0"
+                          style={{ color: 'var(--text-h)' }}
+                        >
+                          {fmtInt(r.value)}
+                        </span>
+                        <span
+                          className="text-[10px] tabular-nums w-[36px] text-right shrink-0"
+                          style={{ color: 'var(--text-dim)' }}
+                        >
+                          {fmtPct(r.value / total)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           );
