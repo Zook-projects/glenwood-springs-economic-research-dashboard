@@ -11,6 +11,7 @@ import maplibregl, {
 import { CORRIDOR_BUCKET_SEMANTIC, corridorStyle } from '../lib/arcMath';
 import { flowIdOf } from '../lib/corridors';
 import { ANCHOR_ZIPS, isAnchorInCounty } from '../lib/flowQueries';
+import { fmtInt } from '../lib/format';
 import type {
   ActiveCorridorAggregation,
   ActiveOdAggregation,
@@ -1785,7 +1786,7 @@ export function MapCanvas({
             tip.innerHTML = `
               <div style="font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:${accent};margin-bottom:2px;">Origin · ${s.originZip}</div>
               <div style="font-size:12px;font-weight:600;color:var(--text-h);line-height:1.15;">${place}</div>
-              <div style="font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-h);margin-top:3px;">${s.value.toLocaleString()} ${unit} <span style="color:var(--text-dim);">· ${share}% of total</span></div>
+              <div style="font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-h);margin-top:3px;">${fmtInt(s.value)} ${unit} <span style="color:var(--text-dim);">· ${share}% of total</span></div>
             `;
             tip.style.display = 'block';
             tip.style.left = `${x + 14}px`;

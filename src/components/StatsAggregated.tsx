@@ -114,13 +114,27 @@ interface Props {
   // map leaves it undefined and stays at one-way. The sub-line auto-amends
   // with "· round-trip" whenever the multiplier doubles the value.
   commuteDistanceMultiplier?: number;
+  // Replaces the default tail stat items (everything after the hero
+  // "Total Workforce / Total Visitors / etc" row) with a caller-supplied
+  // list. Used by the Visitors metric to surface a curated 5-item set
+  // (Tourist Visitors, Days in Market, Average Visit Distance, Top
+  // Destination, Out of State) instead of the LODES-flavored default
+  // accordion. The hero item stays auto-built so it tracks the rankings
+  // axis / sub-metric label like normal.
+  tailItemsOverride?: StatItem[];
+  // When true, suppress the Total / Inbound / Outbound / Local axis
+  // tablist + axis-specific help text inside the rankings section. The
+  // Visitors metric uses this — visitor data only carries inbound flows
+  // so the other axes have nothing meaningful to show. Rankings fall
+  // through to the 'total' axis.
+  hideRankingsAxisTabs?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Shared types + data extraction
 // ---------------------------------------------------------------------------
 
-interface StatItem {
+export interface StatItem {
   id: string;
   label: string;
   value: string;
@@ -186,14 +200,24 @@ function buildItems(
     ? `${fmtPct(summary.crossZipShare)} of mapped ${universe}`
     : `${fmtPct(summary.crossZipShare)} of mapped workforce commutes`;
 
+  const heroItem: StatItem = {
+    id: 'workforce',
+    label: 'Total Workforce',
+    value: fmtInt(summary.totalWorkers),
+    sub: 'working within the 11 workplace ZIP codes',
+    secondary: undefined,
+  };
+
+  // Visitor metric short-circuit — caller supplies a curated tail list,
+  // so skip the LODES default accordion entirely and return [hero, ...tail].
+  // Suppresses cross-zip / vehicle-miles / top-corridor / top-od / outside-*
+  // rows that don't match the visitor narrative.
+  if (props.tailItemsOverride) {
+    return [heroItem, ...props.tailItemsOverride];
+  }
+
   const items: StatItem[] = [
-    {
-      id: 'workforce',
-      label: 'Total Workforce',
-      value: fmtInt(summary.totalWorkers),
-      sub: 'working within the 11 workplace ZIP codes',
-      secondary: undefined,
-    },
+    heroItem,
     {
       id: 'cross-zip',
       label: props.metricLabels?.crossZipLabel ?? 'Cross-ZIP commuters',
@@ -547,6 +571,7 @@ function AnchorRankings({
   axis,
   onAxisChange,
   metricLabels,
+  hideAxisTabs = false,
 }: {
   rankings: AnchorRanking[];
   // Set of currently-selected workplace ZIPs. When non-empty the rows in
@@ -563,6 +588,11 @@ function AnchorRankings({
   // Subset of the parent's metricLabels relevant to this component — the
   // section title and the per-axis help-text overrides.
   metricLabels?: Props['metricLabels'];
+  // When true, the Inbound / Outbound / Local axis tablist and its
+  // per-axis help copy are suppressed. The component then renders the
+  // rankings against the locked 'total' axis. Used by the Visitors
+  // metric where the other axes have no inverse data to show.
+  hideAxisTabs?: boolean;
 }) {
   const setAxis = onAxisChange;
   const [sortBy, setSortBy] = useState<RankSortBy>('count');
@@ -654,49 +684,53 @@ function AnchorRankings({
         </div>
       </div>
 
-      <div
-        role="tablist"
-        aria-label="Ranking axis"
-        className="flex p-1 rounded-lg border mb-2"
-        style={{
-          background: 'rgba(255,255,255,0.03)',
-          borderColor: 'var(--panel-border)',
-        }}
-      >
-        {RANK_AXES.map(({ key, label }) => {
-          const active = axis === key;
-          return (
-            <button
-              key={key}
-              role="tab"
-              aria-selected={active}
-              onClick={() => setAxis(key)}
-              className="flex-1 px-3 py-1 text-[11px] font-medium rounded-md transition-colors"
-              style={{
-                background: active ? 'var(--accent)' : 'transparent',
-                color: active ? '#1a1207' : 'var(--text)',
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      {!hideAxisTabs && (
+        <div
+          role="tablist"
+          aria-label="Ranking axis"
+          className="flex p-1 rounded-lg border mb-2"
+          style={{
+            background: 'rgba(255,255,255,0.03)',
+            borderColor: 'var(--panel-border)',
+          }}
+        >
+          {RANK_AXES.map(({ key, label }) => {
+            const active = axis === key;
+            return (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={active}
+                onClick={() => setAxis(key)}
+                className="flex-1 px-3 py-1 text-[11px] font-medium rounded-md transition-colors"
+                style={{
+                  background: active ? 'var(--accent)' : 'transparent',
+                  color: active ? '#1a1207' : 'var(--text)',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      <div
-        className="text-[11px] leading-snug mb-2"
-        style={{ color: 'var(--text-dim)' }}
-      >
-        <div>{help.primary}</div>
-        {help.secondary && (
-          <div className="opacity-80">{help.secondary}</div>
-        )}
-        {directionFilter !== 'all' && (
-          <div className="opacity-80 mt-0.5">
-            Scoped to {DIRECTION_FILTER_LABEL[directionFilter]} flows · ALL_OTHER excluded
-          </div>
-        )}
-      </div>
+      {!hideAxisTabs && (
+        <div
+          className="text-[11px] leading-snug mb-2"
+          style={{ color: 'var(--text-dim)' }}
+        >
+          <div>{help.primary}</div>
+          {help.secondary && (
+            <div className="opacity-80">{help.secondary}</div>
+          )}
+          {directionFilter !== 'all' && (
+            <div className="opacity-80 mt-0.5">
+              Scoped to {DIRECTION_FILTER_LABEL[directionFilter]} flows · ALL_OTHER excluded
+            </div>
+          )}
+        </div>
+      )}
 
       <ol className="flex flex-col gap-0.5 pl-0">
         {sorted.map((r, idx) => {
@@ -1000,6 +1034,7 @@ export function StatsAggregated(props: Props) {
               axis={rankingAxis}
               onAxisChange={setRankingAxis}
               metricLabels={props.metricLabels}
+              hideAxisTabs={props.hideRankingsAxisTabs}
             />
           </div>
         </div>
@@ -1014,6 +1049,7 @@ export function StatsAggregated(props: Props) {
             axis={rankingAxis}
             onAxisChange={setRankingAxis}
             metricLabels={props.metricLabels}
+            hideAxisTabs={props.hideRankingsAxisTabs}
           />
         </>
       )}

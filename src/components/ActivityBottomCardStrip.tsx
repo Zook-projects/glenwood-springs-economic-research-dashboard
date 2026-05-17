@@ -19,14 +19,19 @@
 // total-jobs sparkline are intentionally absent — Placer doesn't publish
 // the breakdowns those cards depend on.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Card,
   PartnerList,
   PassThroughCard,
   WorkplaceMetricsCard,
 } from './BottomCardStrip';
-import { VisitorTypePieChart } from './VisitorTypePieChart';
+import {
+  VisitorTypePieChart,
+  type VisitorTypeMode,
+  type VisitorPieSliceKey,
+} from './VisitorTypePieChart';
+import { PlaceRankingsCard } from './PlaceRankingsCard';
 import type {
   CorridorFlowEntry,
   CorridorId,
@@ -109,7 +114,20 @@ interface Props {
   // of the Visitor Type chip selection so the user can see the
   // proportional mix at a glance. `unit` follows the active sub-metric
   // ("visitors" / "visits" / "avg. daily visits").
-  visitorTypePieData?: { regional: number; tourist: number; unit?: string };
+  visitorTypePieData?: {
+    regional: number;
+    tourist: number;
+    unit?: string;
+    // 4-band distance breakdown — required so the user can flip the
+    // card's header toggle between "Type" (regional/tourist split) and
+    // "Distance" (4 distance bands).
+    distanceBands?: {
+      under50: number;
+      band50to100: number;
+      band100to250: number;
+      over250: number;
+    };
+  };
   // Optional subtitle overrides for the Top inflow / Top outflow cards.
   // Default: "Where workers commute from · Placer YYYY" /
   // "Where residents commute to · Placer YYYY". Visitor metric uses these
@@ -117,6 +135,23 @@ interface Props {
   // in both, so callers omit the year piece.
   topInflowSubtitle?: string;
   topOutflowSubtitle?: string;
+  // True when the active metric is in the Visitors category. Switches the
+  // partner aggregation from per-ZIP to per-city (a big metro spans 20+
+  // ZIPs and a per-ZIP partner list fragments the visitor story), and
+  // unlocks the Region-view render of the Top Inflow / Place Ranking
+  // cards (anchor-specific cards are otherwise gated on selectedZip).
+  isVisitorCategory?: boolean;
+  // Destination-anchor rows for the Place Ranking card. Computed in the
+  // parent so anchor click-to-select can route through the same handler
+  // the ZipSelector uses. Provided only for the Visitors metric.
+  visitorPlaceRows?: ReadonlyArray<{ place: string; zips: string[]; value: number }>;
+  onSelectVisitorAnchor?: (zip: string | null) => void;
+  // Current visitor-type filter key — when one of the pie slice keys is
+  // active the matching slice highlights and the rest dim. 'all' = no
+  // filter active. Provided alongside onVisitorSliceClick so the pie
+  // can drive the same filter the left-panel toggle drives.
+  visitorTypeFilterKey?: VisitorPieSliceKey | null;
+  onVisitorSliceClick?: (key: VisitorPieSliceKey) => void;
 }
 
 const TOP_PARTNER_LIMIT = 10;
@@ -148,7 +183,17 @@ export function ActivityBottomCardStrip({
   topInflowSubtitle,
   topOutflowSubtitle,
   visitorTypePieData,
+  isVisitorCategory = false,
+  visitorPlaceRows,
+  onSelectVisitorAnchor,
+  visitorTypeFilterKey,
+  onVisitorSliceClick,
 }: Props) {
+  // Local toggle state for the Visitor Type Mix card's Type / Distance
+  // pivot. Type = the 2-slice Regional/Tourist view (default);
+  // Distance = the 4-band breakdown (<50, 50–100, 100–250, >250 mi).
+  const [visitorTypeMode, setVisitorTypeMode] =
+    useState<VisitorTypeMode>('type');
   // Placer-derived pass-through traffic file. Memoized on the full inbound
   // set + corridor graph; direction filtering happens inside the card.
   const passThrough = useMemo(
@@ -200,19 +245,62 @@ export function ActivityBottomCardStrip({
   // `zips` and `trend` are required by the LODES OdPartner shape; the empty
   // trend reflects Placer's single-vintage data (PartnerList ignores it
   // because we don't pass selectedPartner-trend wiring through the card).
+  //
+  // Visitor rollup: when isVisitorCategory is true the partner key is
+  // ${originCity}, ${originState} so a Dallas metro spread across 20+ ZIPs
+  // surfaces as one "Dallas, TX" row rather than fragmenting the list.
+  // Rows missing a city tag fall back to per-ZIP grouping so they remain
+  // visible. The Region view (selectedZip === null) for visitors rolls up
+  // every inbound flow in the dataset, so Top Inflow can render before
+  // an anchor is selected.
   const topInflowPartners = useMemo<OdPartner[]>(() => {
-    const rows: OdPartner[] = flowsInbound
-      .filter((f) => f.destZip === selectedZip && f.originZip !== selectedZip)
-      .map((f) => ({
-        zip: f.originZip,
-        place: zipPlaces.get(f.originZip) ?? f.originPlace,
-        workers: f.workerCount,
-        zips: [f.originZip],
-        trend: [],
-      }));
+    type Agg = { key: string; place: string; workers: number; zips: Set<string> };
+    const filtered = flowsInbound.filter((f) => {
+      if (selectedZip) return f.destZip === selectedZip && f.originZip !== selectedZip;
+      // Region view: only meaningful for visitors; other categories pass
+      // selectedZip on the same call so this branch is unreachable.
+      return isVisitorCategory;
+    });
+    const agg = new Map<string, Agg>();
+    for (const f of filtered) {
+      const city = isVisitorCategory ? f.originCity?.trim() : undefined;
+      const state = isVisitorCategory ? f.originState?.trim() : undefined;
+      const key = city
+        ? state
+          ? `${city}, ${state}`
+          : city
+        : f.originZip;
+      const place = city
+        ? state
+          ? `${city}, ${state}`
+          : city
+        : zipPlaces.get(f.originZip) ?? f.originPlace;
+      const existing = agg.get(key);
+      if (existing) {
+        existing.workers += f.workerCount;
+        existing.zips.add(f.originZip);
+      } else {
+        agg.set(key, {
+          key,
+          place,
+          workers: f.workerCount,
+          zips: new Set([f.originZip]),
+        });
+      }
+    }
+    const rows: OdPartner[] = Array.from(agg.values()).map((a) => ({
+      // PartnerList uses `zip` only for stable React keys and ALL_OTHER
+      // detection — pass the aggregation key so city-rolled rows render
+      // distinctly even when two cities share an originZip fallback.
+      zip: a.key,
+      place: a.place,
+      workers: a.workers,
+      zips: Array.from(a.zips),
+      trend: [],
+    }));
     rows.sort((a, b) => b.workers - a.workers);
     return rows.slice(0, TOP_PARTNER_LIMIT);
-  }, [flowsInbound, selectedZip, zipPlaces]);
+  }, [flowsInbound, selectedZip, zipPlaces, isVisitorCategory]);
 
   const topOutflowPartners = useMemo<OdPartner[]>(() => {
     const rows: OdPartner[] = flowsOutbound
@@ -231,24 +319,110 @@ export function ActivityBottomCardStrip({
   const topInflowPartner = topInflowPartners.find((p) => p.zip !== 'ALL_OTHER') ?? null;
   const topOutflowPartner = topOutflowPartners.find((p) => p.zip !== 'ALL_OTHER') ?? null;
 
+  // Sum of all inbound visits across every anchor in the region. Used as
+  // the Top Inflow denominator in the visitor Region view so each city
+  // row reads as "X% of all visits to the region."
+  const regionInflowTotal = useMemo(() => {
+    if (!isVisitorCategory || selectedZip) return 0;
+    let sum = 0;
+    for (const f of flowsInbound) sum += f.workerCount;
+    return sum;
+  }, [flowsInbound, isVisitorCategory, selectedZip]);
+
+  // Visitor Top Inflow / Place Ranking cards render in both Region and
+  // Visit Destination views. Region view = no anchor (selectedZip null);
+  // Visit Destination view = anchor selected, mode locked to inbound.
+  const showVisitorRegionCards = isVisitorCategory && !selectedZip;
+  const showVisitorPlaceRanking = isVisitorCategory && !!visitorPlaceRows;
+  const selectedAnchorPlaces = useMemo(
+    () => (selectedZip ? new Set<string>([
+      // Match by the place label so highlighting works on both ZIP-keyed
+      // and city-keyed rows. The visitor Place Ranking always uses
+      // destPlace as the row key, so a single-membership set suffices.
+      visitorPlaceRows?.find((r) => r.zips.includes(selectedZip))?.place ?? '',
+    ]) : new Set<string>()),
+    [selectedZip, visitorPlaceRows],
+  );
+
+  // Visitor strip stretches its cards across the map width (the cards
+  // fan out evenly via `grow`). Non-visitor strips keep the legacy
+  // fixed-width + horizontal-scroll layout so dashboard-style anchor
+  // selection on the workforce metric stays unchanged.
   return (
-    <div className="flex gap-3 px-3 md:px-4 pb-3 pt-2 overflow-x-auto">
+    <div
+      className={`flex gap-3 px-3 md:px-4 pb-3 pt-2 ${
+        isVisitorCategory ? '' : 'overflow-x-auto'
+      }`}
+    >
       {/* Visitor-type pie — always-on card (renders even without an anchor
           selected). Placed first so the user reads the proportional mix
           before the anchor-specific cards. */}
       {visitorTypePieData && (
-        <Card title="Visitor Type Mix" width={260}>
+        <Card
+          title="Visitor Type Mix"
+          width={260}
+          grow={isVisitorCategory}
+          headerExtra={
+            visitorTypePieData.distanceBands ? (
+              <VisitorTypeModeToggle
+                value={visitorTypeMode}
+                onChange={setVisitorTypeMode}
+              />
+            ) : undefined
+          }
+        >
           <VisitorTypePieChart
             regionalValue={visitorTypePieData.regional}
             touristValue={visitorTypePieData.tourist}
             unit={visitorTypePieData.unit}
-            size={108}
+            mode={visitorTypeMode}
+            distanceBands={visitorTypePieData.distanceBands}
+            activeKey={visitorTypeFilterKey}
+            onSliceClick={onVisitorSliceClick}
           />
         </Card>
       )}
+      {/* Region-view visitor cards — render when the Visitors metric is
+          active and no anchor is selected. The aggregate Top Inflow rolls
+          every inbound flow up by origin city; the Place Ranking lists
+          destination anchors with click-to-select. */}
+      {showVisitorRegionCards && (
+        <Card
+          title="Region · Top inflow"
+          subtitle={`${topInflowSubtitle ?? 'Where visitors to the region come from'} · Placer ${placerYear}`}
+          width={260}
+          grow
+          maxHeight={320}
+        >
+          <PartnerList
+            partners={topInflowPartners}
+            denominator={regionInflowTotal}
+            totalRow={{ label: 'Total inflow', value: regionInflowTotal }}
+          />
+        </Card>
+      )}
+      {showVisitorRegionCards && showVisitorPlaceRanking && (
+        <div
+          style={{ minWidth: 260, maxHeight: 320 }}
+          className="flex-1 flex flex-col min-h-0"
+        >
+          <PlaceRankingsCard
+            rows={visitorPlaceRows!}
+            total={regionInflowTotal}
+            scope="Region"
+            title="Top Destinations"
+            selectedPlaces={selectedAnchorPlaces}
+            onToggleRow={(row) => {
+              const targetZip = row.zips[0];
+              if (!targetZip) return;
+              onSelectVisitorAnchor?.(targetZip);
+            }}
+          />
+        </div>
+      )}
       {/* Anchor-specific cards — only render when an anchor is selected.
           In the visitor metric's aggregate view selectedZip is null and
-          only the pie card above renders. */}
+          only the cards above render. */}
       {selectedZip && (
         <>
           {!hideWorkforceFlows && (
@@ -259,33 +433,36 @@ export function ActivityBottomCardStrip({
               within={withinTotal}
             />
           )}
-          <WorkplaceMetricsCard
-            scope={scope}
-            selectedZip={selectedZip}
-            selectedPartner={null}
-            mode="inbound"
-            wacLatest={null}
-            racLatest={null}
-            inflowLatest={{ totalJobs: inflowTotal }}
-            outflowLatest={{ totalJobs: outflowTotal }}
-            withinLatest={{ totalJobs: withinTotal }}
-            topInflowPartner={topInflowPartner}
-            topOutflowPartner={topOutflowPartner}
-            flowsInbound={flowsInbound}
-            flowsOutbound={flowsOutbound}
-            zips={zips}
-            corridorIndex={corridorIndex}
-            flowIndex={flowIndex}
-            driveDistance={driveDistance}
-            segmentFilter={{ axis: 'all', buckets: [] }}
-            metricLabels={workplaceMetricLabels}
-            commuteDistanceMultiplier={workplaceCommuteDistanceMultiplier}
-            commuteDistanceLabel={workplaceCommuteDistanceLabel}
-          />
+          {!isVisitorCategory && (
+            <WorkplaceMetricsCard
+              scope={scope}
+              selectedZip={selectedZip}
+              selectedPartner={null}
+              mode="inbound"
+              wacLatest={null}
+              racLatest={null}
+              inflowLatest={{ totalJobs: inflowTotal }}
+              outflowLatest={{ totalJobs: outflowTotal }}
+              withinLatest={{ totalJobs: withinTotal }}
+              topInflowPartner={topInflowPartner}
+              topOutflowPartner={topOutflowPartner}
+              flowsInbound={flowsInbound}
+              flowsOutbound={flowsOutbound}
+              zips={zips}
+              corridorIndex={corridorIndex}
+              flowIndex={flowIndex}
+              driveDistance={driveDistance}
+              segmentFilter={{ axis: 'all', buckets: [] }}
+              metricLabels={workplaceMetricLabels}
+              commuteDistanceMultiplier={workplaceCommuteDistanceMultiplier}
+              commuteDistanceLabel={workplaceCommuteDistanceLabel}
+            />
+          )}
           <Card
             title={`${scope} · Top inflow`}
             subtitle={`${topInflowSubtitle ?? 'Where workers commute from'} · Placer ${placerYear}`}
             width={260}
+            grow={isVisitorCategory}
             maxHeight={320}
           >
             <PartnerList
@@ -297,6 +474,31 @@ export function ActivityBottomCardStrip({
               totalRow={{ label: 'Total inflow', value: inflowTotal }}
             />
           </Card>
+          {showVisitorPlaceRanking && (
+            <div
+              style={{ minWidth: 260, maxHeight: 320 }}
+              className="flex-1 flex flex-col min-h-0"
+            >
+              <PlaceRankingsCard
+                rows={visitorPlaceRows!}
+                total={visitorPlaceRows!.reduce((s, r) => s + r.value, 0)}
+                scope={scope}
+                title="Top Destinations"
+                selectedPlaces={selectedAnchorPlaces}
+                onToggleRow={(row) => {
+                  const targetZip = row.zips[0];
+                  if (!targetZip) return;
+                  // Click the active anchor row again → clear selection
+                  // (regional view); click a different row → switch anchor.
+                  if (selectedAnchorPlaces.has(row.place)) {
+                    onSelectVisitorAnchor?.(null);
+                  } else {
+                    onSelectVisitorAnchor?.(targetZip);
+                  }
+                }}
+              />
+            </div>
+          )}
           {!hideTopOutflow && (
             <Card
               title={`${scope} · Top outflow`}
@@ -413,5 +615,55 @@ function WorkforceFlowsCard({ scope, inflow, outflow, within }: WorkforceFlowsCa
         </div>
       </div>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// VisitorTypeModeToggle — compact Type / Distance segmented control
+// rendered in the Visitor Type Mix card's header (top-right). Mirrors
+// the styling of the rankings sort toggle in StatsAggregated so the
+// two read as the same UI primitive.
+// ---------------------------------------------------------------------------
+function VisitorTypeModeToggle({
+  value,
+  onChange,
+}: {
+  value: VisitorTypeMode;
+  onChange: (next: VisitorTypeMode) => void;
+}) {
+  const options: ReadonlyArray<{ key: VisitorTypeMode; label: string }> = [
+    { key: 'type', label: 'Type' },
+    { key: 'distance', label: 'Distance' },
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Visitor breakdown view"
+      className="flex p-0.5 rounded-md border text-[10px]"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        borderColor: 'var(--panel-border)',
+      }}
+    >
+      {options.map(({ key, label }) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(key)}
+            className="px-2 py-0.5 rounded transition-colors font-medium"
+            style={{
+              background: active ? 'var(--accent)' : 'transparent',
+              color: active ? '#1a1207' : 'var(--text-dim)',
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
   );
 }

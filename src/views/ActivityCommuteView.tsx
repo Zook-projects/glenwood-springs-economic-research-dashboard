@@ -9,7 +9,7 @@
 // placerAdapters.toFlowRows so the downstream pipeline (MapCanvas,
 // corridor index, StatsAggregated, StatsForZip) consumes it unchanged.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapCanvas } from '../components/MapCanvas';
 import { ActiveFiltersOverlay } from '../components/ActiveFiltersOverlay';
 import { ZipSelector } from '../components/ZipSelector';
@@ -26,7 +26,8 @@ import {
   type ActivityCategory,
   type ActivityMetric,
 } from '../components/ActivityMetricToggle';
-import { StatsAggregated } from '../components/StatsAggregated';
+import { StatsAggregated, type StatItem } from '../components/StatsAggregated';
+import type { VisitorPieSliceKey } from '../components/VisitorTypePieChart';
 import { StatsForZip } from '../components/StatsForZip';
 import { CorridorTooltipBody } from '../components/CorridorTooltipBody';
 import { ActivityBottomCardStrip } from '../components/ActivityBottomCardStrip';
@@ -49,6 +50,7 @@ import {
   filterByDirection,
   filterByVisitorType,
   filterForSelection,
+  haversineMiles,
   isAnchorZip,
   meanCommuteMiles,
   sumDistanceWeightedMiles,
@@ -276,10 +278,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
           directionInbound: 'avg. daily visits to',
           directionOutbound: 'avg. daily visits from',
           liveAndWorkPhrase: 'avg. daily visits within',
-          vehicleMiles: {
-            label: 'Average Daily Vehicle Miles',
-            sub: 'avg. daily visits × one-way distance · cross-ZIP only',
-          },
+          // vehicleMiles intentionally omitted — no VMT framing for
+          // visitor volumes (no trip-leg pairing).
           crossZipLabel: 'Cross-ZIP avg. daily visits',
           avgDistanceLabel: 'Average visit distance',
           distanceWeighting: 'visit-weighted',
@@ -307,10 +307,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
           directionInbound: 'visits to',
           directionOutbound: 'visits from',
           liveAndWorkPhrase: 'visits within',
-          vehicleMiles: {
-            label: 'Total Vehicle Miles',
-            sub: 'annual visits × one-way distance · cross-ZIP only',
-          },
+          // vehicleMiles intentionally omitted — no VMT framing for
+          // visitor volumes (no trip-leg pairing).
           crossZipLabel: 'Cross-ZIP visits',
           avgDistanceLabel: 'Average visit distance',
           distanceWeighting: 'visit-weighted',
@@ -690,8 +688,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
   //   daily-trips  → "Average Daily Vehicle Miles" (trips × one-way miles)
   //   trips        → "Total Vehicle Miles" (trips × one-way miles)
   //   visitors     → "Average Visit Distance" (visitor-weighted one-way miles)
-  //   daily-visits → "Average Daily Vehicle Miles" (visits × one-way miles)
-  //   visits       → "Total Vehicle Miles" (visits × one-way miles)
+  //   daily-visits → null (no VMT framing for visitor volumes)
+  //   visits       → null (no VMT framing for visitor volumes)
   //   out-of-market-shopping → null (source data has its own home-distance
   //                                  column; v2 can surface it directly)
   const distanceTile = useMemo(() => {
@@ -727,21 +725,24 @@ export function ActivityCommuteView({ data, placer }: Props) {
         sub: 'visitor-weighted, one-way · cross-ZIP only',
       };
     }
+    // Vehicle-miles tile is intentionally suppressed for the Visitors
+    // category sub-metrics. The avg-visit-distance row above is the
+    // distance-flavored tile we want there; VMT framing doesn't apply
+    // cleanly to visitor volumes (no trip-leg pairing).
+    if (metric === 'daily-visits' || metric === 'visits') return null;
     const totalVMT = sumDistanceWeightedMiles(anchorFlows, zips, dd);
-    if (metric === 'daily-trips' || metric === 'daily-visits') {
-      const unit = metric === 'daily-trips' ? 'avg. daily trips' : 'avg. daily visits';
+    if (metric === 'daily-trips') {
       return {
         label: 'Average Daily Vehicle Miles',
         value: totalVMT > 0 ? `${fmtInt(totalVMT)} mi` : '—',
-        sub: `${unit} × one-way distance · cross-ZIP only`,
+        sub: `avg. daily trips × one-way distance · cross-ZIP only`,
       };
     }
-    // 'trips' or 'visits' — annual volumes × one-way distance.
-    const unit = metric === 'trips' ? 'annual trips' : 'annual visits';
+    // 'trips' — annual volumes × one-way distance.
     return {
       label: 'Total Vehicle Miles',
       value: totalVMT > 0 ? `${fmtInt(totalVMT)} mi` : '—',
-      sub: `${unit} × one-way distance · cross-ZIP only`,
+      sub: `annual trips × one-way distance · cross-ZIP only`,
     };
   }, [
     selectedZip,
@@ -808,12 +809,12 @@ export function ActivityCommuteView({ data, placer }: Props) {
   // bubble's position is the visit-weighted mean of its underlying ZIPs'
   // centroids so a multi-ZIP city anchors near its population mass. Rows
   // missing a city tag (legacy or non-visitor sneak-throughs) fall back
-  // to per-ZIP grouping so they remain visible. Cap to the top
-  // ORIGIN_SYMBOL_LIMIT by value to keep the SVG performant; the long
-  // tail is omitted (the headline tile still tracks the full universe).
+  // to per-ZIP grouping so they remain visible. All cities render — the
+  // radius scale (sqrt-mapped against the headline max) keeps the long
+  // tail visually subordinate, so an uncapped set doesn't fight the
+  // top-rank bubbles.
   const originSymbols = useMemo(() => {
     if (!isVisitorCategory) return undefined;
-    const ORIGIN_SYMBOL_LIMIT = 300;
     interface SymbolAgg {
       key: string;          // city-state or ZIP fallback
       label: string;        // human-readable place label
@@ -855,16 +856,37 @@ export function ActivityCommuteView({ data, placer }: Props) {
         });
       }
     }
-    const all = Array.from(agg.values()).map((a) => ({
-      originZip: a.sampleZip,
-      originPlace: a.label,
-      lat: a.latWeighted / Math.max(a.value, 1),
-      lng: a.lngWeighted / Math.max(a.value, 1),
-      value: a.value,
-    }));
+    // Drop cities below the noise floor — keep only places that send
+    // at least MIN_ANNUAL_VISITS visits/year. The threshold is applied
+    // in the metric's native units, so for the daily-visits metric it
+    // scales down by /365 to maintain the same "≥200 annual visits"
+    // meaning regardless of which sub-metric is active. Without this
+    // floor the map paints ~13K bubbles for the Visitors universe —
+    // many at coastal locations with 1–199 annual visits that read as
+    // noise and visually clutter the eastern seaboard / Atlantic edge.
+    const MIN_ANNUAL_VISITS = 200;
+    const threshold =
+      metric === 'daily-visits' ? MIN_ANNUAL_VISITS / 365 : MIN_ANNUAL_VISITS;
+    const all = Array.from(agg.values())
+      .map((a) => ({
+        originZip: a.sampleZip,
+        originPlace: a.label,
+        // Divide by the actual aggregated value, not max(value, 1).
+        // The clamp-to-1 form breaks the weighted mean whenever value
+        // is fractional (true for daily-visits where workerCount is
+        // annual/365): a city aggregating to 0.3 daily with one ZIP
+        // at lat 40 would land at lat (40*0.3)/max(0.3,1) = 12 —
+        // equator/Atlantic Ocean. `|| 1` guards against the impossible
+        // value=0 case (filtered below anyway) without distorting the
+        // centroid when value < 1.
+        lat: a.latWeighted / (a.value || 1),
+        lng: a.lngWeighted / (a.value || 1),
+        value: a.value,
+      }))
+      .filter((s) => s.value >= threshold);
     all.sort((a, b) => b.value - a.value);
-    return all.slice(0, ORIGIN_SYMBOL_LIMIT);
-  }, [isVisitorCategory, visibleFlows]);
+    return all;
+  }, [isVisitorCategory, visibleFlows, metric]);
 
   // Tooltip unit follows the active visitor sub-metric so the hover panel
   // reads "12,345 visitors" (Visitors) / "12,345 visits" (Visits) /
@@ -875,6 +897,313 @@ export function ActivityCommuteView({ data, placer }: Props) {
       : metric === 'daily-visits'
         ? 'avg. daily visits'
         : 'visits';
+
+  // Destination-anchor ranking for the Visitors bottom-strip Place
+  // Ranking card. Aggregates flowsInbound by destZip and restricts to
+  // the Placer destAnchors universe so the list reads as "anchors in
+  // the region, ranked by visits." Click-through wires to setSelectedZip
+  // so the card doubles as a fast anchor switcher. Computed only for
+  // the visitor metric — undefined otherwise gates the card off in the
+  // strip.
+  const visitorPlaceRows = useMemo(() => {
+    if (!isVisitorCategory) return undefined;
+    const anchorSet = new Set(destAnchors);
+    type Agg = { place: string; zips: string[]; value: number };
+    const byZip = new Map<string, Agg>();
+    // Read from the visitor-type-filtered set so clicking a pie slice
+    // ("Tourist" / "100–250 mi") narrows the Top Destinations ranking
+    // the same way it narrows the map and the rest of the strip.
+    for (const f of directionFilteredInbound) {
+      if (!anchorSet.has(f.destZip)) continue;
+      const existing = byZip.get(f.destZip);
+      const place = zips.find((z) => z.zip === f.destZip)?.place ?? f.destPlace ?? f.destZip;
+      if (existing) {
+        existing.value += f.workerCount;
+      } else {
+        byZip.set(f.destZip, {
+          place,
+          zips: [f.destZip],
+          value: f.workerCount,
+        });
+      }
+    }
+    const rows = Array.from(byZip.values());
+    rows.sort((a, b) => b.value - a.value);
+    return rows;
+  }, [isVisitorCategory, directionFilteredInbound, destAnchors, zips]);
+
+  // Builds the 5 visitor stat tiles for the left panel. Shared between
+  // the region view (StatsAggregated tail) and the visit destination
+  // view (StatsForZip injection above the Top Inflow list).
+  //
+  // Sub-metric awareness:
+  //   · The FIRST tile responds to the active sub-metric — "Tourist
+  //     Visitors" / "Avg. Daily Tourists" / "Tourist Visits" — and its
+  //     value is computed from the sub-metric's own flow rows so the
+  //     number scales to whatever count the user is reading. Other
+  //     tiles use the constant visitor-counts file so they read
+  //     identically across sub-metrics.
+  //   · The fourth tile is "Top Destination" in the region view
+  //     (top anchor by inbound visitors across the region) and "Top
+  //     Inflow" in the visit destination view (top origin city sending
+  //     visitors to the selected anchor).
+  //
+  // `scopeToAnchor` filters the visitor-counts + active-sub-metric
+  // flows to `destZip === scopeToAnchor` and switches the fourth tile.
+  const buildVisitorStatItems = useCallback(
+    (scopeToAnchor: string | null): StatItem[] | undefined => {
+      if (!placer) return undefined;
+      const countsFile = placer.visitorCounts;
+      const visitsFile = placer.visitorVisits;
+      if (!countsFile || !visitsFile) return undefined;
+
+      // Pre-apply the visitor-type filter to every source so a pie
+      // click ("Tourist" / "100–250 mi" / etc.) narrows the left-panel
+      // stats the same way it narrows the bottom strip and the map.
+      // `visitorType === 'all'` short-circuits inside filterByVisitorType
+      // so this is free when no filter is active.
+      const allCounts = filterByVisitorType(
+        toFlowRows(countsFile, zips, flowsByOdKey),
+        zips,
+        visitorType,
+      );
+      const allVisits = filterByVisitorType(
+        toFlowRows(visitsFile, zips, flowsByOdKey),
+        zips,
+        visitorType,
+      );
+      // The active sub-metric flows the parent already filtered live in
+      // `directionFilteredInbound`, so reuse them rather than re-running
+      // the filter pipeline.
+      const allActive = isVisitorCategory ? directionFilteredInbound : [];
+
+      const counts = scopeToAnchor
+        ? allCounts.filter((f) => f.destZip === scopeToAnchor)
+        : allCounts;
+      const visits = scopeToAnchor
+        ? allVisits.filter((f) => f.destZip === scopeToAnchor)
+        : allVisits;
+      const active = scopeToAnchor
+        ? allActive.filter((f) => f.destZip === scopeToAnchor)
+        : allActive;
+
+      // Tourist classification — origins > 50 mi from the GWS reference
+      // ZIP. Origins missing a centroid fall through to "tourist" so
+      // remote / national rows that dropped coords still register.
+      const ref = zips.find((z) => z.zip === VISITOR_TYPE_REFERENCE_ZIP);
+      const reference = ref && ref.lat != null && ref.lng != null
+        ? { lat: ref.lat, lng: ref.lng }
+        : null;
+      const zipIndex = new Map<string, typeof zips[number]>();
+      for (const z of zips) zipIndex.set(z.zip, z);
+      const isTourist = (f: FlowRow): boolean => {
+        if (!reference) return false;
+        let lat: number | null = f.originLat ?? null;
+        let lng: number | null = f.originLng ?? null;
+        if (lat == null || lng == null) {
+          const o = zipIndex.get(f.originZip);
+          if (o && o.lat != null && o.lng != null) {
+            lat = o.lat;
+            lng = o.lng;
+          }
+        }
+        return classifyVisitorType(lat, lng, reference) !== 'regional';
+      };
+
+      // Tourist count + label scale to the active sub-metric. Falls
+      // back to visitor-counts (unique tourists) when the user isn't
+      // in the visitor category — only relevant when this function
+      // returns undefined anyway, but defensive.
+      const firstLabel =
+        metric === 'visits'
+          ? 'Tourist Visits'
+          : metric === 'daily-visits'
+            ? 'Avg. Daily Tourists'
+            : 'Tourist Visitors';
+      const firstSubNoun =
+        metric === 'visits'
+          ? 'visits'
+          : metric === 'daily-visits'
+            ? 'avg. daily visits'
+            : 'visitors';
+      const firstFlowSource = metric ? active : counts;
+      let touristActive = 0;
+      let totalActive = 0;
+      for (const f of firstFlowSource) {
+        totalActive += f.workerCount;
+        if (isTourist(f)) touristActive += f.workerCount;
+      }
+      const touristActiveShare =
+        totalActive > 0 ? touristActive / totalActive : 0;
+      const firstValue =
+        metric === 'daily-visits'
+          ? fmtInt(touristActive)
+          : fmtInt(touristActive);
+
+      // Days in Market = annual visits ÷ unique visitors. Always reads
+      // off the visitor-counts + visitor-visits files (constant across
+      // sub-metrics). Scoped to the anchor when applicable so a single
+      // destination's repeat-visit profile shows.
+      const totalVisits = visits.reduce((s, f) => s + f.workerCount, 0);
+      const totalVisitorsUnique = counts.reduce((s, f) => s + f.workerCount, 0);
+      const daysInMarket =
+        totalVisitorsUnique > 0 ? totalVisits / totalVisitorsUnique : 0;
+
+      // Average Visit Distance — visitor-weighted one-way miles.
+      const avgVisitMiles = meanCommuteMiles(
+        counts,
+        zips,
+        driveDistance ?? undefined,
+      );
+
+      // Fourth tile — destination ranking pivots on whether we're
+      // in region view (top anchor across the region) or anchor view
+      // (top origin city sending visitors to the selected anchor).
+      let fourthItem: StatItem;
+      if (scopeToAnchor) {
+        // Top Inflow — top origin CITY by unique visitors to the
+        // selected anchor. Group by `${originCity}, ${originState}`
+        // for the same metro-rollup the bottom strip uses; fall back
+        // to originZip when city tags are missing.
+        type Agg = { label: string; value: number };
+        const byCity = new Map<string, Agg>();
+        for (const f of counts) {
+          if (f.originZip === scopeToAnchor) continue; // skip within-zip
+          const city = f.originCity?.trim();
+          const state = f.originState?.trim();
+          const key = city
+            ? state
+              ? `${city}, ${state}`
+              : city
+            : f.originZip;
+          const label = city
+            ? state
+              ? `${city}, ${state}`
+              : city
+            : f.originPlace || f.originZip;
+          const existing = byCity.get(key);
+          if (existing) existing.value += f.workerCount;
+          else byCity.set(key, { label, value: f.workerCount });
+        }
+        let topLabel = '—';
+        let topValue = 0;
+        for (const a of byCity.values()) {
+          if (a.value > topValue) {
+            topValue = a.value;
+            topLabel = a.label;
+          }
+        }
+        const topShare =
+          totalVisitorsUnique > 0 ? topValue / totalVisitorsUnique : 0;
+        fourthItem = {
+          id: 'top-inflow',
+          label: 'Top Inflow',
+          value: topLabel,
+          sub: topValue > 0
+            ? `${fmtInt(topValue)} unique visitors · ${fmtPct(topShare)} of this anchor's visitors`
+            : 'no inflow data in current scope',
+        };
+      } else {
+        // Top Destination — anchor with the most inbound unique
+        // visitors across the region.
+        const anchorSet = new Set(destAnchors);
+        const byAnchor = new Map<string, number>();
+        for (const f of counts) {
+          if (!anchorSet.has(f.destZip)) continue;
+          byAnchor.set(f.destZip, (byAnchor.get(f.destZip) ?? 0) + f.workerCount);
+        }
+        let topZip = '';
+        let topValue = 0;
+        for (const [zip, v] of byAnchor) {
+          if (v > topValue) {
+            topValue = v;
+            topZip = zip;
+          }
+        }
+        const topPlace = topZip
+          ? zips.find((z) => z.zip === topZip)?.place ?? topZip
+          : '—';
+        const topShare =
+          totalVisitorsUnique > 0 ? topValue / totalVisitorsUnique : 0;
+        fourthItem = {
+          id: 'top-destination',
+          label: 'Top Destination',
+          value: topPlace,
+          sub: topValue > 0
+            ? `${fmtInt(topValue)} unique visitors · ${fmtPct(topShare)} of region visitors`
+            : 'no anchor visitors in current scope',
+        };
+      }
+
+      // Out of State — share of unique visitors whose origin sits
+      // outside Colorado. Always computed from the counts file (not
+      // sub-metric-dependent) so the percentage is stable.
+      let outOfStateCount = 0;
+      for (const f of counts) {
+        const st = f.originState?.trim().toUpperCase();
+        if (st && st !== 'CO') outOfStateCount += f.workerCount;
+      }
+      const outOfStateShare =
+        totalVisitorsUnique > 0 ? outOfStateCount / totalVisitorsUnique : 0;
+
+      return [
+        {
+          id: 'tourist-first',
+          label: firstLabel,
+          value: firstValue,
+          sub: `with origin > 50 mi · ${fmtPct(touristActiveShare)} of ${firstSubNoun} in scope`,
+        },
+        {
+          id: 'days-in-market',
+          label: 'Days in Market',
+          value: daysInMarket > 0 ? daysInMarket.toFixed(1) : '—',
+          sub: 'avg visits per unique visitor (annual visits ÷ unique visitors)',
+        },
+        {
+          id: 'avg-visit-distance',
+          label: 'Average Visit Distance',
+          value: avgVisitMiles > 0 ? `${avgVisitMiles.toFixed(1)} mi` : '—',
+          sub: driveDistance
+            ? 'visitor-weighted, road miles, one-way · cross-ZIP only'
+            : 'visitor-weighted, straight-line × 1.25, one-way · cross-ZIP only',
+        },
+        fourthItem,
+        {
+          id: 'out-of-state',
+          label: 'Out of State',
+          value: fmtPct(outOfStateShare),
+          sub: `${fmtInt(outOfStateCount)} unique visitors with origin outside Colorado`,
+        },
+      ];
+    },
+    [
+      placer,
+      zips,
+      flowsByOdKey,
+      destAnchors,
+      driveDistance,
+      isVisitorCategory,
+      directionFilteredInbound,
+      metric,
+      visitorType,
+    ],
+  );
+
+  // Region view (no anchor) — passes null so the Top Destination
+  // variant is used. Undefined when the visitor category isn't active.
+  const visitorTailItems = useMemo<StatItem[] | undefined>(() => {
+    if (!isVisitorCategory) return undefined;
+    return buildVisitorStatItems(null);
+  }, [isVisitorCategory, buildVisitorStatItems]);
+
+  // Visit destination view (anchor selected) — Top Destination becomes
+  // Top Inflow and every other tile scopes to flows whose destination
+  // is the selected anchor. Undefined when no anchor is selected or
+  // the visitor category isn't active.
+  const visitorAnchorTailItems = useMemo<StatItem[] | undefined>(() => {
+    if (!isVisitorCategory || !selectedZip) return undefined;
+    return buildVisitorStatItems(selectedZip);
+  }, [isVisitorCategory, selectedZip, buildVisitorStatItems]);
 
   // Shopper heatmap GeoJSON — when the shopper metric publishes
   // geocoded property points (placerMetricFile.properties), build the
@@ -1218,6 +1547,14 @@ export function ActivityCommuteView({ data, placer }: Props) {
     for (const z of zips) zipIndex.set(z.zip, z);
     let regional = 0;
     let tourist = 0;
+    // 4-band distance breakdown — same origin → reference-ZIP distance
+    // the regional/tourist classifier uses, just bucketed into more
+    // granular bands. Origins missing a centroid fall into the > 250 mi
+    // bucket, matching the classifier's "remote/national" default.
+    let under50 = 0;
+    let band50to100 = 0;
+    let band100to250 = 0;
+    let over250 = 0;
     for (const f of flowsInbound) {
       let lat: number | null = f.originLat ?? null;
       let lng: number | null = f.originLng ?? null;
@@ -1233,8 +1570,22 @@ export function ActivityCommuteView({ data, placer }: Props) {
       // default for remote/national origins.
       if (cls === 'regional') regional += f.workerCount;
       else tourist += f.workerCount;
+      // Distance bucketing.
+      if (lat == null || lng == null) {
+        over250 += f.workerCount;
+        continue;
+      }
+      const miles = haversineMiles(lat, lng, reference.lat, reference.lng);
+      if (miles < 50) under50 += f.workerCount;
+      else if (miles < 100) band50to100 += f.workerCount;
+      else if (miles < 250) band100to250 += f.workerCount;
+      else over250 += f.workerCount;
     }
-    return { regional, tourist };
+    return {
+      regional,
+      tourist,
+      distanceBands: { under50, band50to100, band100to250, over250 },
+    };
   }, [isVisitorCategory, flowsInbound, zips]);
 
   // Top corridor across the active direction filter (no selection narrowing)
@@ -1399,6 +1750,23 @@ export function ActivityCommuteView({ data, placer }: Props) {
     setVisitorType(v);
     setSelectedPartner(null);
   };
+  // Pie-slice clicks share the visitorType filter: the slice keys are
+  // a strict subset of VisitorType, so we cast directly. Clicking the
+  // active slice toggles the filter off ('all') so users can clear
+  // straight from the chart without round-tripping through the
+  // segmented toggle.
+  const handleVisitorSliceClick = (key: VisitorType) => {
+    setHover(null);
+    setVisitorType((prev) => (prev === key ? 'all' : key));
+    setSelectedPartner(null);
+  };
+  // The active filter key the pie consumes — only the 6 slice-mapped
+  // values (regional / tourist / distance bands) light up the donut;
+  // 'all' renders no highlight. The cast narrows away 'all'.
+  const visitorTypeFilterKey: VisitorPieSliceKey | null =
+    visitorType === 'all'
+      ? null
+      : (visitorType as VisitorPieSliceKey);
   const handleModeChange = (m: Mode) => {
     setHover(null);
     setMode(m);
@@ -1626,6 +1994,8 @@ export function ActivityCommuteView({ data, placer }: Props) {
               zips={zips}
               driveDistance={driveDistance}
               layout="stacked"
+              tailItemsOverride={visitorTailItems}
+              hideRankingsAxisTabs={isVisitorCategory}
             />
           ) : (
             <StatsForZip
@@ -1650,6 +2020,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
               onReset={() => handleSelectZip(null)}
               metricLabels={statsMetricLabels}
               distanceTile={distanceTile ?? undefined}
+              tailItemsOverride={visitorAnchorTailItems}
             />
           )}
         </div>
@@ -1806,6 +2177,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
                         regional: visitorTypePieData.regional,
                         tourist: visitorTypePieData.tourist,
                         unit: originSymbolUnit,
+                        distanceBands: visitorTypePieData.distanceBands,
                       }
                     : undefined
                 }
@@ -1850,6 +2222,11 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 topOutflowSubtitle={
                   isVisitorCategory ? 'Where this destination’s visitors also go' : undefined
                 }
+                isVisitorCategory={isVisitorCategory}
+                visitorPlaceRows={visitorPlaceRows}
+                onSelectVisitorAnchor={setSelectedZip}
+                visitorTypeFilterKey={visitorTypeFilterKey}
+                onVisitorSliceClick={handleVisitorSliceClick}
               />
             </div>
           )}

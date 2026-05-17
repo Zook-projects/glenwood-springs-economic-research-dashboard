@@ -72,6 +72,19 @@ interface Props {
   // (annual trips). Hidden when omitted — LODES Workforce map leaves this
   // null and the section stops at the inbound tile.
   distanceTile?: { label: string; value: string; sub?: string };
+  // Optional anchor-scoped stat tiles inserted between distanceTile and
+  // the Top Inflow / Top Outflow lists. The Visitors metric populates
+  // these (Tourist *, Days in Market, Average Visit Distance, Top
+  // Inflow, Out of State) so the same five-tile narrative appears in
+  // the anchor view as in the region view. Defined here as opaque
+  // {label, value, sub?} shape to keep StatsForZip free of cross-
+  // component type imports.
+  tailItemsOverride?: ReadonlyArray<{
+    id: string;
+    label: string;
+    value: string;
+    sub?: string;
+  }>;
   // Optional label + sub-line overrides for the tile headers and their
   // descriptive copy. The Activity view feeds these in when a trip metric
   // is active so every reference to "workforce" / "workers" reads as
@@ -132,6 +145,7 @@ export function StatsForZip({
   slot,
   metricLabels,
   distanceTile,
+  tailItemsOverride,
 }: Props) {
   // Block-selection branch — pivot on the synthetic bundle (label, total,
   // top-N partner rows). Mode-aware: outbound (default) shows where the
@@ -388,6 +402,38 @@ export function StatsForZip({
               {distanceTile.sub}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* Visitor stat tiles — render above the Top Inflow / Top
+          Outflow lists below. Mirrors the region-view tail in
+          StatsAggregated so the visitor narrative reads the same
+          whether the user has an anchor selected or not. */}
+      {showTiles && tailItemsOverride && tailItemsOverride.length > 0 ? (
+        <div className="border-b" style={{ borderColor: 'var(--rule)' }}>
+          {tailItemsOverride.map((item) => (
+            <div
+              key={item.id}
+              className="py-2 border-b last:border-0"
+              style={{ borderColor: 'var(--rule)' }}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span
+                  className="text-[10px] font-medium uppercase tracking-wider truncate"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  {item.label}
+                </span>
+                <span
+                  className="text-sm font-semibold tnum whitespace-nowrap"
+                  style={{ color: 'var(--text-h)' }}
+                  title={item.sub}
+                >
+                  {item.value}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       ) : null}
 

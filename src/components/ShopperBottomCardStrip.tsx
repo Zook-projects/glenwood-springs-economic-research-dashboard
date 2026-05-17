@@ -19,11 +19,12 @@
 import { useMemo } from 'react';
 import { arc as d3Arc, pie as d3Pie } from 'd3-shape';
 import { SubjectKpiCard } from './maps/SubjectKpiCard';
+import { PlaceRankingsCard } from './PlaceRankingsCard';
 import { fmtInt, fmtPct } from '../lib/format';
 import { RAMPS } from '../lib/subjectColorRamps';
 import type { FlowRow, ZipMeta } from '../types/flow';
 
-const STRIP_CARD_HEIGHT = 220;
+const STRIP_CARD_HEIGHT = 260;
 
 interface PartnerSelection {
   place: string;
@@ -320,13 +321,24 @@ export function ShopperBottomCardStrip({
               selectedCategoriesSet={selectedCategoriesSet}
               onToggleCategory={toggleCategory}
             />
-            <PlaceRankings
+            <PlaceRankingsCard
               rows={placeRows}
               total={totalVisits}
               scope={scope}
               title={placeRankingsTitle}
-              selectedPartners={selectedPartners}
-              onSelectPartners={onSelectPartners}
+              selectedPlaces={selectedPartnerKeys}
+              selectedCount={selectedPartners.length}
+              onClearAll={() => onSelectPartners([])}
+              onToggleRow={(row) => {
+                if (selectedPartnerKeys.has(row.place)) {
+                  onSelectPartners(selectedPartners.filter((p) => p.place !== row.place));
+                } else {
+                  onSelectPartners([
+                    ...selectedPartners,
+                    { place: row.place, zips: row.zips },
+                  ]);
+                }
+              }}
             />
           </div>
         </div>
@@ -635,125 +647,6 @@ function CategoryRankings({
                       opacity: 0.85,
                     }}
                   />
-                </span>
-                <span
-                  className="text-[10px] tabular-nums w-[36px] text-right shrink-0"
-                  style={{ color: 'var(--text-dim)' }}
-                >
-                  {fmtPct(row.value / Math.max(total, 1))}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Place Rankings — top destinations (outbound mode) or top visiting
-// places (inbound mode). Multi-select: clicking a row toggles its
-// inclusion in selectedPartners; the headline / pie / category cards +
-// the map narrow to the union. A "Clear (N)" button resets when ≥1
-// partner is active.
-// ---------------------------------------------------------------------------
-function PlaceRankings({
-  rows,
-  total,
-  scope,
-  title,
-  selectedPartners,
-  onSelectPartners,
-}: {
-  rows: ReadonlyArray<{ place: string; zips: string[]; value: number }>;
-  total: number;
-  scope: string;
-  title: string;
-  selectedPartners: PartnerSelection[];
-  onSelectPartners: (next: PartnerSelection[]) => void;
-}) {
-  const accent = RAMPS.activity.accent;
-  const maxValue = rows[0]?.value ?? 0;
-  const selectedKeys = new Set(selectedPartners.map((p) => p.place));
-  const toggle = (row: { place: string; zips: string[] }) => {
-    if (selectedKeys.has(row.place)) {
-      onSelectPartners(selectedPartners.filter((p) => p.place !== row.place));
-    } else {
-      onSelectPartners([
-        ...selectedPartners,
-        { place: row.place, zips: row.zips },
-      ]);
-    }
-  };
-  return (
-    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden flex-1">
-      <div className="flex items-baseline justify-between gap-2">
-        <div
-          className="text-[10px] font-semibold uppercase tracking-wider truncate"
-          style={{ color: 'var(--text-h)' }}
-        >
-          {title}
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {selectedPartners.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onSelectPartners([])}
-              className="text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5 rounded"
-              style={{ color: accent }}
-              title="Clear all selections"
-            >
-              Clear ({selectedPartners.length})
-            </button>
-          )}
-          <div
-            className="text-[9px] tracking-wider truncate"
-            style={{ color: 'var(--text-dim)' }}
-            title={scope}
-          >
-            {scope}
-          </div>
-        </div>
-      </div>
-      <ul className="flex flex-col gap-0.5 flex-1 min-h-0 overflow-y-auto pr-0.5">
-        {rows.slice(0, 12).map((row) => {
-          const active = selectedKeys.has(row.place);
-          const barPct = maxValue > 0 ? (row.value / maxValue) * 100 : 0;
-          return (
-            <li key={row.place}>
-              <button
-                type="button"
-                onClick={() => toggle(row)}
-                className="w-full text-left flex items-center gap-2 px-1 py-0.5 rounded transition-colors hover:bg-white/[0.04]"
-                style={{ background: active ? `${accent}29` : 'transparent' }}
-                aria-pressed={active}
-              >
-                <span
-                  className="text-[10px] truncate flex-1 min-w-0"
-                  style={{ color: active ? accent : 'var(--text-h)' }}
-                  title={row.place}
-                >
-                  {row.place}
-                </span>
-                <span
-                  className="hidden lg:block h-2 rounded-full overflow-hidden shrink-0"
-                  style={{ width: 36, background: 'rgba(255,255,255,0.05)' }}
-                >
-                  <span
-                    className="block h-full"
-                    style={{
-                      width: `${barPct}%`,
-                      background: accent,
-                      opacity: 0.85,
-                    }}
-                  />
-                </span>
-                <span
-                  className="text-[10px] tabular-nums w-[60px] text-right shrink-0"
-                  style={{ color: 'var(--text-h)' }}
-                >
-                  {fmtInt(row.value)}
                 </span>
                 <span
                   className="text-[10px] tabular-nums w-[36px] text-right shrink-0"

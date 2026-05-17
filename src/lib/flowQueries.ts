@@ -588,7 +588,18 @@ export function sumDistanceWeightedMiles(
 // lives within 50 mi of Glenwood Springs, irrespective of which valley
 // anchor they happen to be visiting in any given row.
 // ---------------------------------------------------------------------------
-export type VisitorType = 'all' | 'regional' | 'tourist';
+// Filter buckets available for the Visitors metric. The first three
+// drive the legacy All / Regional / Tourist segmented toggle; the four
+// distance-band variants are emitted by clicking slices of the Visitor
+// Type Mix donut in Distance mode (<50, 50–100, 100–250, >250 mi).
+export type VisitorType =
+  | 'all'
+  | 'regional'
+  | 'tourist'
+  | 'under-50'
+  | '50-100'
+  | '100-250'
+  | 'over-250';
 
 export const VISITOR_TYPE_RADIUS_MI = 50;
 
@@ -645,13 +656,22 @@ export function filterByVisitorType(
     }
     // Origin centroid unknown → remote visitor whose home ZIP isn't in
     // the valley ZipMeta and whose row pre-dates origin-coord baking.
-    // Classify as Tourist by default — the build-time gateway routing
-    // already confirmed these are non-local origins.
+    // Classify as Tourist / >250 mi by default — the build-time gateway
+    // routing already confirmed these are non-local origins.
     if (lat == null || lng == null) {
-      return visitorType === 'tourist';
+      return visitorType === 'tourist' || visitorType === 'over-250';
     }
-    const cls = classifyVisitorType(lat, lng, reference);
-    return cls === visitorType;
+    if (visitorType === 'regional' || visitorType === 'tourist') {
+      return classifyVisitorType(lat, lng, reference) === visitorType;
+    }
+    // Distance bands — same haversine reference used by the classifier
+    // so a click on "< 50 mi" produces the same set as Regional.
+    const miles = haversineMiles(lat, lng, reference.lat, reference.lng);
+    if (visitorType === 'under-50') return miles < 50;
+    if (visitorType === '50-100') return miles >= 50 && miles < 100;
+    if (visitorType === '100-250') return miles >= 100 && miles < 250;
+    if (visitorType === 'over-250') return miles >= 250;
+    return true;
   });
 }
 

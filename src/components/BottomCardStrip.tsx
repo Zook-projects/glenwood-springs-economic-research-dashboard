@@ -383,6 +383,7 @@ export function Card({
   width = 220,
   grow = false,
   maxHeight,
+  headerExtra,
 }: {
   title: string;
   subtitle?: string;
@@ -398,6 +399,10 @@ export function Card({
   // so they don't push the whole strip taller as the row count grows — the
   // list inside scrolls instead.
   maxHeight?: number;
+  // Optional node rendered in the top-right of the header row, aligned
+  // with the title. Used by the Visitor Type Mix card to host a small
+  // Type / Distance segmented toggle.
+  headerExtra?: React.ReactNode;
 }) {
   const sizeStyle: React.CSSProperties = grow
     ? { minWidth: width }
@@ -411,18 +416,21 @@ export function Card({
       className={`glass rounded-md p-3 flex flex-col gap-2 min-h-0 ${grow ? 'flex-1' : fluid ? '' : 'shrink-0'}`}
       style={sizeStyle}
     >
-      <div>
-        <div
-          className="text-[10px] font-medium uppercase tracking-wider"
-          style={{ color: 'var(--text-dim)' }}
-        >
-          {title}
-        </div>
-        {subtitle && (
-          <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>
-            {subtitle}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div
+            className="text-[10px] font-medium uppercase tracking-wider"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            {title}
           </div>
-        )}
+          {subtitle && (
+            <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-dim)' }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        {headerExtra && <div className="shrink-0">{headerExtra}</div>}
       </div>
       <div className="flex-1 flex flex-col gap-1 min-h-0">{children}</div>
     </div>
@@ -1579,18 +1587,42 @@ export function PartnerList({
   const allOther = partners.find((p) => p.zip === 'ALL_OTHER');
   const showFooter =
     (withinZip && withinZip.workers > 0) || !!allOther || !!totalRow;
+  // Shared <colgroup> ensures the scrollable body table and the pinned
+  // footer table give identical pixel widths to the value + percent
+  // columns — without it each table sizes its own columns from its own
+  // content, so "6,569,068" in the footer doesn't line up with the
+  // 5-digit body values above. `table-fixed` makes the colgroup widths
+  // authoritative; the first column gets the remaining width.
+  const sharedCols = (
+    <colgroup>
+      <col />
+      <col style={{ width: 84 }} />
+      <col style={{ width: 52 }} />
+    </colgroup>
+  );
   return (
     <div className="flex flex-col h-full min-h-0 text-[11px] tnum">
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <table className="w-full">
+        <table className="w-full table-fixed">
+          {sharedCols}
           <tbody>
-            {namedPartners.map((p) => (
+            {namedPartners.map((p) => {
+              const primary = p.place || p.zip;
+              // Hide the dim secondary "· {zip}" when it duplicates the
+              // primary label — happens in the visitor city-rollup where
+              // the agg key (= "Carbondale, CO") is passed as the row's
+              // `zip` field so PartnerList renders distinct keys, but the
+              // place label is the same string.
+              const showSecondary = !!p.zip && p.zip !== primary;
+              return (
               <tr key={`${p.place}|${p.zip}`}>
                 <td className="pr-2 truncate" style={{ color: 'var(--text-h)' }}>
-                  {p.place || p.zip}
-                  <span className="ml-1" style={{ color: 'var(--text-dim)' }}>
-                    · {p.zip}
-                  </span>
+                  {primary}
+                  {showSecondary && (
+                    <span className="ml-1" style={{ color: 'var(--text-dim)' }}>
+                      · {p.zip}
+                    </span>
+                  )}
                 </td>
                 <td className="text-right pr-2" style={{ color: 'var(--text-h)' }}>
                   {fmtInt(p.workers)}
@@ -1599,7 +1631,8 @@ export function PartnerList({
                   {fmtPct(p.workers / total)}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1608,7 +1641,8 @@ export function PartnerList({
           className="pt-1 mt-1 border-t"
           style={{ borderColor: 'var(--rule)' }}
         >
-          <table className="w-full">
+          <table className="w-full table-fixed">
+            {sharedCols}
             <tbody>
               {withinZip && withinZip.workers > 0 && (
                 <tr>
