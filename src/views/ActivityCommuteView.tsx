@@ -933,6 +933,24 @@ export function ActivityCommuteView({ data, placer }: Props) {
       }
     }
 
+    // Score-origin set — which anchors' visitsByAnchor sum into the
+    // property weight. Mirrors the top 10 logic so the heatmap reads
+    // consistently with the strip cards:
+    //   pin + inbound + partner → intersection
+    //   pin alone               → pinned origins
+    //   inbound + partner       → partner zips
+    //   else                    → null (mode-default weighting below)
+    let scoreOriginZips: Set<string> | null = null;
+    if (pinnedOriginZips && anchorMode === 'inbound' && allowedPartnerZips) {
+      scoreOriginZips = new Set(
+        [...pinnedOriginZips].filter((z) => allowedPartnerZips.has(z)),
+      );
+    } else if (pinnedOriginZips) {
+      scoreOriginZips = pinnedOriginZips;
+    } else if (anchorMode === 'inbound' && allowedPartnerZips) {
+      scoreOriginZips = allowedPartnerZips;
+    }
+
     type Pt = { lat: number; lng: number; weight: number; key: string };
     const points: Pt[] = [];
 
@@ -948,13 +966,19 @@ export function ActivityCommuteView({ data, placer }: Props) {
       // or branch is pinned.
       if (anchorMode === 'inbound' && p.destZip !== anchor) continue;
       if (pinnedDestZips && !pinnedDestZips.has(p.destZip)) continue;
+      // Outbound + aggregate partner filter — dest-place side.
+      if (allowedPlaces && anchorMode !== 'inbound') {
+        const meta = zipIndex.get(p.destZip);
+        if (!meta || !allowedPlaces.has(meta.place)) continue;
+      }
 
-      // Compute the weight from the pinned-flow filter (when set) or
-      // the anchor/mode pivot otherwise.
+      // Weight: scoreOriginZips wins when set (sum over the resolved
+      // origin set above). Otherwise the anchor/mode pivot.
       let weight: number;
-      if (pinnedOriginZips) {
+      if (scoreOriginZips) {
+        if (scoreOriginZips.size === 0) continue;
         let s = 0;
-        for (const oz of pinnedOriginZips) s += p.visitsByAnchor?.[oz] ?? 0;
+        for (const oz of scoreOriginZips) s += p.visitsByAnchor?.[oz] ?? 0;
         if (s <= 0) continue;
         weight = s;
       } else if (anchorMode === 'outbound') {
@@ -966,29 +990,6 @@ export function ActivityCommuteView({ data, placer }: Props) {
         weight = p.visits;
       } else {
         weight = p.visits;
-      }
-
-      // Partner filter — in inbound + anchor mode the partner axis is the
-      // ORIGIN side (which other anchor's residents visited X), so we
-      // restrict the weight to visits from the selected partner anchors.
-      // Outbound + aggregate keep the canonical destination-place filter.
-      if (allowedPlaces) {
-        if (anchorMode === 'inbound') {
-          if (!allowedPartnerZips || allowedPartnerZips.size === 0) {
-            // partner places list with no matching anchor zips → nothing
-            // can satisfy the filter
-            continue;
-          }
-          let partnerWeight = 0;
-          for (const partnerZip of allowedPartnerZips) {
-            partnerWeight += p.visitsByAnchor?.[partnerZip] ?? 0;
-          }
-          if (partnerWeight <= 0) continue;
-          weight = partnerWeight;
-        } else {
-          const meta = zipIndex.get(p.destZip);
-          if (!meta || !allowedPlaces.has(meta.place)) continue;
-        }
       }
 
       // Resolve to lat/lng — property coords when geocoded, else dest-ZIP
@@ -1095,12 +1096,34 @@ export function ActivityCommuteView({ data, placer }: Props) {
       selectedShopperPartners.length > 0
         ? new Set(selectedShopperPartners.map((p) => p.place))
         : null;
+    const allowedPartnerZips: Set<string> | null =
+      selectedShopperPartners.length > 0
+        ? new Set(selectedShopperPartners.flatMap((p) => p.zips))
+        : null;
     const allowedCategories: Set<string> | null =
       selectedShopperCategories.length > 0
         ? new Set(selectedShopperCategories)
         : null;
     const zipPlace = new Map<string, string>();
     for (const z of zips) zipPlace.set(z.zip, z.place);
+
+    // Score-origin set determines which anchors' visitsByAnchor sum into
+    // the property score. Mirrors the strip's flow narrowing:
+    //   pin + inbound + partner → intersection (flows on the corridor
+    //                              that touch a partner anchor)
+    //   pin alone               → pinned origins
+    //   inbound + partner       → partner zips (which anchors visit X)
+    //   else                    → null (use mode-default scoring below)
+    let scoreOriginZips: Set<string> | null = null;
+    if (pinnedOriginZips && anchorMode === 'inbound' && allowedPartnerZips) {
+      scoreOriginZips = new Set(
+        [...pinnedOriginZips].filter((z) => allowedPartnerZips.has(z)),
+      );
+    } else if (pinnedOriginZips) {
+      scoreOriginZips = pinnedOriginZips;
+    } else if (anchorMode === 'inbound' && allowedPartnerZips) {
+      scoreOriginZips = allowedPartnerZips;
+    }
 
     type Scored = {
       address: string;
@@ -1122,13 +1145,21 @@ export function ActivityCommuteView({ data, placer }: Props) {
       if (!inScopeDestZips.has(p.destZip)) continue;
       if (pinnedDestZips && !pinnedDestZips.has(p.destZip)) continue;
       const destPlace = zipPlace.get(p.destZip) ?? p.destZip;
-      if (allowedPlaces && !allowedPlaces.has(destPlace)) continue;
+      // Partner filter pivots on mode:
+      //   outbound / aggregate → partner = destination place; filter the
+      //                          property's destPlace against it
+      //   inbound + anchor X   → partner = origin anchor (which residents
+      //                          come to X); enforced via scoreOriginZips
+      //                          below (a property with 0 visits from any
+      //                          partner anchor falls out)
+      if (allowedPlaces && anchorMode !== 'inbound') {
+        if (!allowedPlaces.has(destPlace)) continue;
+      }
       let score: number;
-      if (pinnedOriginZips) {
-        // Pinned flow — score is the sum of visits from the contributing
-        // origin anchors only. Drops properties no pinned-origin visited.
+      if (scoreOriginZips) {
+        if (scoreOriginZips.size === 0) continue;
         let s = 0;
-        for (const oz of pinnedOriginZips) {
+        for (const oz of scoreOriginZips) {
           s += p.visitsByAnchor?.[oz] ?? 0;
         }
         if (s <= 0) continue;
