@@ -4,8 +4,15 @@
 // MapStubView; unknown values redirect to /dashboard. Workforce uses its
 // own route element so the existing CommuteView mounts directly without
 // going through the stub validator.
+//
+// Hash-based router: routes live after the `#` fragment (e.g.
+// `/glenwood-springs-economic-research-dashboard/#/dashboard`). This is
+// required because the site is hosted at a GitHub Pages project sub-path
+// — a BrowserRouter would push absolute paths that drop the sub-path and
+// 404 on refresh. HashRouter keeps everything client-side and is robust
+// to deploy-path changes.
 
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createHashRouter, Navigate } from 'react-router-dom';
 import App from './App';
 import { DashboardView } from './views/DashboardView';
 import { WorkforceMapView } from './views/maps/WorkforceMapView';
@@ -15,7 +22,7 @@ import { HousingMapView } from './views/maps/HousingMapView';
 import { CommerceMapView } from './views/maps/CommerceMapView';
 import { MapStubView } from './views/maps/MapStubView';
 
-export const router = createBrowserRouter([
+export const router = createHashRouter([
   {
     element: <App />,
     children: [
