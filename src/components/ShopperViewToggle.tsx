@@ -1,11 +1,13 @@
-// Corridor / Spaghetti / Heatmap segmented control for the Activity map's
-// Shoppers metric. Renders below the Direction block in the left panel.
+// Corridor / Flow Lines / Heatmap segmented control for the Activity
+// map's Shoppers metric. Renders below the Direction block in the left
+// panel.
 //   · Corridor — flows ride the I-70 / Hwy 82 corridor graph (default).
-//   · Spaghetti — direct dashed lines from each resident anchor to each
-//     destination property's ZIP centroid (skips the corridor graph so
-//     the user can see un-routed reach).
-//   · Heatmap — destination heat blobs weighted by visit volume; mirrors
-//     the Workforce map's heatmap rendering primitive.
+//   · Flow Lines — direct dashed lines from each resident anchor to
+//     each destination property's ZIP centroid (skips the corridor
+//     graph so the user can see un-routed reach). Internal id stays
+//     `spaghetti` so existing code paths keep matching.
+//   · Heatmap — destination heat blobs weighted by visit volume;
+//     mirrors the Workforce map's heatmap rendering primitive.
 
 export type ShopperViewLayer = 'corridor' | 'spaghetti' | 'heatmap';
 
@@ -15,9 +17,9 @@ interface Props {
 }
 
 const OPTIONS: ReadonlyArray<{ value: ShopperViewLayer; label: string }> = [
-  { value: 'corridor',  label: 'Corridor'  },
-  { value: 'spaghetti', label: 'Spaghetti' },
-  { value: 'heatmap',   label: 'Heatmap'   },
+  { value: 'corridor',  label: 'Corridor'   },
+  { value: 'spaghetti', label: 'Flow Lines' },
+  { value: 'heatmap',   label: 'Heatmap'    },
 ];
 
 export function ShopperViewToggle({ value, onChange }: Props) {
