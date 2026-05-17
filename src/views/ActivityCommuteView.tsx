@@ -943,10 +943,14 @@ export function ActivityCommuteView({ data, placer }: Props) {
       ) {
         continue;
       }
+      // Anchor + mode scope filter applies regardless of pin: inbound
+      // at anchor X means "properties IN X" no matter which corridor
+      // or branch is pinned.
+      if (anchorMode === 'inbound' && p.destZip !== anchor) continue;
       if (pinnedDestZips && !pinnedDestZips.has(p.destZip)) continue;
 
-      // Compute the weight + scope filter from the anchor/mode pivot,
-      // overridden by the pinned-flow filter when active.
+      // Compute the weight from the pinned-flow filter (when set) or
+      // the anchor/mode pivot otherwise.
       let weight: number;
       if (pinnedOriginZips) {
         let s = 0;
@@ -958,7 +962,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
         if (v <= 0) continue;
         weight = v;
       } else if (anchorMode === 'inbound') {
-        if (p.destZip !== anchor) continue;
+        // destZip restriction already applied above.
         weight = p.visits;
       } else {
         weight = p.visits;
@@ -1037,27 +1041,40 @@ export function ActivityCommuteView({ data, placer }: Props) {
 
   // Top 10 properties for the right-rail card. Reflects ALL active
   // filters: direction (via directionFilteredOutbound's destZip
-  // universe), anchor selection (when set, ranks by visitsByAnchor[X]
-  // and hides properties X never visits), partner places (Top
-  // Destinations multi-select), and category (Category Rankings / Pie).
-  // Properties with the same display name in different cities (e.g.
-  // City Market in Rifle vs Carbondale) keep their own row — dedup is
-  // by `address`, never by `property`.
+  // universe), anchor + mode pivot (outbound at X → X's contributions;
+  // inbound at X → properties IN X visited by other anchors), partner
+  // places (Top Destinations multi-select), and category (Category
+  // Rankings / Pie). Properties with the same display name in
+  // different cities (e.g. City Market in Rifle vs Carbondale) keep
+  // their own row — dedup is by `address`, never by `property`.
   const topShopperProperties = useMemo(() => {
     if (!isShopperMetric) return [];
     const allProps = placerMetricFile?.properties ?? [];
     if (allProps.length === 0) return [];
 
-    // Allowed destZips under the active direction filter. Narrow to the
-    // selected anchor's outbound flows when one is selected. A pinned
-    // corridor/OD further narrows this to just the destZips on that
-    // flow.
-    let scopeFlows = directionFilteredOutbound;
-    if (selectedZip) {
-      scopeFlows = scopeFlows.filter((f) => f.originZip === selectedZip);
+    const anchor = selectedZip;
+    const anchorMode: 'inbound' | 'outbound' | null =
+      anchor != null
+        ? (effectiveMode === 'inbound' ? 'inbound' : 'outbound')
+        : null;
+
+    // In-scope destZip universe depends on the anchor + mode pivot:
+    //   aggregate          → every destZip the direction filter retains
+    //   outbound + anchor X → destinations X's residents visit
+    //   inbound  + anchor X → just {X} (properties IN X visited by others)
+    let inScopeDestZips: Set<string>;
+    if (anchorMode === 'inbound') {
+      inScopeDestZips = new Set([anchor!]);
+    } else if (anchorMode === 'outbound') {
+      inScopeDestZips = new Set();
+      for (const f of directionFilteredOutbound) {
+        if (f.originZip === anchor) inScopeDestZips.add(f.destZip);
+      }
+    } else {
+      inScopeDestZips = new Set();
+      for (const f of directionFilteredOutbound) inScopeDestZips.add(f.destZip);
     }
-    const inScopeDestZips = new Set<string>();
-    for (const f of scopeFlows) inScopeDestZips.add(f.destZip);
+
     // Pinned-flow narrowing — limit the destZip universe to whatever the
     // pinned corridor or OD touches. Also drives per-property score
     // weighting (corridor: sum visits from contributing origins;
@@ -1109,15 +1126,23 @@ export function ActivityCommuteView({ data, placer }: Props) {
       let score: number;
       if (pinnedOriginZips) {
         // Pinned flow — score is the sum of visits from the contributing
-        // origin anchors only. Drops properties X never visited.
+        // origin anchors only. Drops properties no pinned-origin visited.
         let s = 0;
         for (const oz of pinnedOriginZips) {
           s += p.visitsByAnchor?.[oz] ?? 0;
         }
         if (s <= 0) continue;
         score = s;
-      } else if (selectedZip) {
-        score = p.visitsByAnchor?.[selectedZip] ?? 0;
+      } else if (anchorMode === 'outbound') {
+        // Outbound at X: X's contribution to the property.
+        score = p.visitsByAnchor?.[anchor!] ?? 0;
+        if (score <= 0) continue;
+      } else if (anchorMode === 'inbound') {
+        // Inbound at X: properties IN X visited by every other anchor.
+        // `p.visits` already sums across the contributing anchors since
+        // the source data is strictly out-of-market (X→X excluded), so
+        // it equals "all visits to this property from elsewhere".
+        score = p.visits;
         if (score <= 0) continue;
       } else {
         score = p.visits;
@@ -1138,6 +1163,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
     isShopperMetric,
     placerMetricFile,
     directionFilteredOutbound,
+    effectiveMode,
     selectedZip,
     selectedShopperCategories,
     selectedShopperPartners,
