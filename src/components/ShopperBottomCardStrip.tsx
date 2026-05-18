@@ -162,14 +162,16 @@ export function ShopperBottomCardStrip({
     );
   }, [partnerFiltered, selectedCategoriesSet]);
 
-  // KPIs reflect both filters — total visits / residents for the active
-  // partner + category scope.
+  // KPIs reflect both filters — total visits for the active partner +
+  // category scope. Each FlowRow's `residents` field counts unique
+  // residents *within* its (origin, dest, category) bucket, so summing
+  // across rows double-counts (a resident who shops multiple categories
+  // or destinations appears in multiple rows). The naive total inflates
+  // by ~10–20× on the regional view. Below, avgPerResident is computed
+  // as a visit-weighted average of per-row ratios, which sidesteps the
+  // cross-row dedupe problem entirely.
   const totalVisits = useMemo(
     () => categoryFiltered.reduce((s, f) => s + f.workerCount, 0),
-    [categoryFiltered],
-  );
-  const totalResidents = useMemo(
-    () => categoryFiltered.reduce((s, f) => s + (f.residents ?? 0), 0),
     [categoryFiltered],
   );
   // Universe total across the partner-filtered set — used as the
@@ -254,7 +256,22 @@ export function ShopperBottomCardStrip({
   }, [flows, zipPlaces, placeAxis, selectedCategoriesSet]);
 
   const avgPerDay = totalVisits / 365;
-  const avgPerResident = totalResidents > 0 ? totalVisits / totalResidents : 0;
+  // Visit-weighted average of per-row (visits / residents) ratios.
+  // Each row's ratio is locally honest because `residents` counts unique
+  // people within that one (origin, dest, category) bucket; weighting by
+  // visits keeps busier flows pulling the average more. Skip rows with
+  // residents == 0 entirely so they neither inflate nor drag the result.
+  const avgPerResident = useMemo(() => {
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (const f of categoryFiltered) {
+      const r = f.residents ?? 0;
+      if (r <= 0) continue;
+      weightedSum += (f.workerCount * f.workerCount) / r;
+      weightTotal += f.workerCount;
+    }
+    return weightTotal > 0 ? weightedSum / weightTotal : 0;
+  }, [categoryFiltered]);
 
   return (
     <>
@@ -310,7 +327,6 @@ export function ShopperBottomCardStrip({
               topCategoryShare={topCategoryShare}
               avgPerDay={avgPerDay}
               avgPerResident={avgPerResident}
-              totalResidents={totalResidents}
               selectedCategories={selectedCategories}
             />
             <CategoryPieCard
@@ -359,7 +375,6 @@ function ShopperKpis({
   topCategoryShare,
   avgPerDay,
   avgPerResident,
-  totalResidents,
   selectedCategories,
 }: {
   scope: string;
@@ -368,7 +383,6 @@ function ShopperKpis({
   topCategoryShare: number;
   avgPerDay: number;
   avgPerResident: number;
-  totalResidents: number;
   selectedCategories: string[];
 }) {
   // Subtitle reflects the active category set: empty → aggregate;
@@ -421,11 +435,7 @@ function ShopperKpis({
         <SubjectKpiCard
           label="Avg. Trips / Resident"
           value={avgPerResident > 0 ? avgPerResident.toFixed(1) : '—'}
-          sublabel={
-            totalResidents > 0
-              ? `${fmtInt(totalResidents)} residents`
-              : 'no resident count'
-          }
+          sublabel={avgPerResident > 0 ? 'weighted by visits' : 'no resident count'}
           size="sm"
         />
       </div>
