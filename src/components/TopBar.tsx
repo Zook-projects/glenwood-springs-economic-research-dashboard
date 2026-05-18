@@ -8,8 +8,9 @@
 // on /map/workforce — keeps the URL as the single source of truth instead
 // of silently remembering the last visited map.
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { QrCodePopup } from './QrCodePopup';
 
 type TabId = 'dashboard' | 'map';
 
@@ -31,6 +32,7 @@ export function TopBar() {
     dashboard: null,
     map: null,
   });
+  const [qrOpen, setQrOpen] = useState(false);
 
   const activeId: TabId = location.pathname.startsWith('/map') ? 'map' : 'dashboard';
 
@@ -120,7 +122,24 @@ export function TopBar() {
             );
           })}
         </div>
+        <div className="hidden md:flex md:justify-self-end">
+          <button
+            type="button"
+            onClick={() => setQrOpen((v) => !v)}
+            aria-pressed={qrOpen}
+            aria-label="Show QR code"
+            className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-1"
+            style={{
+              color: 'var(--accent)',
+              border: '1px solid var(--accent)',
+              background: 'transparent',
+            }}
+          >
+            QR Code
+          </button>
+        </div>
       </div>
+      <QrCodePopup open={qrOpen} onClose={() => setQrOpen(false)} />
     </header>
   );
 }
