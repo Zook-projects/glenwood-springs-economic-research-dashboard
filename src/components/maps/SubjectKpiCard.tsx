@@ -51,11 +51,9 @@ export function SubjectKpiCard({
       >
         {valueText}
       </div>
-      {sublabel && (
-        <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
-          {sublabel}
-        </div>
-      )}
+      <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+        {sublabel || ' '}
+      </div>
       {trailing}
     </div>
   );

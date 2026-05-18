@@ -24,7 +24,7 @@ import type { GeoLevel } from './SubjectMapOverlay';
 import type { WorkforceTotals } from '../../lib/workforceTotals';
 import { MultiSelectToolbar } from './MultiSelectToolbar';
 
-const STRIP_CARD_HEIGHT = 220;
+const STRIP_CARD_HEIGHT = 260;
 
 interface Props {
   bundle: ContextEnvelope;
@@ -235,6 +235,7 @@ export function HousingMapStrip({
           singlePoints={useMultiSeries ? undefined : trendSeries[0]?.points}
           color={accent}
           valueFormat={housingValueFormat(metric, trendKey)}
+          singleSeriesName={housingTrendLabel(metric, trendKey).replace(/ trend$/, '')}
         />
         <RankedListCard
           rows={rankedRows}
@@ -316,7 +317,7 @@ function RegionKpis({
           aggregate
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
+      <div className="grid grid-cols-2 grid-rows-2 gap-2 flex-1 min-h-0">
         <SubjectKpiCard label={metric.label} value={metric.format(headline)} />
         <SubjectKpiCard
           label="Workforce"
@@ -349,6 +350,7 @@ function TrendCard({
   singlePoints,
   color,
   valueFormat,
+  singleSeriesName,
 }: {
   title: string;
   subtitle?: string;
@@ -356,6 +358,7 @@ function TrendCard({
   singlePoints?: TrendPoint[];
   color: string;
   valueFormat?: (v: number) => string;
+  singleSeriesName?: string;
 }) {
   return (
     <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
@@ -390,6 +393,7 @@ function TrendCard({
             height="fill"
             yMin="zero"
             valueFormat={valueFormat}
+            name={singleSeriesName}
           />
         )}
       </div>

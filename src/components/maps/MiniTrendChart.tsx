@@ -33,6 +33,9 @@ interface Props {
   // dim out so the user can read a single line in context. Falsy = all
   // series at normal weight.
   highlightedKey?: string | null;
+  // Row label used in the floating tooltip when in single-series mode.
+  // Multi-series uses each series.label and ignores this prop.
+  name?: string;
 }
 
 // Module-level identity formatter so the rendering code can compare against
@@ -48,6 +51,7 @@ export function MiniTrendChart({
   yMin = 'zero',
   valueFormat = defaultValueFormat,
   highlightedKey = null,
+  name = 'Value',
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 280, h: typeof height === 'number' ? height : 200 });
@@ -74,10 +78,10 @@ export function MiniTrendChart({
   const effectiveSeries: TrendSeries[] = useMemo(() => {
     if (series && series.length) return series;
     if (data) {
-      return [{ key: 'main', label: '', color, points: data }];
+      return [{ key: 'main', label: name, color, points: data }];
     }
     return [];
-  }, [series, data, color]);
+  }, [series, data, color, name]);
 
   // Filter each series down to non-null points; drop series that have <2 valid points.
   const renderableSeries = useMemo(() => {
@@ -181,10 +185,24 @@ export function MiniTrendChart({
     return { year: bestYear };
   })();
 
+  // Pre-compute per-series lookups at the hovered year — used both by the
+  // SVG crosshair dots and the floating HTML tooltip.
+  type HoverLookup = {
+    series: (typeof renderableSeries)[number];
+    point: { year: number; value: number };
+  };
+  const hoverLookups: HoverLookup[] = [];
+  if (hover) {
+    for (const s of renderableSeries) {
+      const pt = s.points.find((p) => p.year === hover.year);
+      if (pt) hoverLookups.push({ series: s, point: pt });
+    }
+  }
+
   return (
     <div
       ref={containerRef}
-      className="w-full"
+      className="relative w-full"
       style={{ height: height === 'fill' ? '100%' : height, minHeight: 80 }}
     >
       <svg
@@ -330,76 +348,84 @@ export function MiniTrendChart({
           );
         })}
 
-        {/* Hover crosshair + per-series dots + label */}
-        {hover && (() => {
-          const x = xScale(hover.year);
-          // Build the per-series lookups via push-on-match instead of a
-          // map+filter+type-predicate so the element type is concretely
-          // {series, point} (not | null) without needing a hand-rolled
-          // narrowing predicate that has to mirror renderableSeries's
-          // (post-filter, non-null-value) point shape exactly.
-          type Lookup = {
-            series: (typeof renderableSeries)[number];
-            point: { year: number; value: number };
-          };
-          const lookups: Lookup[] = [];
-          for (const s of renderableSeries) {
-            const pt = s.points.find((p) => p.year === hover.year);
-            if (pt) lookups.push({ series: s, point: pt });
-          }
-          if (lookups.length === 0) return null;
-          const labelAbove = lookups[0].point;
-          return (
-            <g>
-              <line
-                x1={x}
-                x2={x}
-                y1={padTop}
-                y2={padTop + innerH}
-                stroke="rgba(255,255,255,0.5)"
-                strokeDasharray="2 2"
+        {/* Hover crosshair + per-series dots. Tooltip text rendered as a
+            floating HTML element outside the SVG (below) so it can use the
+            shared .glass treatment and stay legible at any chart size. */}
+        {hover && hoverLookups.length > 0 && (
+          <g>
+            <line
+              x1={xScale(hover.year)}
+              x2={xScale(hover.year)}
+              y1={padTop}
+              y2={padTop + innerH}
+              stroke="rgba(255,255,255,0.5)"
+              strokeDasharray="2 2"
+            />
+            {hoverLookups.map(({ series: s, point: p }) => (
+              <circle
+                key={`hover-${s.key}`}
+                cx={xScale(hover.year)}
+                cy={yScale(p.value)}
+                r={3.5}
+                fill={s.color}
+                stroke="#000"
+                strokeWidth={1}
               />
-              {lookups.map(({ series: s, point: p }) => (
-                <circle
-                  key={`hover-${s.key}`}
-                  cx={x}
-                  cy={yScale(p.value)}
-                  r={3.5}
-                  fill={s.color}
-                  stroke="#000"
-                  strokeWidth={1}
-                />
-              ))}
-              {isSingle ? (
-                <text
-                  x={x}
-                  y={Math.max(padTop + 10, yScale(labelAbove.value) - 8)}
-                  fontSize={10}
-                  fill="var(--text-h)"
-                  textAnchor={x > size.w / 2 ? 'end' : 'start'}
-                  style={{ paintOrder: 'stroke', stroke: '#000', strokeWidth: 3 }}
-                >
-                  {Math.round(hover.year)}: {valueFormat(labelAbove.value)}
-                </text>
-              ) : (
-                lookups.map(({ series: s, point: p }, i) => (
-                  <text
-                    key={`hover-text-${s.key}`}
-                    x={x + (x > size.w / 2 ? -6 : 6)}
-                    y={padTop + 12 + i * 12}
-                    fontSize={10}
-                    fill={s.color}
-                    textAnchor={x > size.w / 2 ? 'end' : 'start'}
-                    style={{ paintOrder: 'stroke', stroke: '#000', strokeWidth: 3 }}
-                  >
-                    {s.label.length > 10 ? s.label.slice(0, 9) + '…' : s.label}: {valueFormat(p.value)}
-                  </text>
-                ))
-              )}
-            </g>
-          );
-        })()}
+            ))}
+          </g>
+        )}
       </svg>
+
+      {/* Floating tooltip — year header + one row per series with color
+          swatch, label, and formatted value. Flips to the left of the
+          cursor when it would overflow the right edge of the chart. */}
+      {hover && hoverLookups.length > 0 && hoverX != null && (() => {
+        const TOOLTIP_W = 150;
+        const flip = hoverX + TOOLTIP_W + 8 > size.w;
+        const left = flip
+          ? Math.max(0, hoverX - TOOLTIP_W - 8)
+          : Math.min(hoverX + 8, Math.max(0, size.w - TOOLTIP_W));
+        return (
+          <div
+            className="glass absolute rounded-md px-2 py-1.5 text-[10px] pointer-events-none z-10"
+            style={{
+              left,
+              top: padTop + 4,
+              width: TOOLTIP_W,
+            }}
+          >
+            <div
+              className="font-semibold tnum mb-1"
+              style={{ color: '#ffffff' }}
+            >
+              {Math.round(hover.year)}
+            </div>
+            {hoverLookups.map(({ series: s, point: p }) => (
+              <div
+                key={s.key}
+                className="flex items-center gap-1.5 leading-tight"
+              >
+                <span
+                  className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{ background: s.color }}
+                />
+                <span
+                  className="truncate"
+                  style={{ color: '#ffffff' }}
+                >
+                  {s.label || name}
+                </span>
+                <span
+                  className="ml-auto tnum"
+                  style={{ color: '#ffffff' }}
+                >
+                  {valueFormat(p.value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }

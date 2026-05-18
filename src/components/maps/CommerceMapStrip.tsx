@@ -25,7 +25,7 @@ import type { GeoLevel } from './SubjectMapOverlay';
 import type { WorkforceTotals } from '../../lib/workforceTotals';
 import { MultiSelectToolbar } from './MultiSelectToolbar';
 
-const STRIP_CARD_HEIGHT = 220;
+const STRIP_CARD_HEIGHT = 260;
 
 interface Props {
   bundle: ContextEnvelope;
@@ -227,6 +227,14 @@ export function CommerceMapStrip({
     regionTotalForPct.workforce > 0
       ? headlineAggregate.workforce / regionTotalForPct.workforce
       : null;
+  const retailPctOfRegion =
+    regionTotalForPct.retail > 0
+      ? headlineAggregate.retail / regionTotalForPct.retail
+      : null;
+  const taxablePctOfRegion =
+    regionTotalForPct.taxable > 0
+      ? headlineAggregate.taxable / regionTotalForPct.taxable
+      : null;
 
   return (
     <div className="px-3 flex flex-col gap-2">
@@ -248,6 +256,8 @@ export function CommerceMapStrip({
           accent={selectionAggregate ? accent : undefined}
           headlinePctOfRegion={headlinePctOfRegion}
           workforcePctOfRegion={workforcePctOfRegion}
+          retailPctOfRegion={retailPctOfRegion}
+          taxablePctOfRegion={taxablePctOfRegion}
         />
         <TrendCard
           title={
@@ -268,6 +278,7 @@ export function CommerceMapStrip({
           singlePoints={useMultiSeries ? undefined : trendSeries[0]?.points}
           color={accent}
           valueFormat={variant.format}
+          singleSeriesName={variant.label}
         />
         <RankedListCard
           rows={rankedRows}
@@ -299,6 +310,8 @@ function RegionKpis({
   accent,
   headlinePctOfRegion,
   workforcePctOfRegion,
+  retailPctOfRegion,
+  taxablePctOfRegion,
 }: {
   region: RegionAggregate;
   variant: CommerceMetric;
@@ -306,6 +319,8 @@ function RegionKpis({
   accent?: string;
   headlinePctOfRegion: number | null;
   workforcePctOfRegion: number | null;
+  retailPctOfRegion: number | null;
+  taxablePctOfRegion: number | null;
 }) {
   return (
     <div
@@ -326,7 +341,7 @@ function RegionKpis({
           aggregate
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 flex-1 min-h-0">
+      <div className="grid grid-cols-2 grid-rows-2 gap-2 flex-1 min-h-0">
         <SubjectKpiCard
           label={variant.label}
           value={variant.format(region[variant.trendField])}
@@ -345,8 +360,26 @@ function RegionKpis({
               : 'inbound + local'
           }
         />
-        <SubjectKpiCard label="Retail" value={variant.format(region.retail)} size="sm" />
-        <SubjectKpiCard label="Taxable" value={variant.format(region.taxable)} size="sm" />
+        <SubjectKpiCard
+          label="Retail"
+          value={variant.format(region.retail)}
+          sublabel={
+            retailPctOfRegion != null
+              ? `${(retailPctOfRegion * 100).toFixed(retailPctOfRegion === 1 ? 0 : 1)}% of region`
+              : undefined
+          }
+          size="sm"
+        />
+        <SubjectKpiCard
+          label="Taxable"
+          value={variant.format(region.taxable)}
+          sublabel={
+            taxablePctOfRegion != null
+              ? `${(taxablePctOfRegion * 100).toFixed(taxablePctOfRegion === 1 ? 0 : 1)}% of region`
+              : undefined
+          }
+          size="sm"
+        />
       </div>
     </div>
   );
@@ -359,6 +392,7 @@ function TrendCard({
   singlePoints,
   color,
   valueFormat,
+  singleSeriesName,
 }: {
   title: string;
   subtitle?: string;
@@ -366,6 +400,7 @@ function TrendCard({
   singlePoints?: TrendPoint[];
   color: string;
   valueFormat?: (v: number) => string;
+  singleSeriesName?: string;
 }) {
   return (
     <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
@@ -400,6 +435,7 @@ function TrendCard({
             height="fill"
             yMin="zero"
             valueFormat={valueFormat}
+            name={singleSeriesName}
           />
         )}
       </div>
