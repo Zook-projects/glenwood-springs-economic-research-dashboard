@@ -9,7 +9,7 @@ import { MapShell } from '../../components/MapShell';
 import type { AppOutletContext } from '../../App';
 
 export function ActivityMapView() {
-  const { data, placer } = useOutletContext<AppOutletContext>();
+  const { data, placer, glenwoodPlacer } = useOutletContext<AppOutletContext>();
   return (
     <MapShell>
       <div
@@ -22,7 +22,7 @@ export function ActivityMapView() {
           position: 'relative',
         }}
       >
-        <ActivityCommuteView data={data} placer={placer} />
+        <ActivityCommuteView data={data} placer={placer} glenwoodPlacer={glenwoodPlacer} />
       </div>
     </MapShell>
   );

@@ -36,6 +36,10 @@ interface Props {
   // Row label used in the floating tooltip when in single-series mode.
   // Multi-series uses each series.label and ignores this prop.
   name?: string;
+  // Suppress the built-in chip-row legend that normally renders above
+  // the chart whenever `series` has length > 0. Callers that supply
+  // their own (clickable) legend pass true so the row doesn't double up.
+  hideLegend?: boolean;
 }
 
 // Module-level identity formatter so the rendering code can compare against
@@ -52,6 +56,7 @@ export function MiniTrendChart({
   valueFormat = defaultValueFormat,
   highlightedKey = null,
   name = 'Value',
+  hideLegend = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 280, h: typeof height === 'number' ? height : 200 });
@@ -120,7 +125,7 @@ export function MiniTrendChart({
     };
   }, [renderableSeries, yMin]);
 
-  const showLegend = !!series && series.length > 0;
+  const showLegend = !hideLegend && !!series && series.length > 0;
   const legendH = showLegend ? 22 : 0;
 
   if (renderableSeries.length === 0) {

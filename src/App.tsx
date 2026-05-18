@@ -16,7 +16,9 @@ import { TopBar } from './components/TopBar';
 import { useFlowData } from './lib/useFlowData';
 import type { FlowData } from './lib/useFlowData';
 import { usePlacerData } from './lib/usePlacerData';
+import { useGlenwoodPlacerData } from './lib/useGlenwoodPlacerData';
 import type { PlacerData } from './types/placer';
+import type { GlenwoodPlacerData } from './types/placer-glenwood';
 import type { GeoLevel, MapLayerKind } from './components/maps/SubjectMapOverlay';
 
 export interface MapSubjectState {
@@ -46,6 +48,7 @@ export interface MapSubjectState {
 export interface AppOutletContext {
   data: FlowData;
   placer: PlacerData | null;
+  glenwoodPlacer: GlenwoodPlacerData | null;
   mapState: MapSubjectState;
 }
 
@@ -56,6 +59,7 @@ export default function App() {
   // state the Activity surfaces render a friendly notice instead of failing
   // the whole shell.
   const { data: placer } = usePlacerData();
+  const { data: glenwoodPlacer } = useGlenwoodPlacerData();
 
   // Shared map-subject state — kept in App so it survives Demographics ↔
   // Housing ↔ Commerce route changes (App is a layout route, never unmounts
@@ -164,6 +168,7 @@ export default function App() {
   const ctx: AppOutletContext = {
     data,
     placer,
+    glenwoodPlacer,
     mapState: {
       geoLevel,
       countyFilter,

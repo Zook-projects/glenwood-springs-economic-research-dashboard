@@ -20,6 +20,12 @@ import {
   type ShopperViewLayer,
 } from '../components/ShopperViewToggle';
 import { ModeToggle } from '../components/ModeToggle';
+import { GlenwoodScopeToggle, type GlenwoodScope } from '../components/maps/glenwood/GlenwoodScopeToggle';
+import { GlenwoodSubViewTabs, type GlenwoodSubView } from '../components/maps/glenwood/GlenwoodSubViewTabs';
+import { GlenwoodMetricToggle, type GlenwoodMetric } from '../components/maps/glenwood/GlenwoodMetricToggle';
+import { GlenwoodLeftPanel } from '../components/maps/glenwood/GlenwoodLeftPanel';
+import { GlenwoodMapCanvas } from '../components/maps/glenwood/GlenwoodMapCanvas';
+import { GlenwoodBottomStrip } from '../components/maps/glenwood/GlenwoodBottomStrip';
 import {
   ActivityMetricToggle,
   categoryOf,
@@ -42,6 +48,7 @@ import type {
 } from '../types/flow';
 import type { FlowData } from '../lib/useFlowData';
 import type { PlacerData } from '../types/placer';
+import type { GlenwoodPlacerData } from '../types/placer-glenwood';
 import { toFlowRows } from '../lib/placerAdapters';
 import {
   applySegmentFilter,
@@ -86,6 +93,7 @@ interface OdHoverState {
 interface Props {
   data: FlowData;       // existing LODES bundle (zips, corridor index, etc.)
   placer: PlacerData | null;
+  glenwoodPlacer: GlenwoodPlacerData | null;
 }
 
 function clampTooltipAnchor(
@@ -145,7 +153,7 @@ function useDraggable(resetKey: string | null) {
   return { offset, onMouseDown };
 }
 
-export function ActivityCommuteView({ data, placer }: Props) {
+export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
   // flowIndex from `data` is built from LODES flows only — it doesn't know
   // about Placer-specific OD pairs (e.g., out-of-state visitor origins
   // routed through GW_E / GW_W). We rebuild a Placer-scoped flowIndex
@@ -165,6 +173,27 @@ export function ActivityCommuteView({ data, placer }: Props) {
   //                            ≠ resident's home ZIP (flow axis flipped:
   //                            origin = resident anchor, dest = leakage ZIP)
   const [metric, setMetric] = useState<ActivityMetric>('workers');
+
+  const [scope, setScopeRaw] = useState<GlenwoodScope>('region');
+  const [glenwoodSubView, setGlenwoodSubView] = useState<GlenwoodSubView>('visitation');
+  const [glenwoodMetric, setGlenwoodMetric] = useState<GlenwoodMetric>('visits');
+  const [selectedHubs, setSelectedHubs] = useState<Set<string>>(() => new Set());
+  const [selectedPois, setSelectedPois] = useState<Set<string>>(() => new Set());
+  const setScope = (next: GlenwoodScope) => {
+    if (next === 'region') {
+      setSelectedHubs(new Set());
+      setSelectedPois(new Set());
+    } else {
+      setGlenwoodSubView('visitation');
+    }
+    setScopeRaw(next);
+  };
+  const setGlenwoodSubViewSafe = (next: GlenwoodSubView) => {
+    if (next === 'retailHubs') setSelectedPois(new Set());
+    else if (next === 'pois') setSelectedHubs(new Set());
+    setGlenwoodSubView(next);
+  };
+  const isGlenwoodScope = scope === 'glenwood';
   const activeCategory: ActivityCategory = categoryOf(metric);
   const isShopperMetric = metric === 'out-of-market-shopping';
 
@@ -1912,6 +1941,33 @@ export function ActivityCommuteView({ data, placer }: Props) {
             </div>
           </header>
 
+          <GlenwoodScopeToggle
+            scope={scope}
+            onChange={setScope}
+            glenwoodAvailable={glenwoodPlacer != null}
+          />
+
+          {isGlenwoodScope && (
+            <>
+              <GlenwoodSubViewTabs
+                value={glenwoodSubView}
+                onChange={setGlenwoodSubViewSafe}
+              />
+              <div className="flex flex-col gap-1">
+                <div
+                  className="text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  Metric
+                </div>
+                <GlenwoodMetricToggle
+                  value={glenwoodMetric}
+                  onChange={setGlenwoodMetric}
+                />
+              </div>
+            </>
+          )}
+
           {/* Mode toggle behavior is metric-aware:
               · Workers           — aggregate label / Inbound|Outbound toggle (default).
               · Visitors aggregate— aggregate label (no toggle).
@@ -1920,20 +1976,22 @@ export function ActivityCommuteView({ data, placer }: Props) {
               · Shoppers workplace— interactive Inbound|Outbound toggle so
                 the user can read the same source rows from either side
                 ("who shops here" vs. "where do residents shop"). */}
-          <ModeToggle
-            mode={mode}
-            onChange={handleModeChange}
-            aggregate={selectionKind === 'aggregate' && !isShopperMetric}
-            staticDirection={
-              isShopperMetric && selectionKind === 'aggregate'
-                ? 'outbound'
-                : activeCategory === 'visitors' && selectionKind === 'anchor'
-                  ? 'inbound'
-                  : undefined
-            }
-          />
+          {!isGlenwoodScope && (
+            <>
+              <ModeToggle
+                mode={mode}
+                onChange={handleModeChange}
+                aggregate={selectionKind === 'aggregate' && !isShopperMetric}
+                staticDirection={
+                  isShopperMetric && selectionKind === 'aggregate'
+                    ? 'outbound'
+                    : activeCategory === 'visitors' && selectionKind === 'anchor'
+                      ? 'inbound'
+                      : undefined
+                }
+              />
 
-          <ActivityMetricToggle value={metric} onChange={setMetric} />
+              <ActivityMetricToggle value={metric} onChange={setMetric} />
 
           {isVisitorCategory ? (
             <VisitorTypeToggle value={visitorType} onChange={handleVisitorTypeChange} />
@@ -2023,11 +2081,65 @@ export function ActivityCommuteView({ data, placer }: Props) {
               tailItemsOverride={visitorAnchorTailItems}
             />
           )}
+            </>
+          )}
+          {isGlenwoodScope && glenwoodPlacer && (
+            <GlenwoodLeftPanel
+              data={glenwoodPlacer}
+              subView={glenwoodSubView}
+              selectedHubs={selectedHubs}
+              selectedPois={selectedPois}
+              onToggleHub={(id) => {
+                setSelectedHubs((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+              onTogglePoi={(id) => {
+                setSelectedPois((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+              onClearSelection={() => {
+                setSelectedHubs(new Set());
+                setSelectedPois(new Set());
+              }}
+            />
+          )}
         </div>
       </aside>
 
       <main className="relative w-full md:flex-1">
         <div className="relative w-full h-[80vh] md:h-auto md:absolute md:inset-0">
+          {isGlenwoodScope && glenwoodPlacer ? (
+            <GlenwoodMapCanvas
+              data={glenwoodPlacer}
+              subView={glenwoodSubView}
+              selectedHubs={selectedHubs}
+              selectedPois={selectedPois}
+              onToggleHub={(id) => {
+                setSelectedHubs((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+              onTogglePoi={(id) => {
+                setSelectedPois((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+            />
+          ) : (
           <MapCanvas
             flows={isShopperMetric ? flowsOutbound : flowsInbound}
             zips={zips}
@@ -2100,24 +2212,22 @@ export function ActivityCommuteView({ data, placer }: Props) {
             hideAnchorMarkers={isVisitorCategory}
             keepRegionalBounds={isVisitorCategory}
             hideOffCorridor={isShopperMetric && shopperViewLayer === 'heatmap'}
-          />
+          />)}
 
-          <ActiveFiltersOverlay
-            // For visitors the geographic direction filter isn't surfaced —
-            // suppress its chip so the overlay doesn't reflect a stale East /
-            // West / Up Valley selection left over from a workers session.
-            // (visitor-type chip is a v2 enhancement.)
-            directionFilter={isVisitorCategory ? 'all' : directionFilter}
-            onClearDirection={() => handleDirectionChange('all')}
-            selectedPartner={selectedPartner}
-            onClearPartner={() => handleSelectPartner(null)}
-            directionNumerator={directionChipCounts.numerator}
-            directionDenominator={directionChipCounts.denominator}
-            segmentFilter={{ axis: 'all', buckets: [] }}
-            onClearSegmentFilter={() => {}}
-            selectedBlockCount={0}
-            onClearSelectedBlocks={() => {}}
-          />
+          {!isGlenwoodScope && (
+            <ActiveFiltersOverlay
+              directionFilter={isVisitorCategory ? 'all' : directionFilter}
+              onClearDirection={() => handleDirectionChange('all')}
+              selectedPartner={selectedPartner}
+              onClearPartner={() => handleSelectPartner(null)}
+              directionNumerator={directionChipCounts.numerator}
+              directionDenominator={directionChipCounts.denominator}
+              segmentFilter={{ axis: 'all', buckets: [] }}
+              onClearSegmentFilter={() => {}}
+              selectedBlockCount={0}
+              onClearSelectedBlocks={() => {}}
+            />
+          )}
 
           {/* Shopper bottom strip — KPI / Pie / Place Rankings docked at
               the bottom of the map area, plus a floating Category Rankings
@@ -2126,7 +2236,7 @@ export function ActivityCommuteView({ data, placer }: Props) {
               positioning). Renders for the shopper metric whether or not
               an anchor is selected; when an anchor is selected the cards
               scope to that resident anchor's outbound shopping. */}
-          {isShopperMetric && (
+          {!isGlenwoodScope && isShopperMetric && (
             <ShopperBottomCardStrip
               // Pass the SELECTION-narrowed flows (not partner-narrowed)
               // so Place Rankings can list the full set of clickable
@@ -2158,7 +2268,22 @@ export function ActivityCommuteView({ data, placer }: Props) {
                 the Visitor-Type Mix pie card stays visible (anchor-
                 specific cards are gated inside the strip on selectedZip).
               · Shoppers → uses ShopperBottomCardStrip above. */}
-          {!isShopperMetric && (selectedZip || isVisitorCategory) && (
+          {isGlenwoodScope && glenwoodPlacer && (
+            <div
+              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
+              style={{ paddingBottom: 8 }}
+            >
+              <GlenwoodBottomStrip
+                data={glenwoodPlacer}
+                subView={glenwoodSubView}
+                metric={glenwoodMetric}
+                selectedHubs={selectedHubs}
+                selectedPois={selectedPois}
+              />
+            </div>
+          )}
+
+          {!isGlenwoodScope && !isShopperMetric && (selectedZip || isVisitorCategory) && (
             <div
               className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
               style={{ paddingBottom: 8 }}

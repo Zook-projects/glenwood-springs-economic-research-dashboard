@@ -123,63 +123,7 @@ _ZIP_END_RE = re.compile(r"(\d{5})(?:-\d{4})?\b(?!.*\b\d{5}\b)")
 _ZIP_ANY_RE = re.compile(r"\b(\d{5})(?:-\d{4})?\b")
 
 
-def zip_str(value: object) -> str | None:
-    """Coerce an Excel cell value into a 5-character zip code string. Returns
-    None when the cell is blank or doesn't parse as a positive integer-ish
-    number — those rows are skipped silently."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        v = value.strip()
-        if not v:
-            return None
-        # Some cells already arrive as strings — keep as-is but pad.
-        if v.isdigit():
-            return v.zfill(5)
-        return None
-    if isinstance(value, (int, float)):
-        n = int(value)
-        if n <= 0:
-            return None
-        return f"{n:05d}"
-    return None
-
-
-def positive_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        n = int(value)
-        return n if n > 0 else None
-    if isinstance(value, str):
-        v = value.strip()
-        try:
-            n = int(float(v))
-            return n if n > 0 else None
-        except ValueError:
-            return None
-    return None
-
-
-def finite_float(value: object) -> float | None:
-    """Coerce an Excel cell to a finite float, or None if absent/malformed.
-    Used for origin lat/lng cells, which Placer always populates but might be
-    surfaced as strings in some workbook exports."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        f = float(value)
-        return f if (f == f and abs(f) < 1e9) else None  # rejects NaN/inf
-    if isinstance(value, str):
-        v = value.strip()
-        if not v:
-            return None
-        try:
-            f = float(v)
-            return f if f == f else None
-        except ValueError:
-            return None
-    return None
+from placer_helpers import finite_float, positive_int, zip_str  # noqa: E402
 
 
 def read_metric_sheet(ws) -> tuple[list[dict], list[str], int | None]:
