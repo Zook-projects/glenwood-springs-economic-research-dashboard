@@ -23,8 +23,10 @@ import { GlenwoodVisitorTypePie } from './GlenwoodVisitorTypePie';
 import { GlenwoodRankingCard, type RankingRow } from './GlenwoodRankingCard';
 import {
   averageByDayOfWeek,
+  condenseIncomeBuckets,
   fmtCount,
   profileScalar,
+  stripHouseholdSuffix,
   tiersFromZipRows,
   findLatestDate,
   timeframeWindows,
@@ -34,6 +36,7 @@ import {
   yoyPctSeries,
   classifyZipTier,
   TIER_COLOR,
+  HUB_PALETTE as SERIES_PALETTE,
   type VisitorTier,
 } from './glenwoodMetrics';
 
@@ -42,11 +45,6 @@ import type { GlenwoodMetric } from './GlenwoodMetricToggle';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
 const STRIP_CARD_HEIGHT = 260;
-
-const SERIES_PALETTE = [
-  '#86b3ee', '#FFB454', '#6dd182', '#b794f4', '#f06292',
-  '#4dd0e1', '#ffd54f', '#a1887f',
-];
 
 function bracketSortKey(label: string): number {
   const m = label.match(/(\d+)\s*K/);
@@ -222,13 +220,16 @@ export function GlenwoodRetailHubsStrip({
     ];
   }, [visible, visitsById, tw]);
 
+  // 16-bucket income ladder → 5 condensed bins for the strip chart.
   const incomeBuckets = useMemo(
     () =>
-      aggregateBuckets(
-        visible,
-        'Household Income',
-        isIncomeBucketKey,
-        (a, b) => bracketSortKey(a) - bracketSortKey(b),
+      condenseIncomeBuckets(
+        aggregateBuckets(
+          visible,
+          'Household Income',
+          isIncomeBucketKey,
+          (a, b) => bracketSortKey(a) - bracketSortKey(b),
+        ),
       ),
     [visible],
   );
@@ -244,7 +245,7 @@ export function GlenwoodRetailHubsStrip({
           const nb = parseInt(b, 10) || 0;
           return na - nb;
         },
-      ),
+      ).map((b) => ({ ...b, label: stripHouseholdSuffix(b.label) })),
     [visible],
   );
 
@@ -296,7 +297,7 @@ export function GlenwoodRetailHubsStrip({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="hidden md:block" />
           <div className="hidden md:block" />
-          <div className="flex flex-col gap-2 min-w-0">
+          <div className="flex flex-col gap-2 min-w-0 pointer-events-auto">
             <GlenwoodRankingCard
               title="Visits per Hub"
               subtitle={`${selectionTag} · ${tw.subtitle.split(' vs ')[0]}`}
@@ -337,7 +338,7 @@ export function GlenwoodRetailHubsStrip({
       )}
 
       <div
-        className="grid grid-cols-1 md:grid-cols-3 gap-3"
+        className="grid grid-cols-1 md:grid-cols-3 gap-3 pointer-events-auto"
         style={{ height: STRIP_CARD_HEIGHT }}
       >
         <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">

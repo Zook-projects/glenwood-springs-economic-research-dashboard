@@ -15,7 +15,8 @@
     "fetch:context:tourism": "python3 scripts/fetch-context-tourism.py",
     "fetch:context:economic": "python3 scripts/fetch-context-economic.py",
     "build:context": "python3 scripts/build-context.py",
-    "build:placer-glenwood": "python3 scripts/build-glenwood-placer.py"
+    "build:placer-glenwood": "python3 scripts/build-glenwood-placer.py",
+    "build:glenwood-features": "python3 scripts/build-glenwood-features.py"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",

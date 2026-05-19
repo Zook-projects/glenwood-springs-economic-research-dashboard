@@ -3,19 +3,31 @@
 // feature layers in via map-context once the map is ready.
 //
 // Layer visibility is driven by the active sub-view:
-//   - visitation: city boundary + hub outlines + POI outlines + POI pins + labels
-//   - retailHubs: city boundary + hub fills + hub labels
-//   - pois:       city boundary + POI fills + POI pins + POI labels + (selected) origins
+//   - visitation: city boundary + hub fills + hub outlines + POI center pins
+//   - retailHubs: city boundary + hub fills + hub outlines
+//   - pois:       city boundary + POI fills + POI outlines
+//
+// Labels are hidden in every view; a shared hover tooltip surfaces the
+// property name + visits over the active timeframe window.
 //
 // Selection state is mirrored into MapLibre feature-state on the
 // `glenwood-features` source; paint expressions read from there.
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LngLatBoundsLike } from 'maplibre-gl';
 import { SubjectMapCanvas, useMapProjection } from '../../SubjectMapCanvas';
 import type { GlenwoodPlacerData, GlenwoodFeatures } from '../../../types/placer-glenwood';
 import type { GlenwoodSubView } from './GlenwoodSubViewTabs';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
+import {
+  findLatestDate,
+  fmtCount,
+  HUB_PALETTE,
+  POI_PALETTE,
+  poiMonthlyFromOrigins,
+  timeframeWindows,
+  totalVisitsInWindow,
+} from './glenwoodMetrics';
 
 const GLENWOOD_BOUNDS: LngLatBoundsLike = [
   [-107.45, 39.46],
@@ -24,12 +36,13 @@ const GLENWOOD_BOUNDS: LngLatBoundsLike = [
 
 const COLOR_BOUNDARY = 'rgba(183, 148, 244, 0.85)';
 const COLOR_BOUNDARY_FILL = 'rgba(183, 148, 244, 0.05)';
-const COLOR_HUB_ACCENT = '#86b3ee';
-const COLOR_HUB_FILL_SELECTED = 'rgba(134, 179, 238, 0.45)';
-const COLOR_HUB_FILL_DEFAULT = 'rgba(134, 179, 238, 0.12)';
-const COLOR_POI_ACCENT = '#FFB454';
-const COLOR_POI_FILL_SELECTED = 'rgba(255, 180, 84, 0.45)';
-const COLOR_POI_FILL_DEFAULT = 'rgba(255, 180, 84, 0.10)';
+// Hub + POI boundaries and POI markers all render in white by default.
+// Selection swaps in the entity's palette color via ['get', 'color'] in
+// the paint expressions below.
+const COLOR_HUB_ACCENT = '#ffffff';
+const COLOR_HUB_FILL_DEFAULT = 'rgba(255, 255, 255, 0.12)';
+const COLOR_POI_ACCENT = '#ffffff';
+const COLOR_POI_FILL_DEFAULT = 'rgba(255, 255, 255, 0.12)';
 const COLOR_ORIGIN_DOT = 'rgba(183, 148, 244, 0.6)';
 
 interface Props {
@@ -46,18 +59,19 @@ interface Props {
   onTogglePoi: (id: string) => void;
 }
 
-// Layer visibility matrix per sub-view.
+// Layer visibility matrix per sub-view. Labels are hidden everywhere —
+// hover tooltip surfaces the property name + visits instead.
 const LAYER_VISIBILITY: Record<GlenwoodSubView, Record<string, boolean>> = {
   visitation: {
     'gw-boundary-fill': true,
     'gw-boundary-outline': true,
-    'gw-hubs-fill': false,
+    'gw-hubs-fill': true,
     'gw-hubs-outline': true,
-    'gw-hubs-label': true,
+    'gw-hubs-label': false,
     'gw-pois-fill': false,
-    'gw-pois-outline': true,
+    'gw-pois-outline': false,
     'gw-pois-pin': true,
-    'gw-pois-label': true,
+    'gw-pois-label': false,
     'gw-poi-origins': false,
   },
   retailHubs: {
@@ -65,7 +79,7 @@ const LAYER_VISIBILITY: Record<GlenwoodSubView, Record<string, boolean>> = {
     'gw-boundary-outline': true,
     'gw-hubs-fill': true,
     'gw-hubs-outline': true,
-    'gw-hubs-label': true,
+    'gw-hubs-label': false,
     'gw-pois-fill': false,
     'gw-pois-outline': false,
     'gw-pois-pin': false,
@@ -80,11 +94,18 @@ const LAYER_VISIBILITY: Record<GlenwoodSubView, Record<string, boolean>> = {
     'gw-hubs-label': false,
     'gw-pois-fill': true,
     'gw-pois-outline': true,
-    'gw-pois-pin': true,
-    'gw-pois-label': true,
-    'gw-poi-origins': true,
+    'gw-pois-pin': false,
+    'gw-pois-label': false,
+    'gw-poi-origins': false,
   },
 };
+
+interface HoverInfo {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+}
 
 function GlenwoodLayerManager({
   features,
@@ -93,6 +114,7 @@ function GlenwoodLayerManager({
   selectedIds,
   onClickHub,
   onClickPoi,
+  onHover,
 }: {
   features: GlenwoodFeatures | null;
   poiOrigins: GeoJSON.FeatureCollection<GeoJSON.Point, { zip: string; visits: number }>;
@@ -100,6 +122,7 @@ function GlenwoodLayerManager({
   selectedIds: Set<string>;
   onClickHub: (id: string) => void;
   onClickPoi: (id: string) => void;
+  onHover: (info: HoverInfo | null) => void;
 }) {
   const { map } = useMapProjection();
 
@@ -149,11 +172,20 @@ function GlenwoodLayerManager({
         type: 'fill',
         filter: ['==', ['get', 'kind'], 'hub'],
         paint: {
+          // Selected hubs paint in their palette color so the boundary on
+          // the map matches the ranking-card legend; default = the white
+          // wash everywhere else.
           'fill-color': [
             'case',
             ['boolean', ['feature-state', 'selected'], false],
-            COLOR_HUB_FILL_SELECTED,
+            ['to-color', ['get', 'color']],
             COLOR_HUB_FILL_DEFAULT,
+          ],
+          'fill-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            0.4,
+            1.0,
           ],
         },
       });
@@ -163,7 +195,12 @@ function GlenwoodLayerManager({
         type: 'line',
         filter: ['==', ['get', 'kind'], 'hub'],
         paint: {
-          'line-color': COLOR_HUB_ACCENT,
+          'line-color': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            ['to-color', ['get', 'color']],
+            COLOR_HUB_ACCENT,
+          ],
           'line-width': [
             'case',
             ['boolean', ['feature-state', 'selected'], false],
@@ -196,11 +233,18 @@ function GlenwoodLayerManager({
         type: 'fill',
         filter: ['all', ['==', ['get', 'kind'], 'poi'], ['==', ['geometry-type'], 'Polygon']],
         paint: {
+          // See `gw-hubs-fill` for the selected-color rationale.
           'fill-color': [
             'case',
             ['boolean', ['feature-state', 'selected'], false],
-            COLOR_POI_FILL_SELECTED,
+            ['to-color', ['get', 'color']],
             COLOR_POI_FILL_DEFAULT,
+          ],
+          'fill-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            0.4,
+            1.0,
           ],
         },
       });
@@ -210,7 +254,12 @@ function GlenwoodLayerManager({
         type: 'line',
         filter: ['all', ['==', ['get', 'kind'], 'poi'], ['==', ['geometry-type'], 'Polygon']],
         paint: {
-          'line-color': COLOR_POI_ACCENT,
+          'line-color': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            ['to-color', ['get', 'color']],
+            COLOR_POI_ACCENT,
+          ],
           'line-width': [
             'case',
             ['boolean', ['feature-state', 'selected'], false],
@@ -223,9 +272,18 @@ function GlenwoodLayerManager({
         id: 'gw-pois-pin',
         source: 'glenwood-features',
         type: 'circle',
-        filter: ['==', ['get', 'kind'], 'poi'],
+        // Restrict to Point geometry so each POI gets exactly one marker
+        // (rendered at the centroid emitted by build-glenwood-features.py);
+        // without this filter, MapLibre's circle layer would draw one circle
+        // per polygon vertex.
+        filter: ['all', ['==', ['get', 'kind'], 'poi'], ['==', ['geometry-type'], 'Point']],
         paint: {
-          'circle-color': COLOR_POI_ACCENT,
+          'circle-color': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            ['to-color', ['get', 'color']],
+            COLOR_POI_ACCENT,
+          ],
           'circle-stroke-color': '#000',
           'circle-stroke-width': 1,
           'circle-radius': [
@@ -240,7 +298,9 @@ function GlenwoodLayerManager({
         id: 'gw-pois-label',
         source: 'glenwood-features',
         type: 'symbol',
-        filter: ['==', ['get', 'kind'], 'poi'],
+        // Same as the pin layer — label off the Point feature so each POI
+        // gets a single label at its centroid, not one per polygon vertex.
+        filter: ['all', ['==', ['get', 'kind'], 'poi'], ['==', ['geometry-type'], 'Point']],
         layout: {
           'text-field': ['get', 'name'],
           'text-size': 11,
@@ -276,20 +336,37 @@ function GlenwoodLayerManager({
         },
       });
 
+      // Apply the current sub-view's visibility — the separate visibility
+      // effect runs once on mount before these layers exist, so without this
+      // line layers would all stay 'visible' until subView next changes.
+      const initialVis = LAYER_VISIBILITY[subView];
+      for (const [layerId, visible] of Object.entries(initialVis)) {
+        try {
+          map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+        } catch {
+          /* skip */
+        }
+      }
+
       return true;
     };
 
     if (!ready()) {
-      const onLoad = () => {
-        if (ready()) map.off('style.load', onLoad);
+      // isStyleLoaded() can stay false while the basemap's hillshade tiles
+      // load; relying on `style.load` alone misses the window because it
+      // already fired before this effect attached. `idle` fires after every
+      // render cycle once the map settles, so we'll retry on the next idle
+      // until ready() succeeds.
+      const onIdle = () => {
+        if (ready()) map.off('idle', onIdle);
       };
-      map.on('style.load', onLoad);
+      map.on('idle', onIdle);
       return () => {
-        map.off('style.load', onLoad);
+        map.off('idle', onIdle);
       };
     }
     return undefined;
-  }, [map, features, poiOrigins]);
+  }, [map, features, poiOrigins, subView]);
 
   // Update sub-view visibility.
   useEffect(() => {
@@ -336,7 +413,8 @@ function GlenwoodLayerManager({
     }
   }, [map, features, selectedIds]);
 
-  // Click handlers.
+  // Click + hover handlers. Hover is tracked across hub-fill, poi-fill, and
+  // poi-pin layers — when the cursor leaves all three, the tooltip clears.
   useEffect(() => {
     if (!map) return;
     const handleHub = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
@@ -350,22 +428,46 @@ function GlenwoodLayerManager({
     map.on('click', 'gw-hubs-fill', handleHub);
     map.on('click', 'gw-pois-pin', handlePoi);
     map.on('click', 'gw-pois-fill', handlePoi);
-    const setPointer = () => (map.getCanvas().style.cursor = 'pointer');
-    const clearPointer = () => (map.getCanvas().style.cursor = '');
-    map.on('mouseenter', 'gw-hubs-fill', setPointer);
-    map.on('mouseleave', 'gw-hubs-fill', clearPointer);
-    map.on('mouseenter', 'gw-pois-pin', setPointer);
-    map.on('mouseleave', 'gw-pois-pin', clearPointer);
+
+    const hoverLayers = ['gw-hubs-fill', 'gw-pois-fill', 'gw-pois-pin'] as const;
+    const hovered = new Set<string>();
+    const handleMove = (
+      layer: string,
+      e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] },
+    ) => {
+      const props = e.features?.[0]?.properties;
+      if (!props || typeof props.id !== 'string' || typeof props.name !== 'string') return;
+      onHover({ id: props.id, name: props.name, x: e.point.x, y: e.point.y });
+      hovered.add(layer);
+      map.getCanvas().style.cursor = 'pointer';
+    };
+    const handleLeave = (layer: string) => {
+      hovered.delete(layer);
+      if (hovered.size === 0) {
+        onHover(null);
+        map.getCanvas().style.cursor = '';
+      }
+    };
+
+    const moveHandlers: Record<string, (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => void> = {};
+    const leaveHandlers: Record<string, () => void> = {};
+    for (const layer of hoverLayers) {
+      moveHandlers[layer] = (e) => handleMove(layer, e);
+      leaveHandlers[layer] = () => handleLeave(layer);
+      map.on('mousemove', layer, moveHandlers[layer]);
+      map.on('mouseleave', layer, leaveHandlers[layer]);
+    }
+
     return () => {
       map.off('click', 'gw-hubs-fill', handleHub);
       map.off('click', 'gw-pois-pin', handlePoi);
       map.off('click', 'gw-pois-fill', handlePoi);
-      map.off('mouseenter', 'gw-hubs-fill', setPointer);
-      map.off('mouseleave', 'gw-hubs-fill', clearPointer);
-      map.off('mouseenter', 'gw-pois-pin', setPointer);
-      map.off('mouseleave', 'gw-pois-pin', clearPointer);
+      for (const layer of hoverLayers) {
+        map.off('mousemove', layer, moveHandlers[layer]);
+        map.off('mouseleave', layer, leaveHandlers[layer]);
+      }
     };
-  }, [map, onClickHub, onClickPoi]);
+  }, [map, onClickHub, onClickPoi, onHover]);
 
   return null;
 }
@@ -373,8 +475,7 @@ function GlenwoodLayerManager({
 export function GlenwoodMapCanvas({
   data,
   subView,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  timeframe: _timeframe,
+  timeframe,
   selectedHubs,
   selectedPois,
   onToggleHub,
@@ -408,16 +509,88 @@ export function GlenwoodMapCanvas({
     return out;
   }, [selectedHubs, selectedPois]);
 
+  // Per-entity color, matching the ranking-card palettes. When a hub or
+  // POI is selected, the map paints the boundary in this color; the
+  // strips read from the same HUB_PALETTE / POI_PALETTE so the legend
+  // and the map agree feature-by-feature.
+  const enrichedFeatures = useMemo<GlenwoodFeatures | null>(() => {
+    if (!data.features) return null;
+    const colorById = new Map<string, string>();
+    data.hubs.hubs.forEach((h, i) =>
+      colorById.set(h.id, HUB_PALETTE[i % HUB_PALETTE.length]),
+    );
+    data.pois.pois.forEach((p, i) =>
+      colorById.set(p.id, POI_PALETTE[i % POI_PALETTE.length]),
+    );
+    return {
+      ...data.features,
+      features: data.features.features.map((f) => ({
+        ...f,
+        properties: {
+          ...f.properties,
+          color: colorById.get(f.properties.id) ?? '#ffffff',
+        },
+      })),
+    };
+  }, [data.features, data.hubs.hubs, data.pois.pois]);
+
+  // Visits lookup for the hover tooltip — keyed by hub/POI id, summed over
+  // the active timeframe window so the tooltip number matches the strip below.
+  const visitsById = useMemo(() => {
+    const out = new Map<string, number>();
+    const hubLatest = findLatestDate(data.hubs.hubs.flatMap((h) => h.dailyVisits ?? []));
+    if (hubLatest) {
+      const { window } = timeframeWindows(hubLatest, timeframe);
+      for (const h of data.hubs.hubs) {
+        out.set(h.id, totalVisitsInWindow(h.dailyVisits ?? [], window));
+      }
+    }
+    const allPoiMonthly = data.pois.pois.flatMap((p) => poiMonthlyFromOrigins(p));
+    const poiLatest = findLatestDate(allPoiMonthly);
+    if (poiLatest) {
+      const { window } = timeframeWindows(poiLatest, timeframe);
+      for (const p of data.pois.pois) {
+        out.set(p.id, totalVisitsInWindow(poiMonthlyFromOrigins(p), window));
+      }
+    }
+    return out;
+  }, [data, timeframe]);
+
+  const [hover, setHover] = useState<HoverInfo | null>(null);
+
   return (
     <SubjectMapCanvas bounds={GLENWOOD_BOUNDS}>
       <GlenwoodLayerManager
-        features={data.features}
+        features={enrichedFeatures}
         poiOrigins={poiOrigins}
         subView={subView}
         selectedIds={selectedIds}
         onClickHub={onToggleHub}
         onClickPoi={onTogglePoi}
+        onHover={setHover}
       />
+      {hover && (
+        <div
+          className="glass rounded-md"
+          style={{
+            position: 'absolute',
+            left: hover.x + 14,
+            top: hover.y + 14,
+            padding: '6px 10px',
+            pointerEvents: 'none',
+            fontSize: 11,
+            color: 'var(--text)',
+            whiteSpace: 'nowrap',
+            zIndex: 25,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+          }}
+        >
+          <div style={{ color: 'var(--text-h)', fontWeight: 600 }}>{hover.name}</div>
+          <div style={{ color: 'var(--text-dim)', marginTop: 2 }}>
+            {fmtCount(visitsById.get(hover.id) ?? 0)} visits
+          </div>
+        </div>
+      )}
       {!data.features && (
         <div
           style={{

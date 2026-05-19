@@ -65,6 +65,11 @@ POI_SLUGS = {
     "Sunlight Mountain Resort": "sunlight-mountain-resort",
 }
 
+# Slugs excluded from the emitted pois.json. Kept here (and still parsed from
+# the workbook) so re-enabling later is a one-line revert. Hotel Overnight
+# Stays is currently under review and should not appear in the dashboard.
+EXCLUDED_POI_SLUGS: set[str] = {"hotel-overnight-stays"}
+
 
 def iso_date(value: object) -> str | None:
     if value is None:
@@ -322,11 +327,43 @@ def build_visitation() -> dict:
         if isinstance(label, str) and val is not None:
             avg_daily_mix[label.strip()] = val
 
-    # Visitor demographic pull from Tourist Profile (only the "All" distance
-    # subset, for the Visitation page's KPI block) plus per-distance Family
-    # Households share (cross-filters to whichever distance band is active).
+    # Visitor demographic pull from Tourist Profile. Three outputs feed
+    # the Visitation page:
+    #   - visitor_profile: scalar income/population pulled from the "All"
+    #     distance row (used in the KPI block).
+    #   - family_hh_by_distance: per-distance Family Households share
+    #     (cross-filters the Family HH KPI to the active distance band).
+    #   - profile_by_distance: bucketed distributions (Household Income,
+    #     Household Size, Age, etc.) keyed by distance. Fills the
+    #     Demographics-mode strip cards that previously showed
+    #     "available per hub or POI" placeholders. Each distance key is
+    #     authored in the same form the rest of the dashboard uses
+    #     ('All', '0-25 mi', ..., 'Overnight').
     visitor_profile: dict[str, object] = {}
     family_hh_by_distance: dict[str, float] = {}
+    # category → key → 'percentage' or 'share' (computed from value if pct
+    # is absent for that key).
+    profile_by_distance: dict[str, dict[str, dict[str, float]]] = {}
+    # Categories to surface as bucketed distributions. Other categories
+    # (Households, Overview) carry scalar values that don't fit a bar
+    # chart; we skip them in the bucket pull so the frontend doesn't
+    # have to filter them out.
+    BUCKET_CATEGORIES = {
+        "Household Income",
+        "Household Size",
+        "Age",
+        "Education",
+        "Ethnicity",
+        "Gender",
+        "Marital Status",
+        "Population by Generation",
+    }
+    # Bucket entries occasionally ship a Value but no Percentage. Track
+    # per-(distance, category) value totals so we can derive a share when
+    # only counts are available.
+    bucket_value_totals: dict[tuple[str, str], float] = {}
+    bucket_value_rows: dict[tuple[str, str], dict[str, float]] = {}
+    latest_bucket_year: dict[tuple[str, str], int] = {}
     wb_profile = openpyxl.load_workbook(PROFILE_PATH, data_only=True, read_only=True)
     if "Tourist Profile" in wb_profile.sheetnames:
         ws_p = wb_profile["Tourist Profile"]
@@ -360,6 +397,7 @@ def build_visitation() -> dict:
                 continue
             cat_s = str(category).strip()
             key_s = str(key).strip()
+            d_s = str(distance).strip() if distance else ""
             tag = wanted.get((cat_s, key_s))
             if tag and distance == "All" and val is not None:
                 prev_yr = latest_year_seen.get(("All", tag), -1)
@@ -374,7 +412,6 @@ def build_visitation() -> dict:
                         )
             # Family Households share, by distance (incl. "All").
             if cat_s == "Households" and key_s == "Family Households" and pct is not None:
-                d_s = str(distance).strip() if distance else ""
                 if d_s:
                     pct_f = finite_float(pct)
                     prev_yr = latest_year_family.get(d_s, -1)
@@ -385,6 +422,59 @@ def build_visitation() -> dict:
                         latest_year_family[d_s] = (
                             time_range_year if time_range_year is not None else prev_yr
                         )
+            # Bucketed distributions for the Demographics strip cards.
+            # Keep only the latest Time_range_year per (distance, category)
+            # so the file's row order doesn't bias the result.
+            if d_s and cat_s in BUCKET_CATEGORIES:
+                bucket_key = (d_s, cat_s)
+                prev_year = latest_bucket_year.get(bucket_key, -1)
+                year_for_compare = (
+                    time_range_year if time_range_year is not None else prev_year
+                )
+                if year_for_compare > prev_year:
+                    # Newer year — reset the accumulator for this slot.
+                    profile_by_distance.setdefault(d_s, {}).pop(cat_s, None)
+                    bucket_value_totals.pop(bucket_key, None)
+                    bucket_value_rows.pop(bucket_key, None)
+                    latest_bucket_year[bucket_key] = year_for_compare
+                if year_for_compare == latest_bucket_year[bucket_key]:
+                    cat_buckets = profile_by_distance.setdefault(d_s, {}).setdefault(
+                        cat_s, {}
+                    )
+                    pct_f = finite_float(pct)
+                    if pct_f is not None:
+                        # Skip "Median <something>" scalars that ride in the
+                        # same category — they're not bar buckets.
+                        if not key_s.lower().startswith("median"):
+                            cat_buckets[key_s] = round(float(pct_f), 5)
+                    else:
+                        # Stash the raw value; if no Percentage rows exist
+                        # for this (distance, category) we'll normalize at
+                        # the end.
+                        v_val = finite_float(val)
+                        if v_val is not None and not key_s.lower().startswith(
+                            "median"
+                        ):
+                            bucket_value_rows.setdefault(bucket_key, {})[key_s] = v_val
+                            bucket_value_totals[bucket_key] = (
+                                bucket_value_totals.get(bucket_key, 0.0) + v_val
+                            )
+
+        # Finalize: when a (distance, category) had only Values (no
+        # Percentages), normalize to shares.
+        for (d_s, cat_s), rows_map in bucket_value_rows.items():
+            cat_buckets = profile_by_distance.setdefault(d_s, {}).setdefault(
+                cat_s, {}
+            )
+            if cat_buckets:
+                # Already populated from Percentage rows; ignore the
+                # value-only fallback to avoid double-counting.
+                continue
+            total = bucket_value_totals.get((d_s, cat_s), 0.0)
+            if total <= 0:
+                continue
+            for k, v in rows_map.items():
+                cat_buckets[k] = round(v / total, 5)
 
     return {
         "source": "Placer.ai",
@@ -401,6 +491,7 @@ def build_visitation() -> dict:
         "annualMetrics": annual_metrics,
         "avgDailyVisitors": avg_daily_mix,
         "visitorProfile": visitor_profile,
+        "visitorProfileByDistance": profile_by_distance,
         "daysInMarketByDistance": days_by_distance_latest,
         "familyHouseholdsPctByDistance": family_hh_by_distance,
     }
@@ -763,7 +854,7 @@ def build_pois() -> dict:
         "source": "Placer.ai",
         "lastBuilt": date.today().isoformat(),
         "dataMonthRange": [min_month, max_month],
-        "pois": list(pois.values()),
+        "pois": [p for p in pois.values() if p["id"] not in EXCLUDED_POI_SLUGS],
     }
 
 

@@ -2125,6 +2125,14 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
               selectedHubs={selectedHubs}
               selectedPois={selectedPois}
               onToggleHub={(id) => {
+                // From the Visitation view, clicking a hub is a navigation
+                // action — switch to the Retail Hubs sub-view and preselect
+                // the clicked hub. From other sub-views, toggle selection.
+                if (glenwoodSubView === 'visitation') {
+                  setGlenwoodSubViewSafe('retailHubs');
+                  setSelectedHubs(new Set([id]));
+                  return;
+                }
                 setSelectedHubs((prev) => {
                   const next = new Set(prev);
                   if (next.has(id)) next.delete(id);
@@ -2133,6 +2141,11 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
                 });
               }}
               onTogglePoi={(id) => {
+                if (glenwoodSubView === 'visitation') {
+                  setGlenwoodSubViewSafe('pois');
+                  setSelectedPois(new Set([id]));
+                  return;
+                }
                 setSelectedPois((prev) => {
                   const next = new Set(prev);
                   if (next.has(id)) next.delete(id);
@@ -2271,8 +2284,12 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
                 specific cards are gated inside the strip on selectedZip).
               · Shoppers → uses ShopperBottomCardStrip above. */}
           {isGlenwoodScope && glenwoodPlacer && (
+            // pointer-events-none here so the empty grid-spacer columns in
+            // the strip's ranking row don't block zoom/pan on the map
+            // underneath. Visible card rows inside GlenwoodBottomStrip opt
+            // back in with pointer-events-auto.
             <div
-              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
+              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-none"
               style={{ paddingBottom: 8 }}
             >
               <GlenwoodBottomStrip

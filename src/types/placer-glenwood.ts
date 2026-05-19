@@ -24,6 +24,17 @@ export interface GlenwoodVisitationFile {
   annualMetrics: GlenwoodAnnualVisitMetric[];
   avgDailyVisitors: Record<string, number>;
   visitorProfile: Record<string, number>;
+  // Bucketed visitor demographics by distance band, sourced from the
+  // Tourist_Profile sheet. Outer key is the distance label (e.g.,
+  // "All", "0-25 mi", "Overnight"); inner keys are category names
+  // ("Household Income", "Household Size", etc.); inner-inner keys are
+  // bucket labels with share values in 0..1. The Demographics-mode
+  // strip cards read from this — picking "All" by default and the
+  // active distance when the user cross-filters via the ranking card.
+  visitorProfileByDistance: Record<
+    string,
+    Record<string, Record<string, number>>
+  >;
   // Latest reported year's Avg. Days in Market keyed by distance band
   // (e.g., "0-25 mi"), plus "Overnight" and "All" (the visits-weighted
   // average across the five distance bands). KPI block picks the right
@@ -90,6 +101,10 @@ export interface GlenwoodFeatureProperties {
   id: string;
   name: string;
   kind: GlenwoodFeatureKind;
+  // Injected at runtime by GlenwoodMapCanvas — per-entity palette color.
+  // Paint expressions read this via ['get', 'color'] to highlight a
+  // selected hub/POI in the same color the ranking card legend uses.
+  color?: string;
 }
 
 export type GlenwoodFeatureGeometry =

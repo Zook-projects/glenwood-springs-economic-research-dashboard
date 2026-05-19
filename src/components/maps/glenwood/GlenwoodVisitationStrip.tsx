@@ -12,10 +12,13 @@ import { MiniTrendChart, type TrendSeries } from '../MiniTrendChart';
 import { GlenwoodDayOfWeekChart } from './GlenwoodDayOfWeekChart';
 import { GlenwoodVisitorTypePie, type VisitorPieSlice } from './GlenwoodVisitorTypePie';
 import { GlenwoodRankingCard, type RankingSection } from './GlenwoodRankingCard';
+import { GlenwoodDistributionBar } from './GlenwoodDistributionBar';
 import {
   averageByDayOfWeek,
+  condenseIncomeBuckets,
   fmtCount,
   findLatestDate,
+  stripHouseholdSuffix,
   timeframeWindows,
   sumInWindow,
   rollupMonthly,
@@ -114,6 +117,48 @@ export function GlenwoodVisitationStrip({
   const filterKeys = filter?.keys ?? [];
   const isSectionSelection = filterKeys.includes('ALL');
   const rowKeys = filterKeys.filter((k) => k !== 'ALL');
+
+  // Bucketed visitor demographics for the Demographics-mode strip cards.
+  // We pull the "All" profile by default and swap to a specific distance
+  // when the ranking card cross-filters to one (distance row click or
+  // the Overnight row). Multi-row, section, and category selections fall
+  // back to "All" because the source workbook doesn't ship blended
+  // sub-distance distributions.
+  const demoDistanceLabel = useMemo(() => {
+    if (
+      filter?.dimension === 'distance' &&
+      !isSectionSelection &&
+      rowKeys.length === 1
+    ) {
+      return `${rowKeys[0]} mi`;
+    }
+    if (filter?.dimension === 'overnight') return 'Overnight';
+    return 'All';
+  }, [filter, isSectionSelection, rowKeys]);
+
+  const demoProfile = useMemo(
+    () => file.visitorProfileByDistance?.[demoDistanceLabel] ?? {},
+    [file, demoDistanceLabel],
+  );
+
+  // 16-bucket income ladder → 5 condensed bins to keep the bar chart legible.
+  const incomeBuckets = useMemo(() => {
+    const cat = demoProfile['Household Income'] ?? {};
+    const raw = Object.entries(cat)
+      .filter(([, v]) => typeof v === 'number')
+      .map(([label, value]) => ({ label, value }));
+    return condenseIncomeBuckets(raw);
+  }, [demoProfile]);
+
+  // Trailing "Household" / "Households" suffix dropped per design — bar
+  // labels read as "1 Person", "2 Persons", etc.
+  const hhSizeBuckets = useMemo(() => {
+    const cat = demoProfile['Household Size'] ?? {};
+    return Object.entries(cat)
+      .filter(([, v]) => typeof v === 'number')
+      .sort((a, b) => (parseInt(a[0], 10) || 0) - (parseInt(b[0], 10) || 0))
+      .map(([label, value]) => ({ label: stripHouseholdSuffix(label), value }));
+  }, [demoProfile]);
 
   // Visits Breakdown pie content mode. Defaults to a distance breakdown;
   // a category-dimension filter swaps the pie to category. Distance and
@@ -473,7 +518,7 @@ export function GlenwoodVisitationStrip({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="hidden md:block" />
           <div className="hidden md:block" />
-          <div className="flex flex-col gap-2 min-w-0">
+          <div className="flex flex-col gap-2 min-w-0 pointer-events-auto">
             <GlenwoodRankingCard
               title="Visitation Rankings"
               subtitle={tw.subtitle.split(' vs ')[0]}
@@ -527,7 +572,7 @@ export function GlenwoodVisitationStrip({
       )}
 
       <div
-        className="grid grid-cols-1 md:grid-cols-3 gap-3"
+        className="grid grid-cols-1 md:grid-cols-3 gap-3 pointer-events-auto"
         style={{ height: STRIP_CARD_HEIGHT }}
       >
         <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
@@ -602,33 +647,42 @@ export function GlenwoodVisitationStrip({
           <>
             <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
               <div
-                className="text-[10px] font-semibold uppercase tracking-wider"
+                className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
                 style={{ color: 'var(--text-dim)' }}
               >
-                Visitor Household Income
+                <span>Visitor Household Income</span>
+                <span className="text-[9px]">{demoDistanceLabel}</span>
               </div>
-              <div
-                className="flex-1 min-h-0 flex items-center justify-center text-[10px]"
-                style={{ color: 'var(--text-dim)' }}
-              >
-                City-wide visitor profile carries only scalar means. Switch
-                to Retail Hubs or POIs for bucketed distributions.
-              </div>
+              {incomeBuckets.length > 0 ? (
+                <GlenwoodDistributionBar buckets={incomeBuckets} />
+              ) : (
+                <div
+                  className="flex-1 min-h-0 flex items-center justify-center text-[10px]"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  No data available for {demoDistanceLabel}.
+                </div>
+              )}
             </div>
 
             <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
               <div
-                className="text-[10px] font-semibold uppercase tracking-wider"
+                className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
                 style={{ color: 'var(--text-dim)' }}
               >
-                Household Size
+                <span>Household Size</span>
+                <span className="text-[9px]">{demoDistanceLabel}</span>
               </div>
-              <div
-                className="flex-1 min-h-0 flex items-center justify-center text-[10px]"
-                style={{ color: 'var(--text-dim)' }}
-              >
-                Not bucketed at the city level. Available per hub or POI.
-              </div>
+              {hhSizeBuckets.length > 0 ? (
+                <GlenwoodDistributionBar buckets={hhSizeBuckets} />
+              ) : (
+                <div
+                  className="flex-1 min-h-0 flex items-center justify-center text-[10px]"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  No data available for {demoDistanceLabel}.
+                </div>
+              )}
             </div>
           </>
         )}

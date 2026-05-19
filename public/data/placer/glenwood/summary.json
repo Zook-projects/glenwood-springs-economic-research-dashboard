@@ -1,1 +1,1 @@
-{"source":"Placer.ai","lastBuilt":"2026-05-18","files":{"visitation":{"dataDateRange":["2018-01-01","2026-04-30"],"annualYears":[2018,2019,2020,2021,2022,2023,2024,2025]},"retailHubs":{"hubCount":8,"totalDailyRows":21413},"pois":{"poiCount":8,"totalOriginRows":124646}}}
+{"source":"Placer.ai","lastBuilt":"2026-05-19","files":{"visitation":{"dataDateRange":["2018-01-01","2026-04-30"],"annualYears":[2018,2019,2020,2021,2022,2023,2024,2025]},"retailHubs":{"hubCount":8,"totalDailyRows":21413},"pois":{"poiCount":7,"totalOriginRows":89294}}}

@@ -15,7 +15,9 @@ import { GlenwoodDistributionBar } from './GlenwoodDistributionBar';
 import { GlenwoodVisitorTypePie } from './GlenwoodVisitorTypePie';
 import { GlenwoodRankingCard, type RankingRow } from './GlenwoodRankingCard';
 import {
+  condenseIncomeBuckets,
   fmtCount,
+  stripHouseholdSuffix,
   tiersFromZipRows,
   findLatestDate,
   timeframeWindows,
@@ -25,6 +27,7 @@ import {
   poiMonthlyFromOrigins,
   classifyZipTier,
   TIER_COLOR,
+  POI_PALETTE as SERIES_PALETTE,
   type VisitorTier,
 } from './glenwoodMetrics';
 
@@ -33,11 +36,6 @@ import type { GlenwoodMetric } from './GlenwoodMetricToggle';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
 const STRIP_CARD_HEIGHT = 260;
-
-const SERIES_PALETTE = [
-  '#FFB454', '#86b3ee', '#6dd182', '#b794f4', '#f06292',
-  '#4dd0e1', '#ffd54f', '#a1887f',
-];
 
 const TIER_ORDER: VisitorTier[] = ['Local', 'Regional', 'Tourist'];
 
@@ -90,11 +88,15 @@ export function GlenwoodPoisStrip({
     [file, selectedIds],
   );
 
-  // Origins-derived monthly visits per POI. POI_Zipcodes_Visits extends
-  // further into the current year than the standalone Visits sheet (Apr
-  // 2026 vs Dec 2025), so we source the time series from origins.
-  // When a tier filter is active, we re-aggregate origins by tier so the
-  // monthly series only counts visitors classified into that tier.
+  // Per-POI monthly visit time series, optionally narrowed to a single tier.
+  // For months where Placer shipped a zip-level breakdown, origin sums are
+  // the exact tier decomposition of monthlyVisits (they tally identically
+  // — verified empirically). For months where the breakdown is missing
+  // (Hanging Lake's low-volume winter months, Sunlight Mountain's
+  // closed-resort summer months), we scale monthlyVisits by the year's
+  // tier share so the trend line stays continuous instead of opening
+  // gaps. Years with no origins at all fall back to the closest year's
+  // share.
   const monthlyById = useMemo(() => {
     const m = new Map<string, { date: string; value: number }[]>();
     if (!selectedTier) {
@@ -102,16 +104,52 @@ export function GlenwoodPoisStrip({
       return m;
     }
     for (const p of file.pois) {
-      const sums = new Map<string, number>();
+      // Origin tier sums and origin totals, keyed by month.
+      const monthTierSum = new Map<string, number>();
+      const monthOriginPresent = new Set<string>();
+      const yearTotals = new Map<number, { tier: number; total: number }>();
       for (const o of p.origins) {
-        if (!o.month) continue;
-        if (classifyZipTier(o.zip) !== selectedTier) continue;
-        sums.set(o.month, (sums.get(o.month) ?? 0) + o.visits);
+        const entry = yearTotals.get(o.year) ?? { tier: 0, total: 0 };
+        entry.total += o.visits;
+        const isTier = classifyZipTier(o.zip) === selectedTier;
+        if (isTier) entry.tier += o.visits;
+        yearTotals.set(o.year, entry);
+        if (o.month) {
+          monthOriginPresent.add(o.month);
+          if (isTier) {
+            monthTierSum.set(o.month, (monthTierSum.get(o.month) ?? 0) + o.visits);
+          }
+        }
       }
-      const series = Array.from(sums.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([month, value]) => ({ date: month, value }));
-      m.set(p.id, series);
+      const years = Array.from(yearTotals.keys()).sort();
+      const shareForYear = (year: number): number => {
+        const exact = yearTotals.get(year);
+        if (exact && exact.total > 0) return exact.tier / exact.total;
+        if (years.length === 0) return 0;
+        let closest = years[0];
+        let minDiff = Math.abs(year - closest);
+        for (const y of years) {
+          const diff = Math.abs(year - y);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closest = y;
+          }
+        }
+        const c = yearTotals.get(closest)!;
+        return c.total > 0 ? c.tier / c.total : 0;
+      };
+      const baseMonthly = poiMonthlyFromOrigins(p);
+      const blended = baseMonthly.map((r) => {
+        // Use the exact origin-derived tier sum when Placer shipped a
+        // breakdown for this month; only fall back to the year-share
+        // scaling when the breakdown is missing.
+        if (monthOriginPresent.has(r.date)) {
+          return { date: r.date, value: monthTierSum.get(r.date) ?? 0 };
+        }
+        const y = parseInt(r.date.slice(0, 4), 10);
+        return { date: r.date, value: r.value * shareForYear(y) };
+      });
+      m.set(p.id, blended);
     }
     return m;
   }, [file, selectedTier]);
@@ -152,12 +190,17 @@ export function GlenwoodPoisStrip({
         points,
       };
     });
-  }, [visible, tw]);
+  }, [visible, monthlyById, tw]);
 
-  // Per-tier YoY % series. For each (tier, period) we sum visits across
-  // every visible POI's origin rows, classify each zip into
-  // Local/Regional/Tourist, then divide current period by same period
-  // prior year. Period granularity follows the active timeframe:
+  // Per-tier YoY % series. For each (tier, period) we sum tier-resolved
+  // visits across every visible POI, then divide current period by same
+  // period prior year. For months where Placer shipped a zip-level
+  // breakdown we use the exact origin tier sums; for months where the
+  // breakdown is missing (Hanging Lake's low-volume winter months,
+  // Sunlight's closed-resort summer months) we fall back to scaling
+  // monthlyVisits by the year's tier share so the YoY chart doesn't
+  // drop out for those POIs. Period granularity follows the active
+  // timeframe:
   //   - Monthly mode → 13 monthly buckets (each compared to same month
   //                    prior year)
   //   - Annual mode  → annual buckets across full history
@@ -168,8 +211,8 @@ export function GlenwoodPoisStrip({
 
     // periodKey: "YYYY-MM" for monthly, "YYYY" for annual/ytd.
     const isMonthly = tw.trendGranularity === 'monthly';
-    const periodOf = (origin: { year: number; month?: string | null }) =>
-      isMonthly ? (origin.month ?? '') : String(origin.year);
+    const periodOfMonth = (yyyymm: string) =>
+      isMonthly ? yyyymm : yyyymm.slice(0, 4);
     const priorPeriod = (key: string) => {
       if (isMonthly) {
         const [y, m] = key.split('-').map(Number);
@@ -179,52 +222,97 @@ export function GlenwoodPoisStrip({
     };
     // For YTD mode, only count months <= trendMonthFilter when building
     // the annual buckets.
-    const monthInYtd = (origin: { month?: string | null }) => {
+    const monthInYtd = (yyyymm: string) => {
       if (tw.trendMonthFilter == null) return true;
-      if (!origin.month) return false;
-      const m = parseInt(origin.month.slice(5, 7), 10);
+      const m = parseInt(yyyymm.slice(5, 7), 10);
       return m <= tw.trendMonthFilter;
     };
     // For monthly mode, narrow to the trendStart cutoff (so we don't pull
     // ancient history into the chart). Annual/YTD show full history.
-    const inTrendWindow = (origin: { month?: string | null; year: number }) => {
+    const inTrendWindow = (yyyymm: string) => {
       if (isMonthly) {
         if (tw.trendStart === 'all') return true;
-        const m = origin.month;
-        return m != null && `${m}-01` >= tw.trendStart;
+        return `${yyyymm}-01` >= tw.trendStart;
       }
       return true;
     };
 
-    // periodKey → tier → visits
-    const totals = new Map<string, Record<VisitorTier, number>>();
-    for (const p of visible) {
+    // Build per-POI lookups: month→tier sums (where origins exist) and
+    // year-share fallback (for months where they don't).
+    type YearTiers = Record<VisitorTier, number> & { total: number };
+    const poiLookups = visible.map((p) => {
+      const monthTierSums = new Map<string, Record<VisitorTier, number>>();
+      const monthOriginPresent = new Set<string>();
+      const yearTotals = new Map<number, YearTiers>();
       for (const o of p.origins) {
-        if (!o.month) continue;
-        if (!monthInYtd(o)) continue;
-        if (!inTrendWindow(o)) continue;
-        const key = periodOf(o);
-        if (!key) continue;
+        const entry: YearTiers = yearTotals.get(o.year) ?? {
+          Local: 0,
+          Regional: 0,
+          Tourist: 0,
+          total: 0,
+        };
         const tier = classifyZipTier(o.zip);
-        const slot = totals.get(key) ?? { Local: 0, Regional: 0, Tourist: 0 };
-        slot[tier] += o.visits;
-        totals.set(key, slot);
+        entry.total += o.visits;
+        entry[tier] += o.visits;
+        yearTotals.set(o.year, entry);
+        if (o.month) {
+          monthOriginPresent.add(o.month);
+          const slot = monthTierSums.get(o.month) ?? {
+            Local: 0,
+            Regional: 0,
+            Tourist: 0,
+          };
+          slot[tier] += o.visits;
+          monthTierSums.set(o.month, slot);
+        }
       }
-    }
-    // Prior-period totals — same tally but unfiltered by trend window so
-    // YoY can look back into the prior period even when it falls outside
-    // the chart's display range.
+      const years = Array.from(yearTotals.keys()).sort();
+      const shareForYear = (year: number, tier: VisitorTier): number => {
+        const exact = yearTotals.get(year);
+        if (exact && exact.total > 0) return exact[tier] / exact.total;
+        if (years.length === 0) return 0;
+        let closest = years[0];
+        let minDiff = Math.abs(year - closest);
+        for (const y of years) {
+          const diff = Math.abs(year - y);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closest = y;
+          }
+        }
+        const c = yearTotals.get(closest)!;
+        return c.total > 0 ? c[tier] / c.total : 0;
+      };
+      return { poi: p, monthOriginPresent, monthTierSums, shareForYear };
+    });
+
+    // periodKey → tier → visits, summed across visible POIs.
+    const totals = new Map<string, Record<VisitorTier, number>>();
     const allTotals = new Map<string, Record<VisitorTier, number>>();
-    for (const p of visible) {
-      for (const o of p.origins) {
-        if (!o.month) continue;
-        if (!monthInYtd(o)) continue;
-        const key = periodOf(o);
+    for (const { poi, monthOriginPresent, monthTierSums, shareForYear } of poiLookups) {
+      const baseMonthly = poiMonthlyFromOrigins(poi);
+      for (const row of baseMonthly) {
+        if (!row.date) continue;
+        if (!monthInYtd(row.date)) continue;
+        const key = periodOfMonth(row.date);
         if (!key) continue;
-        const tier = classifyZipTier(o.zip);
-        const slot = allTotals.get(key) ?? { Local: 0, Regional: 0, Tourist: 0 };
-        slot[tier] += o.visits;
-        allTotals.set(key, slot);
+        const year = parseInt(row.date.slice(0, 4), 10);
+        // Resolve tier counts for this month: use exact origin sums when
+        // present, otherwise scale monthlyVisits by the year-share.
+        const tierForRow: Record<VisitorTier, number> = monthOriginPresent.has(row.date)
+          ? (monthTierSums.get(row.date) ?? { Local: 0, Regional: 0, Tourist: 0 })
+          : {
+              Local: row.value * shareForYear(year, 'Local'),
+              Regional: row.value * shareForYear(year, 'Regional'),
+              Tourist: row.value * shareForYear(year, 'Tourist'),
+            };
+        const all = allTotals.get(key) ?? { Local: 0, Regional: 0, Tourist: 0 };
+        for (const tier of TIER_ORDER) all[tier] += tierForRow[tier];
+        allTotals.set(key, all);
+        if (!inTrendWindow(row.date)) continue;
+        const cur = totals.get(key) ?? { Local: 0, Regional: 0, Tourist: 0 };
+        for (const tier of TIER_ORDER) cur[tier] += tierForRow[tier];
+        totals.set(key, cur);
       }
     }
 
@@ -273,17 +361,20 @@ export function GlenwoodPoisStrip({
     return tiersFromZipRows(rows);
   }, [visible]);
 
+  // 16-bucket income ladder → 5 condensed bins for the strip chart.
   const incomeBuckets = useMemo(
     () =>
-      aggregateBuckets(
-        visible,
-        'Household Income',
-        (k) => /\d+\s*K/.test(k),
-        (a, b) => {
-          const na = parseInt(a.match(/(\d+)\s*K/)?.[1] ?? '0', 10);
-          const nb = parseInt(b.match(/(\d+)\s*K/)?.[1] ?? '0', 10);
-          return na - nb;
-        },
+      condenseIncomeBuckets(
+        aggregateBuckets(
+          visible,
+          'Household Income',
+          (k) => /\d+\s*K/.test(k),
+          (a, b) => {
+            const na = parseInt(a.match(/(\d+)\s*K/)?.[1] ?? '0', 10);
+            const nb = parseInt(b.match(/(\d+)\s*K/)?.[1] ?? '0', 10);
+            return na - nb;
+          },
+        ),
       ),
     [visible],
   );
@@ -299,7 +390,7 @@ export function GlenwoodPoisStrip({
           const nb = parseInt(b, 10) || 0;
           return na - nb;
         },
-      ),
+      ).map((b) => ({ ...b, label: stripHouseholdSuffix(b.label) })),
     [visible],
   );
 
@@ -341,7 +432,7 @@ export function GlenwoodPoisStrip({
         <div className={`grid grid-cols-1 ${gridCols} gap-3`}>
           <div className="hidden md:block" />
           <div className="hidden md:block" />
-          <div className="flex flex-col gap-2 min-w-0">
+          <div className="flex flex-col gap-2 min-w-0 pointer-events-auto">
             <GlenwoodRankingCard
               title="Visits per POI"
               subtitle={`${selectionTag} · ${tw.subtitle.split(' vs ')[0]}`}
@@ -356,7 +447,7 @@ export function GlenwoodPoisStrip({
       )}
 
       <div
-        className={`grid grid-cols-1 ${gridCols} gap-3`}
+        className={`grid grid-cols-1 ${gridCols} gap-3 pointer-events-auto`}
         style={{ height: STRIP_CARD_HEIGHT }}
       >
         <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">

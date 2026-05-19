@@ -226,6 +226,72 @@ export const TIER_COLOR: Record<VisitorTier, string> = {
   Tourist: 'rgba(255,255,255,0.46)',
 };
 
+// Per-entity palette assigned by position in the data file. Hubs and POIs
+// each have their own ordering (first two colors swapped) so that the
+// two strips don't share a leading color when shown side-by-side. Map
+// boundaries pick up the same color when a hub/POI is selected, keeping
+// the map and the ranking-card legends in lockstep.
+export const HUB_PALETTE = [
+  '#86b3ee', '#FFB454', '#6dd182', '#b794f4', '#f06292',
+  '#4dd0e1', '#ffd54f', '#a1887f',
+];
+export const POI_PALETTE = [
+  '#FFB454', '#86b3ee', '#6dd182', '#b794f4', '#f06292',
+  '#4dd0e1', '#ffd54f', '#a1887f',
+];
+
+// Strip the trailing "Household" / "Households" from a Household Size
+// bucket label. The Placer feed ships labels like "1 Person Household"
+// and "7+ Persons Household"; we surface them as "1 Person" / "7+
+// Persons" to keep the strip charts compact.
+export function stripHouseholdSuffix(label: string): string {
+  return label.replace(/\s*Households?$/i, '').trim();
+}
+
+// Parse the LOWER bound (in dollars) of an income bucket label.
+//   "<$10K" / "10K or less"      → 0
+//   "$10K - $15K" / "10K - 15K"  → 10000
+//   "$60K - $75K"                → 60000
+//   ">$200K" / "200K or more"    → 200000
+function parseIncomeLow(label: string): number {
+  if (/or\s*less/i.test(label)) return 0;
+  if (/^\s*<\s*\$?/.test(label)) return 0;
+  const orMore = /(\d+)\s*K\s*or\s*more/i.exec(label);
+  if (orMore) return parseInt(orMore[1], 10) * 1000;
+  const gt = /^\s*>\s*\$?(\d+)\s*K/i.exec(label);
+  if (gt) return parseInt(gt[1], 10) * 1000;
+  const range = /\$?(\d+)\s*K\s*[-–]\s*\$?(\d+)\s*K/i.exec(label);
+  if (range) return parseInt(range[1], 10) * 1000;
+  const single = /\$?(\d+)\s*K/i.exec(label);
+  if (single) return parseInt(single[1], 10) * 1000;
+  return Number.POSITIVE_INFINITY;
+}
+
+// Condense the 16-bucket Placer income ladder into 5 readable bins. The
+// Demographics-mode distribution bars get crowded at 16 rows — these
+// coarser groupings still preserve the long-tail shape (high-income
+// concentration in mountain-town visitor profiles) while staying
+// legible at strip-card height.
+const INCOME_BINS: { label: string; max: number }[] = [
+  { label: '< $25K', max: 25000 },
+  { label: '$25K - $50K', max: 50000 },
+  { label: '$50K - $100K', max: 100000 },
+  { label: '$100K - $150K', max: 150000 },
+  { label: '$150K+', max: Number.POSITIVE_INFINITY },
+];
+
+export function condenseIncomeBuckets(
+  buckets: { label: string; value: number }[],
+): { label: string; value: number }[] {
+  const sums = new Array<number>(INCOME_BINS.length).fill(0);
+  for (const b of buckets) {
+    const low = parseIncomeLow(b.label);
+    const idx = INCOME_BINS.findIndex((g) => low < g.max);
+    if (idx >= 0) sums[idx] += b.value;
+  }
+  return INCOME_BINS.map((g, i) => ({ label: g.label, value: sums[i] }));
+}
+
 // Classify a single zip into a visitor tier. Same rules as
 // tiersFromZipRows aggregation — kept as a standalone helper so per-row
 // transforms (e.g. building per-tier monthly YoY series from origins)
