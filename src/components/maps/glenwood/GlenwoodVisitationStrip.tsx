@@ -10,17 +10,17 @@ import { useMemo, useState } from 'react';
 import type { GlenwoodVisitationFile } from '../../../types/placer-glenwood';
 import { MiniTrendChart, type TrendSeries } from '../MiniTrendChart';
 import { GlenwoodDayOfWeekChart } from './GlenwoodDayOfWeekChart';
-import { GlenwoodVisitorTypePie } from './GlenwoodVisitorTypePie';
+import { GlenwoodVisitorTypePie, type VisitorPieSlice } from './GlenwoodVisitorTypePie';
 import { GlenwoodRankingCard, type RankingSection } from './GlenwoodRankingCard';
 import {
   averageByDayOfWeek,
   fmtCount,
-  tiersFromVisitationCategories,
   findLatestDate,
   timeframeWindows,
   sumInWindow,
   rollupMonthly,
   rollupAnnual,
+  yoyPctSeries,
 } from './glenwoodMetrics';
 import type { GlenwoodMetric } from './GlenwoodMetricToggle';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
@@ -100,16 +100,6 @@ export function GlenwoodVisitationStrip({
   );
   const tw = useMemo(() => timeframeWindows(latestDate, timeframe), [latestDate, timeframe]);
 
-  const tierSlices = useMemo(
-    () =>
-      tiersFromVisitationCategories(
-        file.dailyVisits.byType,
-        file.dailyVisits.byDistance,
-        latestYear,
-      ),
-    [file, latestYear],
-  );
-
   // Trends-window source rows for the active dimension. When the filter
   // selects "overnight", we fall back to the same dimension's source for
   // the trend lines (distance, by default) — the overnight feed only has
@@ -124,6 +114,111 @@ export function GlenwoodVisitationStrip({
   const filterKeys = filter?.keys ?? [];
   const isSectionSelection = filterKeys.includes('ALL');
   const rowKeys = filterKeys.filter((k) => k !== 'ALL');
+
+  // Visits Breakdown pie content mode. Defaults to a distance breakdown;
+  // a category-dimension filter swaps the pie to category. Distance and
+  // overnight filters keep the distance pie — overnight has only one row
+  // in the feed, so it can't drive a pie on its own. The historical tier
+  // (Local/Regional/Tourist) breakdown is no longer the default here.
+  const pieMode: 'distance' | 'category' =
+    filter?.dimension === 'category' ? 'category' : 'distance';
+
+  const pieSlices: VisitorPieSlice[] = useMemo(() => {
+    if (pieMode === 'category') {
+      const sums = TYPE_KEYS.map((k) => {
+        const value = sumInWindow(
+          file.dailyVisits.byType
+            .filter((r) => r.type === k)
+            .map((r) => ({ date: r.date, value: r.value })),
+          tw.window,
+        );
+        return { key: k, label: k, color: TYPE_COLORS[k], value };
+      });
+      const total = sums.reduce((acc, s) => acc + s.value, 0);
+      return sums.map((s) => ({ ...s, share: total > 0 ? s.value / total : 0 }));
+    }
+    const sums = DISTANCE_KEYS.map((k) => {
+      const value = sumInWindow(
+        file.dailyVisits.byDistance
+          .filter((r) => r.distance === k)
+          .map((r) => ({ date: r.date, value: r.value })),
+        tw.window,
+      );
+      return { key: k, label: `${k} mi`, color: DISTANCE_COLORS[k], value };
+    });
+    const total = sums.reduce((acc, s) => acc + s.value, 0);
+    return sums.map((s) => ({ ...s, share: total > 0 ? s.value / total : 0 }));
+  }, [pieMode, file, tw]);
+
+  // Highlight set for the pie. Section selection populates the full
+  // dimension key list — the pie treats size === slices.length as the
+  // default render (no dimming, no outlines), so a header click swaps the
+  // pie content without singling out any row. Distance/overnight filters
+  // both render the distance pie, but only distance-dimension keys can
+  // highlight a slice; an overnight selection draws no slice highlight.
+  const pieSelectedKeys: ReadonlySet<string> | null = useMemo(() => {
+    if (!filter) return null;
+    if (filter.dimension === 'overnight') return null;
+    if (filter.dimension !== pieMode) return null;
+    if (isSectionSelection) {
+      return new Set<string>(pieMode === 'distance' ? [...DISTANCE_KEYS] : [...TYPE_KEYS]);
+    }
+    return new Set(rowKeys);
+  }, [pieMode, filter, isSectionSelection, rowKeys]);
+
+  // YoY single-series source. Defaults to summed distance rows; switches
+  // to category or overnight when those dimensions are the active filter.
+  // When specific rows are selected within the dimension, the sum narrows
+  // to just those rows (so e.g. selecting "0-25 mi" gives the 0-25 band's
+  // YoY trend on its own).
+  const yoyDimension: 'distance' | 'category' | 'overnight' =
+    filter?.dimension === 'category'
+      ? 'category'
+      : filter?.dimension === 'overnight'
+        ? 'overnight'
+        : 'distance';
+
+  const yoyRows = useMemo<{ date: string; value: number }[]>(() => {
+    const keepRow = (key: string) => {
+      if (!filter || filter.dimension !== yoyDimension) return true;
+      if (isSectionSelection) return true;
+      return rowKeys.includes(key);
+    };
+    if (yoyDimension === 'category') {
+      return file.dailyVisits.byType
+        .filter((r) => keepRow(r.type))
+        .map((r) => ({ date: r.date, value: r.value }));
+    }
+    if (yoyDimension === 'overnight') {
+      return (file.dailyVisits.byOvernight ?? []).map((r) => ({
+        date: r.date,
+        value: r.value,
+      }));
+    }
+    return file.dailyVisits.byDistance
+      .filter((r) => keepRow(r.distance))
+      .map((r) => ({ date: r.date, value: r.value }));
+  }, [file, yoyDimension, filter, isSectionSelection, rowKeys]);
+
+  const yoySeries: TrendSeries[] = useMemo(
+    () => [
+      {
+        key: 'yoy',
+        label: 'YoY',
+        color: 'rgba(255,255,255,0.85)',
+        points: yoyPctSeries(yoyRows, tw),
+      },
+    ],
+    [yoyRows, tw],
+  );
+
+  const yoyDimensionLabel =
+    yoyDimension === 'category'
+      ? 'Category'
+      : yoyDimension === 'overnight'
+        ? 'Overnight'
+        : 'Distance';
+
   const trendCutoff = tw.trendStart === 'all' ? '' : tw.trendStart;
   const dimRows = useMemo(() => {
     if (trendDimension === 'category') {
@@ -223,10 +318,12 @@ export function GlenwoodVisitationStrip({
           );
     const sections: RankingSection[] = [];
 
-    // Distance
+    // Distance — preserve the near-to-far order from DISTANCE_KEYS rather
+    // than re-sorting by visit count.
     const distRowsAll = file.dailyVisits.byDistance;
     sections.push({
       title: 'Distance',
+      sort: 'none',
       rows: DISTANCE_KEYS.map((k) => {
         const rowsForKey = applyDow(distRowsAll.filter((r) => r.distance === k)).map((r) => ({
           date: r.date,
@@ -379,7 +476,7 @@ export function GlenwoodVisitationStrip({
           <div className="flex flex-col gap-2 min-w-0">
             <GlenwoodRankingCard
               title="Visitation Rankings"
-              subtitle={tw.subtitle}
+              subtitle={tw.subtitle.split(' vs ')[0]}
               sections={rankingSections}
               valueFormat={fmtCount}
               sort="value-desc"
@@ -388,49 +485,10 @@ export function GlenwoodVisitationStrip({
               selectedSections={selectedSections}
               onSectionClick={handleSectionClick}
             />
-          </div>
-        </div>
-      )}
-
-      <div
-        className="grid grid-cols-1 md:grid-cols-3 gap-3"
-        style={{ height: STRIP_CARD_HEIGHT }}
-      >
-        <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
-          <div
-            className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
-            style={{ color: 'var(--text-dim)' }}
-          >
-            <span>Visits Breakdown</span>
-            <span className="text-[9px]">{latestYear}</span>
-          </div>
-          <GlenwoodVisitorTypePie slices={tierSlices} />
-        </div>
-
-        {metric === 'visits' ? (
-          <>
-            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
-              <div
-                className="text-[10px] font-semibold uppercase tracking-wider flex items-center justify-between gap-2"
-                style={{ color: 'var(--text-dim)' }}
-              >
-                <span className="truncate">
-                  Visit Trends by {trendDimension === 'category' ? 'Type' : 'Distance'}
-                </span>
-              </div>
-              <div className="flex-1 min-h-0">
-                <MiniTrendChart
-                  series={trendSeries}
-                  height="fill"
-                  valueFormat={(v) => fmtCount(v)}
-                  highlightedKey={highlightedSeriesKeys}
-                  hideLegend
-                  tooltipDateGranularity={tw.trendGranularity}
-                />
-              </div>
-            </div>
-
-            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+            <div
+              className="glass rounded-md p-3 flex flex-col gap-2 min-h-0"
+              style={{ height: 170 }}
+            >
               <div
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
                 style={{ color: 'var(--text-dim)' }}
@@ -463,6 +521,81 @@ export function GlenwoodVisitationStrip({
                   else setDowFilter(dowFromBarIndex(barIdx));
                 }}
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div
+        className="grid grid-cols-1 md:grid-cols-3 gap-3"
+        style={{ height: STRIP_CARD_HEIGHT }}
+      >
+        <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            <span>Visits Breakdown</span>
+            <span className="text-[9px]">
+              {tw.subtitle.includes(' vs ')
+                ? tw.subtitle.split(' vs ')[0]
+                : tw.subtitle}
+            </span>
+          </div>
+          <GlenwoodVisitorTypePie
+            slices={pieSlices}
+            selectedKeys={pieSelectedKeys}
+            onSelectKey={(key) => handleRankingClick(rankingKey(pieMode, key))}
+          />
+        </div>
+
+        {metric === 'visits' ? (
+          <>
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wider flex items-center justify-between gap-2"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                <span className="truncate">
+                  Visit Trends by {trendDimension === 'category' ? 'Type' : 'Distance'}
+                </span>
+                <span className="text-[9px]">
+                  {timeframe === 'ytd' ? 'YTD' : timeframe === 'annual' ? 'Annual' : 'Monthly'}
+                </span>
+              </div>
+              <div className="flex-1 min-h-0">
+                <MiniTrendChart
+                  series={trendSeries}
+                  height="fill"
+                  valueFormat={(v) => fmtCount(v)}
+                  highlightedKey={highlightedSeriesKeys}
+                  hideLegend
+                  tooltipDateGranularity={tw.trendGranularity}
+                />
+              </div>
+            </div>
+
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                <span>YoY Change by {yoyDimensionLabel}</span>
+                <span className="text-[9px]">
+                  {timeframe === 'ytd' ? 'YTD' : timeframe === 'annual' ? 'Annual' : 'Monthly'}
+                </span>
+              </div>
+              <div className="flex-1 min-h-0">
+                <MiniTrendChart
+                  series={yoySeries}
+                  height="fill"
+                  yMin="auto"
+                  valueFormat={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
+                  hideLegend
+                  tooltipDateGranularity={tw.trendGranularity}
+                  zeroBaseline
+                />
+              </div>
             </div>
           </>
         ) : (

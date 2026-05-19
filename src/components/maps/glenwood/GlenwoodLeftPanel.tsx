@@ -126,11 +126,19 @@ export function GlenwoodLeftPanel({
       const latestYear = years.length > 0 ? Math.max(...years) : new Date().getFullYear();
       const latestDate = findLatestDate(data.visitation.dailyVisits.byType);
       const tw = latestDate ? timeframeWindows(latestDate, timeframe) : null;
+      // Match the rankings card subtitle style — present window only, no
+      // "vs prior" tail. The YoY chip on each ranking row already conveys
+      // the comparison.
+      const presentLabel = tw?.subtitle
+        ? tw.subtitle.includes(' vs ')
+          ? tw.subtitle.split(' vs ')[0]
+          : tw.subtitle
+        : undefined;
       const base = visitationKpis(
         data.visitation,
         latestYear,
         tw?.window,
-        tw?.subtitle,
+        presentLabel,
       );
       // When a ranking row is selected, overwrite Total Visits with the
       // narrowed sum for that row's dimension+key. Other KPIs (median
@@ -171,11 +179,40 @@ export function GlenwoodLeftPanel({
             : visitationFilter.dimension === 'distance'
               ? `${rowKeys[0]} mi`
               : rowKeys[0];
-        return base.map((k) =>
-          k.label === 'Total Visits'
-            ? { ...k, value: fmtCount(filteredTotal), sublabel: `${segLabel} · ${tw.subtitle}` }
-            : k,
-        );
+        // Look up the corresponding distance entry for the new
+        // distance-aware KPIs. Distance row clicks (single key) and the
+        // Overnight row resolve to their own bucket; multi-row, section,
+        // and category selections fall back to the 'All' value.
+        const daysMap = data.visitation.daysInMarketByDistance ?? {};
+        const familyMap = data.visitation.familyHouseholdsPctByDistance ?? {};
+        let distanceKey: string | null = null;
+        let distanceLabel = 'All distances';
+        if (
+          visitationFilter.dimension === 'distance' &&
+          !isWholeSection &&
+          rowKeys.length === 1
+        ) {
+          distanceKey = `${rowKeys[0]} mi`;
+          distanceLabel = distanceKey;
+        } else if (visitationFilter.dimension === 'overnight') {
+          distanceKey = 'Overnight';
+          distanceLabel = 'Overnight';
+        }
+        const daysVal = distanceKey != null ? daysMap[distanceKey] : undefined;
+        const familyVal = distanceKey != null ? familyMap[distanceKey] : undefined;
+
+        return base.map((k) => {
+          if (k.label === 'Total Visits') {
+            return { ...k, value: fmtCount(filteredTotal), sublabel: `${segLabel} · ${presentLabel ?? tw.subtitle}` };
+          }
+          if (k.label === 'Avg Days in Market' && daysVal != null) {
+            return { ...k, value: `${daysVal.toFixed(1)} days`, sublabel: distanceLabel };
+          }
+          if (k.label === 'Family HH' && familyVal != null) {
+            return { ...k, value: `${(familyVal * 100).toFixed(1)}%`, sublabel: distanceLabel };
+          }
+          return k;
+        });
       }
       return base;
     }

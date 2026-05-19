@@ -24,6 +24,14 @@ export interface GlenwoodVisitationFile {
   annualMetrics: GlenwoodAnnualVisitMetric[];
   avgDailyVisitors: Record<string, number>;
   visitorProfile: Record<string, number>;
+  // Latest reported year's Avg. Days in Market keyed by distance band
+  // (e.g., "0-25 mi"), plus "Overnight" and "All" (the visits-weighted
+  // average across the five distance bands). KPI block picks the right
+  // entry based on the active visitation filter.
+  daysInMarketByDistance: Record<string, number>;
+  // Latest reported year's Family Households share (0..1) from the
+  // Tourist Profile sheet, keyed by distance band and "All".
+  familyHouseholdsPctByDistance: Record<string, number>;
 }
 
 export interface GlenwoodHubMetricYear {

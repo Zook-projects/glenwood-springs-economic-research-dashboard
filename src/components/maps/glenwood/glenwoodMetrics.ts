@@ -218,6 +218,14 @@ const REGIONAL_ZIPS = new Set([
 
 export type VisitorTier = 'Local' | 'Regional' | 'Tourist';
 
+// Tier palette shared by every consumer of VisitorTier (pie wedges, YoY
+// chart legend, etc.). White-gradient — brightest = nearest tier (Local).
+export const TIER_COLOR: Record<VisitorTier, string> = {
+  Local: 'rgba(255,255,255,1)',
+  Regional: 'rgba(255,255,255,0.72)',
+  Tourist: 'rgba(255,255,255,0.46)',
+};
+
 // Classify a single zip into a visitor tier. Same rules as
 // tiersFromZipRows aggregation — kept as a standalone helper so per-row
 // transforms (e.g. building per-tier monthly YoY series from origins)
@@ -429,6 +437,71 @@ export function averageByDayOfWeek(
   }));
 }
 
+// Single-series YoY percent points for a flat row stream. Each input row
+// is summed into a period bucket (monthly or annual depending on
+// tw.trendGranularity), then divided by the same period in the prior year.
+// Returns one point per period whose prior-period total is > 0, with the
+// x value encoded as the decimal year MiniTrendChart consumes.
+//
+// Honors tw.trendMonthFilter (so YTD mode reports each year's Jan–N as a
+// single annual point) and tw.trendStart (so monthly mode only emits
+// points within the display window — the prior lookback ignores this
+// cutoff so YoY can still resolve at the edge of the window).
+export function yoyPctSeries(
+  rows: { date: string; value: number }[],
+  tw: TimeframeWindows,
+): { year: number; value: number }[] {
+  const isMonthly = tw.trendGranularity === 'monthly';
+  const periodOf = (d: string) => (isMonthly ? d.slice(0, 7) : d.slice(0, 4));
+
+  const monthInYtd = (d: string) => {
+    if (tw.trendMonthFilter == null) return true;
+    const m = parseInt(d.slice(5, 7), 10);
+    return m <= tw.trendMonthFilter;
+  };
+  const inTrendWindow = (d: string) => {
+    if (!isMonthly) return true;
+    if (tw.trendStart === 'all') return true;
+    return d >= tw.trendStart;
+  };
+
+  const totals = new Map<string, number>();
+  const allTotals = new Map<string, number>();
+  for (const r of rows) {
+    const d = normalizeRowDate(r.date);
+    if (!monthInYtd(d)) continue;
+    const key = periodOf(d);
+    allTotals.set(key, (allTotals.get(key) ?? 0) + r.value);
+    if (inTrendWindow(d)) {
+      totals.set(key, (totals.get(key) ?? 0) + r.value);
+    }
+  }
+
+  const points: { year: number; value: number }[] = [];
+  for (const key of Array.from(totals.keys()).sort()) {
+    const cur = totals.get(key)!;
+    let priorKey: string;
+    if (isMonthly) {
+      const [y, m] = key.split('-').map(Number);
+      priorKey = `${y - 1}-${String(m).padStart(2, '0')}`;
+    } else {
+      priorKey = String(parseInt(key, 10) - 1);
+    }
+    const prior = allTotals.get(priorKey) ?? 0;
+    if (prior <= 0) continue;
+    const pct = ((cur - prior) / prior) * 100;
+    let decYear: number;
+    if (isMonthly) {
+      const [y, m] = key.split('-').map(Number);
+      decYear = y + (m - 1) / 12;
+    } else {
+      decYear = parseInt(key, 10);
+    }
+    points.push({ year: decYear, value: pct });
+  }
+  return points;
+}
+
 // Roll daily rows up into monthly buckets. Used as data input for the
 // MiniTrendChart (which doesn't need year resolution but does need a
 // pluggable date range — monthly keeps the line readable across 12-24
@@ -598,6 +671,10 @@ export function visitationKpis(
   // the same number is implicit in the Visits Breakdown pie (Tourist slice)
   // and the Category section of the ranking card.
   void visitorsValue;
+  // New KPIs default to the 'All' distance entry; the left panel overrides
+  // them with the active distance/overnight band when a cross-filter is set.
+  const daysAll = file.daysInMarketByDistance?.['All'];
+  const familyAll = file.familyHouseholdsPctByDistance?.['All'];
   return [
     { label: 'Visitor Median Income', value: med ? fmtCurrency(med) : '—' },
     { label: 'Household Size', value: '2.6', sublabel: 'Avg (calc)' },
@@ -605,6 +682,16 @@ export function visitationKpis(
     {
       label: 'Median Stay',
       value: annual?.medianDailyTimeMinutes != null ? `${annual.medianDailyTimeMinutes} min` : '—',
+    },
+    {
+      label: 'Avg Days in Market',
+      value: daysAll != null ? `${fmtDecimal(daysAll, 1)} days` : '—',
+      sublabel: daysAll != null ? `${totalLabelYear} · weighted` : undefined,
+    },
+    {
+      label: 'Family HH',
+      value: familyAll != null ? `${(familyAll * 100).toFixed(1)}%` : '—',
+      sublabel: 'All distances',
     },
   ];
 }

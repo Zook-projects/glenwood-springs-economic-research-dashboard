@@ -210,8 +210,15 @@ def build_visitation() -> dict:
 
     # Visit Metrics: header row 2, data row 3+
     # Columns: B Geography, C Year, D Variable, E Metrics, F Value
+    # Variable is a distance band ("0-25 mi" through "250+ mi") OR "Overnight".
+    # Each (year, variable) combo carries the Metrics columns. We sum totals
+    # over distance bands and compute a visits-weighted Avg. Days in Market
+    # for the year. Overnight is a separate cross-cutting bucket that doesn't
+    # contribute to the weighted distance average.
     ws = wb["Visit Metrics"]
-    metrics_by_year: dict[int, dict] = {}
+    DISTANCE_BANDS = ("0-25 mi", "25-50 mi", "50-100 mi", "100-250 mi", "250+ mi")
+    # year → { variable → { metric → value } }
+    cells: dict[int, dict[str, dict[str, float]]] = {}
     for row in ws.iter_rows(min_row=3, values_only=True):
         if len(row) < 6:
             continue
@@ -224,54 +231,84 @@ def build_visitation() -> dict:
         val = row[5]
         if variable is None or metric is None or val is None:
             continue
-        rec = metrics_by_year.setdefault(
-            year,
-            {
-                "year": year,
-                "visits": 0,
-                "outOfMarketVisitors": 0,
-                "avgDaysInMarket": None,
-                "avgDailyTimeMinutes": None,
-                "medianDailyTimeMinutes": None,
-                "yoyPct": None,
-                "_visits_samples": 0,
-                "_oom_samples": 0,
-            },
-        )
-        m = str(metric).strip()
-        if m == "Visits":
-            v = positive_int(val)
-            if v is not None:
-                rec["visits"] += v
-                rec["_visits_samples"] += 1
-        elif m == "Out-of-Market Visitors":
-            v = positive_int(val)
-            if v is not None:
-                rec["outOfMarketVisitors"] += v
-                rec["_oom_samples"] += 1
-        elif m == "Avg. Days in Market":
-            f = finite_float(val)
-            if f is not None and rec["avgDaysInMarket"] is None:
-                rec["avgDaysInMarket"] = round(f, 3)
-        elif m == "Avg. Daily Time Spent in Market":
-            f = parse_minutes(val) or finite_float(val)
-            if f is not None and rec["avgDailyTimeMinutes"] is None:
-                rec["avgDailyTimeMinutes"] = int(f)
-        elif m == "Median Daily Time Spent in Market":
-            f = parse_minutes(val) or finite_float(val)
-            if f is not None and rec["medianDailyTimeMinutes"] is None:
-                rec["medianDailyTimeMinutes"] = int(f)
-        elif m == "Visits YOY (1 Year Ago)":
-            f = finite_float(val)
-            if f is not None and rec["yoyPct"] is None:
-                rec["yoyPct"] = round(f, 4)
+        v_str = str(variable).strip()
+        m_str = str(metric).strip()
+        cells.setdefault(year, {}).setdefault(v_str, {})[m_str] = val
 
     annual_metrics: list[dict] = []
-    for year in sorted(metrics_by_year):
-        rec = metrics_by_year[year]
-        rec.pop("_visits_samples", None)
-        rec.pop("_oom_samples", None)
-        annual_metrics.append(rec)
+    days_by_distance_latest: dict[str, float] = {}
+    latest_year_for_metrics: int | None = None
+    for year in sorted(cells):
+        per_var = cells[year]
+        # Totals: sum visits and OOM visitors across distance bands.
+        total_visits = 0
+        total_oom = 0
+        weighted_days_sum = 0.0
+        weighted_days_weight = 0
+        for band in DISTANCE_BANDS:
+            band_metrics = per_var.get(band) or {}
+            v = positive_int(band_metrics.get("Visits"))
+            if v is not None:
+                total_visits += v
+            o = positive_int(band_metrics.get("Out-of-Market Visitors"))
+            if o is not None:
+                total_oom += o
+            d = finite_float(band_metrics.get("Avg. Days in Market"))
+            if d is not None and v is not None and v > 0:
+                weighted_days_sum += v * d
+                weighted_days_weight += v
+        # First-row-wins style for daily-time metrics, anchored on 0-25 mi.
+        first_band = per_var.get("0-25 mi") or {}
+        avg_daily = first_band.get("Avg. Daily Time Spent in Market")
+        median_daily = first_band.get("Median Daily Time Spent in Market")
+        yoy = first_band.get("Visits YOY (1 Year Ago)")
+        avg_daily_f = parse_minutes(avg_daily) if avg_daily is not None else None
+        if avg_daily_f is None and avg_daily is not None:
+            avg_daily_f = finite_float(avg_daily)
+        median_daily_f = parse_minutes(median_daily) if median_daily is not None else None
+        if median_daily_f is None and median_daily is not None:
+            median_daily_f = finite_float(median_daily)
+        yoy_f = finite_float(yoy)
+        weighted_days = (
+            round(weighted_days_sum / weighted_days_weight, 3)
+            if weighted_days_weight > 0
+            else None
+        )
+        annual_metrics.append(
+            {
+                "year": year,
+                "visits": total_visits,
+                "outOfMarketVisitors": total_oom,
+                "avgDaysInMarket": weighted_days,
+                "avgDailyTimeMinutes": int(avg_daily_f) if avg_daily_f is not None else None,
+                "medianDailyTimeMinutes": int(median_daily_f) if median_daily_f is not None else None,
+                "yoyPct": round(yoy_f, 4) if yoy_f is not None else None,
+            }
+        )
+        latest_year_for_metrics = year
+
+    # Per-distance Avg. Days in Market for the latest year — used by the
+    # visitation KPI block when the user cross-filters to a specific band
+    # (e.g., "0-25 mi" → 60.566 days). 'All' is the visits-weighted average.
+    if latest_year_for_metrics is not None:
+        per_var = cells[latest_year_for_metrics]
+        total_visits_l = 0
+        weighted_sum = 0.0
+        for band in DISTANCE_BANDS:
+            band_metrics = per_var.get(band) or {}
+            d = finite_float(band_metrics.get("Avg. Days in Market"))
+            v = positive_int(band_metrics.get("Visits"))
+            if d is not None:
+                days_by_distance_latest[band] = round(d, 3)
+            if d is not None and v is not None and v > 0:
+                weighted_sum += v * d
+                total_visits_l += v
+        overnight_metrics = per_var.get("Overnight") or {}
+        d_over = finite_float(overnight_metrics.get("Avg. Days in Market"))
+        if d_over is not None:
+            days_by_distance_latest["Overnight"] = round(d_over, 3)
+        if total_visits_l > 0:
+            days_by_distance_latest["All"] = round(weighted_sum / total_visits_l, 3)
 
     # Average Daily Visitors: header row 2, data row 3+
     # Columns: B Type, C Daily Visitors
@@ -286,8 +323,10 @@ def build_visitation() -> dict:
             avg_daily_mix[label.strip()] = val
 
     # Visitor demographic pull from Tourist Profile (only the "All" distance
-    # subset, for the Visitation page's KPI block).
+    # subset, for the Visitation page's KPI block) plus per-distance Family
+    # Households share (cross-filters to whichever distance band is active).
     visitor_profile: dict[str, object] = {}
+    family_hh_by_distance: dict[str, float] = {}
     wb_profile = openpyxl.load_workbook(PROFILE_PATH, data_only=True, read_only=True)
     if "Tourist Profile" in wb_profile.sheetnames:
         ws_p = wb_profile["Tourist Profile"]
@@ -301,20 +340,51 @@ def build_visitation() -> dict:
             ("Overview", "Population", "_population"),
         )
         wanted = {(c, k): out for c, k, out in all_keys}
+        # Latest Time_range_year wins: track the max year seen for each
+        # (distance, output-key) combo so the file ordering doesn't matter.
+        latest_year_seen: dict[tuple[str, str], int] = {}
+        latest_year_family: dict[str, int] = {}
         for row in ws_p.iter_rows(min_row=3, values_only=True):
             if len(row) < 10:
                 continue
+            try:
+                time_range_year = int(row[3]) if row[3] is not None else None
+            except (TypeError, ValueError):
+                time_range_year = None
             distance = row[5]
             category = row[6]
             key = row[7]
             val = row[8]
-            if distance != "All" or not category or not key:
+            pct = row[9]
+            if not category or not key:
                 continue
-            tag = wanted.get((str(category).strip(), str(key).strip()))
-            if tag and val is not None:
-                v_val = positive_number(val)
-                if v_val is not None:
-                    visitor_profile[tag] = round(float(v_val)) if tag != "_population" else v_val
+            cat_s = str(category).strip()
+            key_s = str(key).strip()
+            tag = wanted.get((cat_s, key_s))
+            if tag and distance == "All" and val is not None:
+                prev_yr = latest_year_seen.get(("All", tag), -1)
+                if time_range_year is None or time_range_year >= prev_yr:
+                    v_val = positive_number(val)
+                    if v_val is not None:
+                        visitor_profile[tag] = (
+                            round(float(v_val)) if tag != "_population" else v_val
+                        )
+                        latest_year_seen[("All", tag)] = (
+                            time_range_year if time_range_year is not None else prev_yr
+                        )
+            # Family Households share, by distance (incl. "All").
+            if cat_s == "Households" and key_s == "Family Households" and pct is not None:
+                d_s = str(distance).strip() if distance else ""
+                if d_s:
+                    pct_f = finite_float(pct)
+                    prev_yr = latest_year_family.get(d_s, -1)
+                    if pct_f is not None and (
+                        time_range_year is None or time_range_year >= prev_yr
+                    ):
+                        family_hh_by_distance[d_s] = round(float(pct_f), 5)
+                        latest_year_family[d_s] = (
+                            time_range_year if time_range_year is not None else prev_yr
+                        )
 
     return {
         "source": "Placer.ai",
@@ -331,6 +401,8 @@ def build_visitation() -> dict:
         "annualMetrics": annual_metrics,
         "avgDailyVisitors": avg_daily_mix,
         "visitorProfile": visitor_profile,
+        "daysInMarketByDistance": days_by_distance_latest,
+        "familyHouseholdsPctByDistance": family_hh_by_distance,
     }
 
 

@@ -25,6 +25,10 @@ export interface RankingRow {
 export interface RankingSection {
   title: string;
   rows: RankingRow[];
+  // Optional per-section sort override. When omitted, the card-level
+  // `sort` prop applies. Use this to preserve a domain-specific order
+  // (e.g., distance bands sorted near-to-far rather than by value).
+  sort?: RankingSort;
 }
 
 export type RankingSort = 'value-desc' | 'yoy-signed-desc' | 'none';
@@ -141,7 +145,7 @@ export function GlenwoodRankingCard({
       </div>
       <div className="flex flex-col gap-1.5">
         {effectiveSections.map((section, sIdx) => {
-          const sorted = sortRows(section.rows, sort);
+          const sorted = sortRows(section.rows, section.sort ?? sort);
           // Per-section bar scale: use the max absolute value so bars in a
           // YoY section read symmetrically for both positive and negative
           // entries. For value-based sections, this collapses to the

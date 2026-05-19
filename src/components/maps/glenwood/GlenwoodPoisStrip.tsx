@@ -24,6 +24,7 @@ import {
   rollupAnnual,
   poiMonthlyFromOrigins,
   classifyZipTier,
+  TIER_COLOR,
   type VisitorTier,
 } from './glenwoodMetrics';
 
@@ -38,14 +39,6 @@ const SERIES_PALETTE = [
   '#4dd0e1', '#ffd54f', '#a1887f',
 ];
 
-// Match the tier colors used in GlenwoodVisitorTypePie so the YoY chart
-// reads as the same Local/Regional/Tourist palette. White-gradient, with
-// the brightest bar reserved for the nearest tier.
-const TIER_COLOR: Record<VisitorTier, string> = {
-  Local: 'rgba(255,255,255,1)',
-  Regional: 'rgba(255,255,255,0.72)',
-  Tourist: 'rgba(255,255,255,0.46)',
-};
 const TIER_ORDER: VisitorTier[] = ['Local', 'Regional', 'Tourist'];
 
 interface Props {
@@ -351,7 +344,7 @@ export function GlenwoodPoisStrip({
           <div className="flex flex-col gap-2 min-w-0">
             <GlenwoodRankingCard
               title="Visits per POI"
-              subtitle={`${selectionTag} · ${tw.subtitle}`}
+              subtitle={`${selectionTag} · ${tw.subtitle.split(' vs ')[0]}`}
               rows={visitsRows}
               valueFormat={fmtCount}
               sort="value-desc"
@@ -375,9 +368,18 @@ export function GlenwoodPoisStrip({
             <span className="text-[9px]">{selectionTag}</span>
           </div>
           <GlenwoodVisitorTypePie
-            slices={tierSlices}
-            selectedTier={selectedTier}
-            onSelectTier={setSelectedTier}
+            slices={tierSlices.map((s) => ({
+              key: s.tier,
+              label: s.tier,
+              color: TIER_COLOR[s.tier],
+              value: s.visits,
+              share: s.share,
+            }))}
+            selectedKeys={selectedTier ? new Set([selectedTier]) : null}
+            onSelectKey={(key) => {
+              const t = key as VisitorTier;
+              setSelectedTier(selectedTier === t ? null : t);
+            }}
           />
         </div>
 
@@ -389,7 +391,9 @@ export function GlenwoodPoisStrip({
                 style={{ color: 'var(--text-dim)' }}
               >
                 <span>Visit Trends by POI</span>
-                <span className="text-[9px]">{selectionTag}</span>
+                <span className="text-[9px]">
+                  {selectionTag} · {timeframe === 'ytd' ? 'YTD' : timeframe === 'annual' ? 'Annual' : 'Monthly'}
+                </span>
               </div>
               <div className="flex-1 min-h-0">
                 <MiniTrendChart
@@ -408,7 +412,9 @@ export function GlenwoodPoisStrip({
                 style={{ color: 'var(--text-dim)' }}
               >
                 <span>YoY Change by Tier</span>
-                <span className="text-[9px]">{selectionTag}</span>
+                <span className="text-[9px]">
+                  {selectionTag} · {timeframe === 'ytd' ? 'YTD' : timeframe === 'annual' ? 'Annual' : 'Monthly'}
+                </span>
               </div>
               {/* Inline legend chips — matches the tier-color scheme of
                   the Visits Breakdown pie above so the user can read all
