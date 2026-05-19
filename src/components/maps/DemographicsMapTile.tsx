@@ -3,7 +3,14 @@
 // metric selector, map-layer toggle (symbols/choropleth), color legend,
 // and a small headline-KPI mini-strip for the active scope.
 
-import type { ContextEnvelope, ContextLatest } from '../../types/context';
+import type {
+  ContextCountyEntry,
+  ContextEnvelope,
+  ContextLatest,
+  ContextPlaceEntry,
+  ContextTrend,
+  TrendPoint,
+} from '../../types/context';
 import {
   DEMOGRAPHICS_METRICS,
   type DemographicsMetric,
@@ -14,6 +21,25 @@ import type { GeoLevel, MapLayerKind } from './SubjectMapOverlay';
 import { MapToggleSegmented } from './MapToggleSegmented';
 
 export type { GeoLevel, MapLayerKind };
+
+// Sum each entity's `trend.population` into a single year-keyed series. Used
+// to feed composite metrics (e.g. Population 10-yr %) at the regional
+// aggregate level, where there is no single entity to read from.
+function aggregatePopulationTrend(
+  entities: Array<ContextPlaceEntry | ContextCountyEntry>,
+): TrendPoint[] {
+  const yearMap = new Map<number, number>();
+  for (const e of entities) {
+    const trend = e.trend?.population ?? [];
+    for (const tp of trend) {
+      if (tp.value == null) continue;
+      yearMap.set(tp.year, (yearMap.get(tp.year) ?? 0) + tp.value);
+    }
+  }
+  return Array.from(yearMap.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([year, value]) => ({ year, value }));
+}
 
 interface Props {
   bundle: ContextEnvelope;
@@ -51,12 +77,17 @@ export function DemographicsMapTile({
   const ramp = RAMPS.demographics;
 
   // Compute the visible distribution for the legend, scoped to the current
-  // geo-level. Used to render quintile bin labels.
+  // geo-level. Used to render quintile bin labels. Composite metrics (e.g.
+  // Population 10-yr %) read from each entity's trend rather than its
+  // single-year latest block.
   const distribution = (() => {
-    const entries = geoLevel === 'place' ? bundle.places : bundle.counties;
+    const entries: Array<ContextPlaceEntry | ContextCountyEntry> =
+      geoLevel === 'place' ? bundle.places : bundle.counties;
     const vals: number[] = [];
     for (const e of entries) {
-      const v = metric.extract(e.latest);
+      const v = metric.extractFromTrend
+        ? metric.extractFromTrend(e.trend)
+        : metric.extract(e.latest);
       if (v != null) vals.push(v);
     }
     return vals.sort((a, b) => a - b);
@@ -65,15 +96,16 @@ export function DemographicsMapTile({
 
   // Active entry for the headline mini-strip — selected place > selected
   // county > regional aggregate (sum/avg of all places).
-  const activeLatest: ContextLatest | null = (() => {
+  const activeEntity: ContextPlaceEntry | ContextCountyEntry | null = (() => {
     if (selectedZip) {
-      return bundle.places.find((p) => p.zip === selectedZip)?.latest ?? null;
+      return bundle.places.find((p) => p.zip === selectedZip) ?? null;
     }
     if (selectedCountyGeoid) {
-      return bundle.counties.find((c) => c.geoid === selectedCountyGeoid)?.latest ?? null;
+      return bundle.counties.find((c) => c.geoid === selectedCountyGeoid) ?? null;
     }
     return null;
   })();
+  const activeLatest: ContextLatest | null = activeEntity?.latest ?? null;
 
   // Compute an aggregate snapshot when no entity is selected.
   const aggregateSnapshot = (() => {
@@ -104,6 +136,30 @@ export function DemographicsMapTile({
       medianAge: popDenomForAge > 0 ? weightedAge / popDenomForAge : null,
       medianHhIncome: popDenomForIncome > 0 ? weightedIncome / popDenomForIncome : null,
     };
+  })();
+
+  // Headline value for the first mini stat. Composite metrics (e.g.
+  // Population 10-yr %) derive their value from a multi-year trend rather
+  // than a single-year latest block — for a selected entity we read its
+  // trend directly; for the regional aggregate we synthesize an aggregated
+  // population trend across all places (mirrors DemographicsMapStrip).
+  const headlineValueText = (() => {
+    if (metric.extractFromTrend) {
+      if (activeEntity) {
+        return metric.format(metric.extractFromTrend(activeEntity.trend));
+      }
+      const synthTrend: ContextTrend = {
+        population: aggregatePopulationTrend(bundle.places),
+      };
+      return metric.format(metric.extractFromTrend(synthTrend));
+    }
+    if (activeLatest) return metric.format(metric.extract(activeLatest));
+    if (aggregateSnapshot) {
+      return metric.format(
+        metric.extract(aggregateSnapshot as unknown as ContextLatest),
+      );
+    }
+    return '—';
   })();
 
   const activeLabel = (() => {
@@ -274,16 +330,7 @@ export function DemographicsMapTile({
       {/* Headline mini-strip — active scope */}
       <Section title={activeLabel.toUpperCase()}>
         <div className="grid grid-cols-2 gap-2">
-          <MiniStat
-            label={metric.label}
-            value={
-              activeLatest
-                ? metric.format(metric.extract(activeLatest))
-                : aggregateSnapshot
-                ? metric.format(metric.extract(aggregateSnapshot as unknown as ContextLatest))
-                : '—'
-            }
-          />
+          <MiniStat label={metric.label} value={headlineValueText} />
           <MiniStat
             label="Population"
             value={

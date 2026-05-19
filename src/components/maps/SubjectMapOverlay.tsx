@@ -10,9 +10,9 @@
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMapProjection } from '../SubjectMapCanvas';
-import type { ContextEnvelope, ContextLatest } from '../../types/context';
+import type { ContextEnvelope, ContextLatest, ContextTrend } from '../../types/context';
 import type { SubjectId } from '../../config/subjects';
-import { RAMPS, quintileIndex } from '../../lib/subjectColorRamps';
+import { NEGATIVE_DIVERGING_COLOR, RAMPS, quintileIndex } from '../../lib/subjectColorRamps';
 import type { CountyGeometry } from '../../lib/useCountyGeometry';
 import type { ZipMeta } from '../../types/flow';
 import { useEscapeKey } from '../../lib/useEscapeKey';
@@ -21,11 +21,14 @@ export type GeoLevel = 'place' | 'county';
 export type MapLayerKind = 'symbols' | 'choropleth';
 
 // Minimal metric shape required by the overlay. Demographics/Housing/Commerce
-// metric types all satisfy this.
+// metric types all satisfy this. Composite metrics that derive their value
+// from a multi-year trend (e.g. Population 10-yr %) expose extractFromTrend;
+// when present it takes precedence over extract.
 export interface OverlayMetric {
   label: string;
   extract: (latest: ContextLatest | null) => number | null;
   format: (v: number | null | undefined) => string;
+  extractFromTrend?: (trend: ContextTrend | null | undefined) => number | null;
 }
 
 interface Props {
@@ -98,7 +101,9 @@ export function SubjectMapOverlay({
         name: p.name,
         lat: z.lat,
         lng: z.lng,
-        value: metric.extract(p.latest),
+        value: metric.extractFromTrend
+          ? metric.extractFromTrend(p.trend)
+          : metric.extract(p.latest),
       });
     }
     return rows;
@@ -110,7 +115,9 @@ export function SubjectMapOverlay({
       .map((c) => ({
         geoid: c.geoid,
         name: c.name,
-        value: metric.extract(c.latest),
+        value: metric.extractFromTrend
+          ? metric.extractFromTrend(c.trend)
+          : metric.extract(c.latest),
       }));
   }, [bundle.counties, metric, countyFilter]);
 
@@ -131,18 +138,47 @@ export function SubjectMapOverlay({
     [countyRows],
   );
 
-  // Symbol radius: sqrt-scaled, 6–28 px range based on the place distribution.
-  const placeMaxValue = placeDist.length ? placeDist[placeDist.length - 1] : 1;
+  // Signed-metric detection — when the place distribution contains any
+  // negative values (currently Demographics Pop. 10-yr %), the symbol layer
+  // switches to diverging mode: size scales on magnitude (|value|) and color
+  // is binary (accent for positive, brick for negative) instead of quintile
+  // shading. The choropleth still reads the quintile palette so its
+  // legend remains valid.
+  const isSignedDistribution = useMemo(
+    () => placeDist.some((v) => v < 0) || countyDist.some((v) => v < 0),
+    [placeDist, countyDist],
+  );
+
+  // Symbol radius: sqrt-scaled, 6–28 px range based on the magnitude of the
+  // place distribution. Using |value| means negative values produce the
+  // same-sized symbol as their positive counterpart, which is the desired
+  // behavior for signed metrics; for all-positive metrics this is a no-op.
+  const placeMaxAbs = placeDist.length
+    ? Math.max(Math.abs(placeDist[0]), Math.abs(placeDist[placeDist.length - 1]))
+    : 1;
   const radiusFor = (value: number | null): number => {
-    if (value == null || value <= 0) return 4;
-    return 6 + Math.sqrt(value / placeMaxValue) * 22;
+    if (value == null || placeMaxAbs === 0) return 4;
+    const abs = Math.abs(value);
+    if (abs === 0) return 4;
+    return 6 + Math.sqrt(abs / placeMaxAbs) * 22;
   };
 
-  // Color from quintile, with a darker stroke for emphasis.
+  // Color from quintile, with a darker stroke for emphasis. Used by the
+  // choropleth fills (which retain quintile shading so the legend matches).
   const colorFor = (value: number | null, dist: readonly number[]): string => {
     if (value == null || dist.length === 0) return ramp.noData;
     const q = quintileIndex(value, dist);
     return ramp.palette[q];
+  };
+
+  // Symbol fill — binary diverging when the active metric has any negative
+  // values, otherwise quintile shading (legacy behavior).
+  const symbolFillFor = (value: number | null): string => {
+    if (value == null) return ramp.noData;
+    if (isSignedDistribution) {
+      return value < 0 ? NEGATIVE_DIVERGING_COLOR : ramp.accent;
+    }
+    return colorFor(value, placeDist);
   };
 
   // Project a county polygon's coordinates into SVG path data.
@@ -154,8 +190,10 @@ export function SubjectMapOverlay({
     return features.map((f) => {
       const coords = projectGeometry(f.geometry, project);
       const d = coordsToPath(coords);
-      const value = bundle.counties.find((c) => c.geoid === f.properties.geoid)?.latest;
-      const v = metric.extract(value ?? null);
+      const entry = bundle.counties.find((c) => c.geoid === f.properties.geoid);
+      const v = metric.extractFromTrend
+        ? metric.extractFromTrend(entry?.trend)
+        : metric.extract(entry?.latest ?? null);
       const fill = colorFor(v, countyDist);
       const valueText = metric.format(v);
       const labelXY = project(f.properties.centroid);
@@ -261,7 +299,7 @@ export function SubjectMapOverlay({
       {showSymbols && placeRows.map((p) => {
         const screen = project([p.lng, p.lat]);
         const r = radiusFor(p.value);
-        const fill = colorFor(p.value, placeDist);
+        const fill = symbolFillFor(p.value);
         const isSelected = selectedZips.has(p.zip);
         return (
           <g

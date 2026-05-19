@@ -92,6 +92,12 @@ export function quintileBreaks(sortedValues: readonly number[]): number[] {
   });
 }
 
+// Diverging color used for the negative side of signed metrics (e.g. the
+// Demographics map's Pop. 10y % metric). Sourced from the SERIES_PALETTE
+// brick so it harmonizes with every subject accent without introducing a
+// new palette token. Used by the ranked-list bars and the map symbols.
+export const NEGATIVE_DIVERGING_COLOR = '#c47979';
+
 // Categorical palette for multi-series trend lines (when multi-select is
 // active in the strip). Colors picked for distinct hue separation on the
 // near-black map background. Cycles via index modulo length.

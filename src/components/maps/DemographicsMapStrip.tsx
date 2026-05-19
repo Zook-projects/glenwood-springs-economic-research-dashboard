@@ -22,13 +22,14 @@ import type {
   TrendPoint,
 } from '../../types/context';
 import {
+  DEMOGRAPHICS_METRIC_BY_ID,
   DEMOGRAPHICS_METRICS,
   type DemographicsMetric,
   type DemographicsMetricId,
 } from './demographicsMetrics';
 import { SubjectKpiCard } from './SubjectKpiCard';
 import { MiniTrendChart, type TrendSeries } from './MiniTrendChart';
-import { RAMPS, seriesColor } from '../../lib/subjectColorRamps';
+import { NEGATIVE_DIVERGING_COLOR, RAMPS, seriesColor } from '../../lib/subjectColorRamps';
 import type { GeoLevel } from './SubjectMapOverlay';
 import type { WorkforceTotals } from '../../lib/workforceTotals';
 import { MultiSelectToolbar } from './MultiSelectToolbar';
@@ -126,18 +127,30 @@ export function DemographicsMapStrip({
   // Prefers metric.extractFromTrend() when present (composite metrics like
   // Population 10-yr % that need a multi-year computation); falls back to
   // metric.extract() for everyday single-year latest reads.
+  // When the active metric is Population, each row also gets a 10-yr %
+  // change as a YoY-style chip — mirrors the Glenwood Activity ranking
+  // card's signed-percent chip so the visual reads consistently across
+  // maps.
+  const showYoyChip = metricId === 'population';
+  const pop10yrExtract = DEMOGRAPHICS_METRIC_BY_ID.population10yrPct.extractFromTrend;
   const rankedRows = useMemo(() => {
-    const rows = (geoLevel === 'county' ? filteredCounties : filteredPlaces).map((e) => ({
-      id: 'zip' in e ? e.zip : e.geoid,
-      name: e.name,
-      value: metric.extractFromTrend
-        ? metric.extractFromTrend(e.trend)
-        : metric.extract(e.latest),
-    }));
+    const rows = (geoLevel === 'county' ? filteredCounties : filteredPlaces).map((e) => {
+      const pct = showYoyChip && pop10yrExtract ? pop10yrExtract(e.trend) : null;
+      return {
+        id: 'zip' in e ? e.zip : e.geoid,
+        name: e.name,
+        value: metric.extractFromTrend
+          ? metric.extractFromTrend(e.trend)
+          : metric.extract(e.latest),
+        // YoY value is stored as a percentage (e.g. 8.5 for +8.5%) so the
+        // chip formatter can render it directly without re-scaling.
+        yoyPct: pct == null ? null : pct * 100,
+      };
+    });
     return rows
       .filter((r) => r.value != null)
       .sort((a, b) => (b.value as number) - (a.value as number));
-  }, [filteredCounties, filteredPlaces, geoLevel, metric]);
+  }, [filteredCounties, filteredPlaces, geoLevel, metric, showYoyChip, pop10yrExtract]);
 
   // Trend series — multi-series when ≥1 entity selected, otherwise the
   // single regional aggregate line. Uses the active metric's trendKey
@@ -291,6 +304,7 @@ export function DemographicsMapStrip({
           }
           geoLevel={geoLevel}
           accent={accent}
+          showYoyChip={showYoyChip}
         />
       </div>
     </div>
@@ -422,13 +436,18 @@ function TrendCard({
       </div>
       <div className="flex-1 min-h-0">
         {series ? (
-          <MiniTrendChart series={series} height="fill" />
+          <MiniTrendChart
+            series={series}
+            height="fill"
+            tooltipDateGranularity="annual"
+          />
         ) : (
           <MiniTrendChart
             data={singlePoints ?? []}
             color={color}
             height="fill"
             name={singleSeriesName}
+            tooltipDateGranularity="annual"
           />
         )}
       </div>
@@ -443,15 +462,31 @@ function RankedListCard({
   onSelect,
   geoLevel,
   accent,
+  showYoyChip = false,
 }: {
-  rows: Array<{ id: string; name: string; value: number | null }>;
+  rows: Array<{ id: string; name: string; value: number | null; yoyPct?: number | null }>;
   metric: DemographicsMetric;
   selectedIds: Set<string>;
   onSelect: (id: string) => void;
   geoLevel: GeoLevel;
   accent: string;
+  // When true, render a signed-percent 10-yr change chip on each row.
+  // Style mirrors the Glenwood Activity ranking card's YoY chip — green
+  // for positive, red for negative, dim em-dash for null.
+  showYoyChip?: boolean;
 }) {
+  // Diverging mode: any row with a negative value flips the bar layout to
+  // anchor on a zero centerline so negative bars extend left and positive
+  // bars extend right (instead of disappearing under a zero-width segment).
+  // Auto-detected so we don't need a per-metric flag — works correctly for
+  // any signed metric the demographics map adds in the future.
+  const hasNegative = rows.some((r) => r.value != null && r.value < 0);
+  const maxAbs = rows.reduce(
+    (m, r) => Math.max(m, r.value != null ? Math.abs(r.value) : 0),
+    0,
+  );
   const max = rows.length ? (rows[0].value ?? 0) : 0;
+
   return (
     <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
       <div
@@ -460,9 +495,24 @@ function RankedListCard({
       >
         {geoLevel === 'county' ? 'Counties' : 'Places'} by {metric.label.toLowerCase()}
       </div>
+      {showYoyChip && (
+        // Tiny column header so the YoY chip's denominator is self-evident.
+        // Spacer spans mirror the row's column widths to keep "10Y" aligned
+        // over the chip rather than relying on absolute positioning.
+        <div className="flex items-center gap-2 px-1" aria-hidden="true">
+          <span className="w-[80px] shrink-0" />
+          <span className="flex-1" />
+          <span className="w-[80px] shrink-0" />
+          <span
+            className="text-[9px] uppercase tracking-wider shrink-0 text-center"
+            style={{ minWidth: 44, color: 'var(--text-dim)' }}
+          >
+            10Y
+          </span>
+        </div>
+      )}
       <ul className="flex flex-col gap-1 flex-1 min-h-0 overflow-y-auto">
         {rows.map((r) => {
-          const pct = r.value != null && max > 0 ? r.value / max : 0;
           const active = selectedIds.has(r.id);
           return (
             <li key={r.id}>
@@ -481,27 +531,113 @@ function RankedListCard({
                 >
                   {r.name}
                 </span>
-                <span
-                  className="flex-1 h-2 rounded-full overflow-hidden"
-                  style={{ background: 'rgba(255,255,255,0.05)' }}
-                >
-                  <span
-                    className="block h-full"
-                    style={{ width: `${pct * 100}%`, background: accent }}
+                {hasNegative ? (
+                  <DivergingBar
+                    value={r.value}
+                    maxAbs={maxAbs}
+                    positiveColor={accent}
+                    negativeColor={NEGATIVE_DIVERGING_COLOR}
                   />
-                </span>
+                ) : (
+                  <span
+                    className="flex-1 h-2 rounded-full overflow-hidden"
+                    style={{ background: 'rgba(255,255,255,0.05)' }}
+                  >
+                    <span
+                      className="block h-full"
+                      style={{
+                        width: `${(r.value != null && max > 0 ? r.value / max : 0) * 100}%`,
+                        background: accent,
+                      }}
+                    />
+                  </span>
+                )}
                 <span
                   className="text-[10px] tabular-nums w-[80px] text-right shrink-0"
                   style={{ color: 'var(--text-h)' }}
                 >
                   {metric.format(r.value)}
                 </span>
+                {showYoyChip && <YoyChip pct={r.yoyPct ?? null} />}
               </button>
             </li>
           );
         })}
       </ul>
     </div>
+  );
+}
+
+// Signed-percent chip used to surface 10-yr % change on the Population
+// ranking. Visual mirrors the Glenwood Activity ranking card's YoY chip:
+// green for positive, red for negative, dim em-dash for null.
+function YoyChip({ pct }: { pct: number | null }) {
+  const positive = pct != null && pct > 0;
+  const negative = pct != null && pct < 0;
+  const color = positive
+    ? '#34d399'
+    : negative
+      ? '#f87171'
+      : 'var(--text-dim)';
+  const background = positive
+    ? 'rgba(52, 211, 153, 0.12)'
+    : negative
+      ? 'rgba(248, 113, 113, 0.12)'
+      : 'transparent';
+  const text =
+    pct == null ? '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`;
+  return (
+    <span
+      className="text-[9px] tabular-nums shrink-0 text-right px-1 rounded"
+      style={{ minWidth: 44, color, background }}
+      title="10-yr % change"
+    >
+      {text}
+    </span>
+  );
+}
+
+function DivergingBar({
+  value,
+  maxAbs,
+  positiveColor,
+  negativeColor,
+}: {
+  value: number | null;
+  maxAbs: number;
+  positiveColor: string;
+  negativeColor: string;
+}) {
+  const pct = value != null && maxAbs > 0 ? value / maxAbs : 0;
+  // Half-width fractions, capped at 50% per side.
+  const halfPct = Math.min(50, Math.abs(pct) * 50);
+  const isPositive = pct >= 0;
+  return (
+    <span
+      className="flex-1 h-2 rounded-full overflow-hidden relative"
+      style={{ background: 'rgba(255,255,255,0.05)' }}
+    >
+      {/* Zero centerline */}
+      <span
+        className="absolute top-0 bottom-0"
+        style={{
+          left: '50%',
+          width: 1,
+          background: 'rgba(255,255,255,0.22)',
+          transform: 'translateX(-0.5px)',
+        }}
+      />
+      {value != null && (
+        <span
+          className="absolute top-0 bottom-0"
+          style={
+            isPositive
+              ? { left: '50%', width: `${halfPct}%`, background: positiveColor }
+              : { right: '50%', width: `${halfPct}%`, background: negativeColor }
+          }
+        />
+      )}
+    </span>
   );
 }
 

@@ -279,6 +279,7 @@ export function CommerceMapStrip({
           color={accent}
           valueFormat={variant.format}
           singleSeriesName={variant.label}
+          cadence={cadence}
         />
         <RankedListCard
           rows={rankedRows}
@@ -393,6 +394,7 @@ function TrendCard({
   color,
   valueFormat,
   singleSeriesName,
+  cadence,
 }: {
   title: string;
   subtitle?: string;
@@ -401,6 +403,9 @@ function TrendCard({
   color: string;
   valueFormat?: (v: number) => string;
   singleSeriesName?: string;
+  // Drives the tooltip's date granularity: annual cadence drops the month
+  // (the underlying CDOR rollup is full-year only), monthly keeps it.
+  cadence: CommerceCadence;
 }) {
   return (
     <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
@@ -427,6 +432,7 @@ function TrendCard({
             height="fill"
             yMin="zero"
             valueFormat={valueFormat}
+            tooltipDateGranularity={cadence === 'annual' ? 'annual' : 'monthly'}
           />
         ) : (
           <MiniTrendChart
@@ -436,6 +442,7 @@ function TrendCard({
             yMin="zero"
             valueFormat={valueFormat}
             name={singleSeriesName}
+            tooltipDateGranularity={cadence === 'annual' ? 'annual' : 'monthly'}
           />
         )}
       </div>

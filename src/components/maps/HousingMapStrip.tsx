@@ -385,6 +385,7 @@ function TrendCard({
             height="fill"
             yMin="zero"
             valueFormat={valueFormat}
+            tooltipDateGranularity="annual"
           />
         ) : (
           <MiniTrendChart
@@ -394,6 +395,7 @@ function TrendCard({
             yMin="zero"
             valueFormat={valueFormat}
             name={singleSeriesName}
+            tooltipDateGranularity="annual"
           />
         )}
       </div>
