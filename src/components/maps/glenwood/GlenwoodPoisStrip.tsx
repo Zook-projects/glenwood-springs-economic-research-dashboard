@@ -35,8 +35,6 @@ const TIER_YEAR = 2025;
 import type { GlenwoodMetric } from './GlenwoodMetricToggle';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
-const STRIP_CARD_HEIGHT = 260;
-
 const TIER_ORDER: VisitorTier[] = ['Local', 'Regional', 'Tourist'];
 
 interface Props {

@@ -76,11 +76,8 @@ export function DemographicsMapView() {
           countyFilter={mapState.countyFilter}
           selectedZips={mapState.selectedZips}
           selectedCountyGeoids={mapState.selectedCountyGeoids}
-          multiSelect={mapState.multiSelect}
-          onMultiSelectChange={mapState.setMultiSelect}
           onToggleZip={mapState.handleToggleZip}
           onToggleCounty={mapState.handleToggleCounty}
-          onClearSelections={mapState.clearSelections}
           workforce={workforce}
         />
       }

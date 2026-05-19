@@ -29,8 +29,6 @@ import type { GlenwoodMetric } from './GlenwoodMetricToggle';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 import type { VisitationFilter } from './GlenwoodBottomStrip';
 
-const STRIP_CARD_HEIGHT = 260;
-
 const DISTANCE_COLORS: Record<string, string> = {
   '0-25': '#cfe0f5',
   '25-50': '#a6c8ea',

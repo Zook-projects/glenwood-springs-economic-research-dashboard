@@ -24,8 +24,6 @@ import { RAMPS, seriesColor } from '../../lib/subjectColorRamps';
 import type { GeoLevel } from './SubjectMapOverlay';
 import type { WorkforceTotals } from '../../lib/workforceTotals';
 
-const STRIP_CARD_HEIGHT = 260;
-
 interface Props {
   bundle: ContextEnvelope;
   variantId: CommerceVariantId;
@@ -34,14 +32,11 @@ interface Props {
   countyFilter: string | null;
   selectedZips: Set<string>;
   selectedCountyGeoids: Set<string>;
-  multiSelect: boolean;
-  onMultiSelectChange: (next: boolean) => void;
   // Ranked-list click handlers (always toggle in/out — the ranked list is
   // the canonical multi-select comparison surface). Map-symbol clicks live
   // on SubjectMapOverlay and don't flow through the strip.
   onToggleZip: (zip: string) => void;
   onToggleCounty: (geoid: string) => void;
-  onClearSelections: () => void;
   workforce: WorkforceTotals;
 }
 
@@ -60,11 +55,8 @@ export function CommerceMapStrip({
   countyFilter,
   selectedZips,
   selectedCountyGeoids,
-  multiSelect,
-  onMultiSelectChange,
   onToggleZip,
   onToggleCounty,
-  onClearSelections,
   workforce,
 }: Props) {
   const variant = COMMERCE_METRICS.find((m) => m.id === variantId)!;

@@ -44,8 +44,6 @@ const TIER_YEAR = 2025;
 import type { GlenwoodMetric } from './GlenwoodMetricToggle';
 import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
-const STRIP_CARD_HEIGHT = 260;
-
 function bracketSortKey(label: string): number {
   const m = label.match(/(\d+)\s*K/);
   return m ? parseInt(m[1], 10) : 0;

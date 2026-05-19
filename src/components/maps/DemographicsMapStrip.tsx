@@ -33,8 +33,6 @@ import { NEGATIVE_DIVERGING_COLOR, RAMPS, seriesColor } from '../../lib/subjectC
 import type { GeoLevel } from './SubjectMapOverlay';
 import type { WorkforceTotals } from '../../lib/workforceTotals';
 
-const STRIP_CARD_HEIGHT = 260;
-
 interface Props {
   bundle: ContextEnvelope;
   metricId: DemographicsMetricId;
@@ -44,15 +42,12 @@ interface Props {
   countyFilter: string | null;
   selectedZips: Set<string>;
   selectedCountyGeoids: Set<string>;
-  multiSelect: boolean;
-  onMultiSelectChange: (next: boolean) => void;
   // Ranked-list click handlers (always toggle in/out — the ranked list is
   // the canonical multi-select comparison surface). Map-symbol clicks live
   // on SubjectMapOverlay and use the view's onSelectZip/onSelectCounty
   // directly, so this strip doesn't need to thread those through.
   onToggleZip: (zip: string) => void;
   onToggleCounty: (geoid: string) => void;
-  onClearSelections: () => void;
   workforce: WorkforceTotals;
 }
 
@@ -73,11 +68,8 @@ export function DemographicsMapStrip({
   countyFilter,
   selectedZips,
   selectedCountyGeoids,
-  multiSelect,
-  onMultiSelectChange,
   onToggleZip,
   onToggleCounty,
-  onClearSelections,
   workforce,
 }: Props) {
   const metric = DEMOGRAPHICS_METRICS.find((m) => m.id === metricId)!;
