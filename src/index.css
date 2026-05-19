@@ -109,12 +109,13 @@ html, body, #root {
 }
 
 /* Placer.ai theme scope — applied inside ActivityMapView only. Re-binds the
-   accent triplet to Placer purple so every var(--accent*) consumer (corridor
-   highlights, ZipSelector active chip, tab underline, filter chips) follows
-   suit without per-component edits. Panel/text/corridor ramp variables are
-   left alone so the rest of the dark glass aesthetic stays consistent. */
+   accent triplet to the Regional tier grey from the visitor-type palette
+   so every var(--accent*) consumer (corridor highlights, ZipSelector
+   active chip, tab underline, filter chips) follows suit without per-
+   component edits. Panel/text/corridor ramp variables are left alone so
+   the rest of the dark glass aesthetic stays consistent. */
 .placer-theme {
-  --accent: #B794F4;
-  --accent-soft: rgba(183, 148, 244, 0.18);
-  --accent-glow: rgba(183, 148, 244, 0.55);
+  --accent: rgba(255, 255, 255, 0.72);
+  --accent-soft: rgba(255, 255, 255, 0.18);
+  --accent-glow: rgba(255, 255, 255, 0.55);
 }

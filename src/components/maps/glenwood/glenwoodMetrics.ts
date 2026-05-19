@@ -8,6 +8,193 @@ import type {
   GlenwoodHubsFile,
   GlenwoodPoisFile,
 } from '../../../types/placer-glenwood';
+import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
+
+// Half-open date interval [startDate, endDate). Inputs are "YYYY-MM-DD"
+// strings; comparisons rely on lexicographic ordering, which works as long
+// as every date is zero-padded to 10 chars.
+export interface DateWindow {
+  startDate: string; // inclusive
+  endDate: string;   // exclusive
+}
+
+export interface TimeframeWindows {
+  // The window the user's data should aggregate over (KPIs, rankings, etc.).
+  window: DateWindow;
+  // Prior-year window used for YoY computation.
+  prior: DateWindow;
+  // For the trends chart only — start date of the series to plot.
+  // 'all' means "no lower bound, plot every available point".
+  trendStart: string | 'all';
+  // Granularity for the trends chart: 'annual' rolls daily/monthly rows
+  // into year buckets; 'monthly' plots monthly points.
+  trendGranularity: 'annual' | 'monthly';
+  // When set (YTD mode), restricts the annual trend rollup to rows whose
+  // month-of-year is <= this number (1-12). Each year therefore contributes
+  // a single Jan-through-N point so trend lines are apples-to-apples
+  // across years.
+  trendMonthFilter?: number;
+  // Human-readable subtitle for ranking-card headers, describing the YoY
+  // comparison ("Last 12 months vs prior 12 months", "Apr 2026 vs Apr 2025").
+  subtitle: string;
+}
+
+// Locate the latest "YYYY-MM-DD" or "YYYY-MM" string in a rows array.
+// Returns null when the array is empty.
+export function findLatestDate(rows: { date: string }[]): string | null {
+  let latest: string | null = null;
+  for (const r of rows) {
+    if (!r.date) continue;
+    if (latest == null || r.date > latest) latest = r.date;
+  }
+  return latest;
+}
+
+// Add (positive) or subtract (negative) calendar months from a "YYYY-MM-DD"
+// string, returning a new "YYYY-MM-DD" string. Day always normalizes to
+// the 1st so window math is unambiguous.
+function shiftMonth(yyyymmdd: string, deltaMonths: number): string {
+  const y = parseInt(yyyymmdd.slice(0, 4), 10);
+  const m = parseInt(yyyymmdd.slice(5, 7), 10) - 1; // 0..11
+  const total = y * 12 + m + deltaMonths;
+  const ny = Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12;
+  return `${String(ny).padStart(4, '0')}-${String(nm + 1).padStart(2, '0')}-01`;
+}
+
+// Normalize any "YYYY-MM" or "YYYY-MM-DD" string to "YYYY-MM-01".
+function toMonthStart(date: string): string {
+  return `${date.slice(0, 7)}-01`;
+}
+
+// Build the windows + trends config for a given timeframe, anchored at the
+// most-recently-reported month in the data.
+export function timeframeWindows(
+  latestDate: string,
+  timeframe: GlenwoodTimeframe,
+): TimeframeWindows {
+  const monthStart = toMonthStart(latestDate);
+  // End of latest month, expressed as the start of the next month so the
+  // [startDate, endDate) half-open form catches every day in the latest
+  // calendar month.
+  const monthEnd = shiftMonth(monthStart, 1);
+
+  if (timeframe === 'ytd') {
+    const latestYear = parseInt(monthStart.slice(0, 4), 10);
+    const latestMonth = parseInt(monthStart.slice(5, 7), 10); // 1..12
+    const ytdStart = `${latestYear}-01-01`;
+    const priorYtdStart = `${latestYear - 1}-01-01`;
+    // Prior YTD ends one year before the current YTD's exclusive end.
+    const priorYtdEnd = shiftMonth(monthEnd, -12);
+    const monthLabel = new Date(latestYear, latestMonth - 1, 1)
+      .toLocaleString('en-US', { month: 'short' });
+    return {
+      window: { startDate: ytdStart, endDate: monthEnd },
+      prior: { startDate: priorYtdStart, endDate: priorYtdEnd },
+      trendStart: 'all',
+      trendGranularity: 'annual',
+      trendMonthFilter: latestMonth,
+      subtitle: `Jan–${monthLabel} ${latestYear} vs Jan–${monthLabel} ${latestYear - 1}`,
+    };
+  }
+
+  if (timeframe === 'monthly') {
+    const priorStart = shiftMonth(monthStart, -12);
+    const priorEnd = shiftMonth(monthEnd, -12);
+    // Trends: trailing 13 months ending at the latest reported month —
+    // i.e. one full year of comparison plus the latest month itself. This
+    // gives the chart a stable rolling-window shape regardless of where in
+    // the calendar the data lands.
+    const trendStart = shiftMonth(monthStart, -12);
+    const monthLabel = new Date(
+      parseInt(monthStart.slice(0, 4), 10),
+      parseInt(monthStart.slice(5, 7), 10) - 1,
+      1,
+    );
+    const priorLabel = new Date(monthLabel);
+    priorLabel.setFullYear(priorLabel.getFullYear() - 1);
+    const fmt = (d: Date) =>
+      d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+    return {
+      window: { startDate: monthStart, endDate: monthEnd },
+      prior: { startDate: priorStart, endDate: priorEnd },
+      trendStart,
+      trendGranularity: 'monthly',
+      subtitle: `${fmt(monthLabel)} vs ${fmt(priorLabel)}`,
+    };
+  }
+
+  // Annual mode — trailing 12 months window, prior 12 months for YoY.
+  const last12Start = shiftMonth(monthEnd, -12);
+  const prior12Start = shiftMonth(last12Start, -12);
+  return {
+    window: { startDate: last12Start, endDate: monthEnd },
+    prior: { startDate: prior12Start, endDate: last12Start },
+    trendStart: 'all',
+    trendGranularity: 'annual',
+    subtitle: 'Last 12 mo.',
+  };
+}
+
+// Pad a row date to the canonical "YYYY-MM-DD" form. The Placer.ai POI
+// feed exports months as "YYYY-MM" (7 chars), but window boundaries are
+// always "YYYY-MM-DD" — without padding, a lexicographic comparison
+// treats "2025-12" as less than "2025-12-01" and the row gets excluded
+// from a Dec-2025 window. Daily rows are already 10 chars and pass
+// through unchanged.
+export function normalizeRowDate(date: string): string {
+  return date.length === 7 ? `${date}-01` : date;
+}
+
+// Sum the value of every row whose date falls in [window.startDate,
+// window.endDate). Row dates are normalized to "YYYY-MM-DD" so monthly-
+// grain feeds compare against the day-grain boundaries cleanly.
+export function sumInWindow(
+  rows: { date: string; value: number }[],
+  window: DateWindow,
+): number {
+  let total = 0;
+  for (const r of rows) {
+    const d = normalizeRowDate(r.date);
+    if (d >= window.startDate && d < window.endDate) {
+      total += r.value;
+    }
+  }
+  return total;
+}
+
+// Signed YoY percent for two windows. Returns null when the prior window
+// has zero or negative volume (can't divide).
+export function yoyPct(
+  rows: { date: string; value: number }[],
+  window: DateWindow,
+  prior: DateWindow,
+): number | null {
+  const cur = sumInWindow(rows, window);
+  const prev = sumInWindow(rows, prior);
+  if (prev <= 0) return null;
+  return ((cur - prev) / prev) * 100;
+}
+
+// Roll daily rows into per-year buckets. Year extracted as the first 4
+// chars of `date` (works for "YYYY-MM-DD" and "YYYY-MM").
+export function rollupAnnual(
+  rows: { date: string; value: number }[],
+  startDate?: string,
+  endDate?: string,
+): { date: string; value: number }[] {
+  const sums = new Map<string, number>();
+  for (const r of rows) {
+    const d = normalizeRowDate(r.date);
+    if (startDate && d < startDate) continue;
+    if (endDate && d >= endDate) continue;
+    const y = d.slice(0, 4);
+    sums.set(y, (sums.get(y) ?? 0) + r.value);
+  }
+  return Array.from(sums.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([y, value]) => ({ date: `${y}-01-01`, value }));
+}
 
 // Local = Glenwood Springs proper. Regional = the user's named "Roaring
 // Fork + I-70 corridor" zip set, which includes every dashboard workplace
@@ -30,6 +217,16 @@ const REGIONAL_ZIPS = new Set([
 ]);
 
 export type VisitorTier = 'Local' | 'Regional' | 'Tourist';
+
+// Classify a single zip into a visitor tier. Same rules as
+// tiersFromZipRows aggregation — kept as a standalone helper so per-row
+// transforms (e.g. building per-tier monthly YoY series from origins)
+// can avoid re-aggregating per call.
+export function classifyZipTier(zip: string): VisitorTier {
+  if (LOCAL_ZIPS.has(zip)) return 'Local';
+  if (REGIONAL_ZIPS.has(zip)) return 'Regional';
+  return 'Tourist';
+}
 
 export interface VisitorTierSlice {
   tier: VisitorTier;
@@ -156,6 +353,26 @@ export function avgHHSizeFromBuckets(
   return total / weight;
 }
 
+// Resolve a POI's monthly visit time series. The build script populates
+// `monthlyVisits` from the POI_Zipcodes_Visits sheet — merging zip-level
+// row sums with POI-level summary rows (for months Placer didn't ship a
+// zip breakdown). Falling back to summing `origins` would re-introduce
+// those summary-row gaps, so callers should prefer `monthlyVisits`.
+export function poiMonthlyFromOrigins(
+  p: GlenwoodFeatureEntity,
+): { date: string; value: number }[] {
+  if (p.monthlyVisits && p.monthlyVisits.length) return p.monthlyVisits;
+  // Defensive fallback for entities missing the canonical field.
+  const sums = new Map<string, number>();
+  for (const o of p.origins) {
+    if (!o.month) continue;
+    sums.set(o.month, (sums.get(o.month) ?? 0) + o.visits);
+  }
+  return Array.from(sums.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, value]) => ({ date: month, value }));
+}
+
 // Sum daily-visit rows over the most recent N years (default = full series).
 export function totalVisits(rows: { date: string; value: number }[], yearFilter?: number): number {
   if (yearFilter == null) {
@@ -163,6 +380,15 @@ export function totalVisits(rows: { date: string; value: number }[], yearFilter?
   }
   const tag = String(yearFilter);
   return rows.reduce((acc, r) => (r.date.startsWith(tag) ? acc + r.value : acc), 0);
+}
+
+// Same as totalVisits, but driven by an explicit half-open date window
+// instead of a year tag. Used by the timeframe-aware code paths.
+export function totalVisitsInWindow(
+  rows: { date: string; value: number }[],
+  window: DateWindow,
+): number {
+  return sumInWindow(rows, window);
 }
 
 // Average daily visits by day of week. Callers pass row sets where each
@@ -174,13 +400,19 @@ export function totalVisits(rows: { date: string; value: number }[], yearFilter?
 // Returns 7 entries Mon-Sun (the order Placer's BI tool uses).
 export function averageByDayOfWeek(
   rows: { date: string; value: number }[],
-  yearFilter?: number,
+  filter?: number | DateWindow,
 ): { day: string; value: number }[] {
-  const tag = yearFilter != null ? String(yearFilter) : null;
+  // Backwards-compat: a number filter is treated as a year tag (legacy
+  // call sites in glenwoodMetrics that haven't migrated to windowed
+  // mode). A DateWindow filter takes precedence when supplied.
+  const tag = typeof filter === 'number' ? String(filter) : null;
+  const window = filter && typeof filter === 'object' ? (filter as DateWindow) : null;
   const dailyTotal = new Map<string, number>();
   for (const r of rows) {
-    if (tag && !r.date.startsWith(tag)) continue;
-    dailyTotal.set(r.date, (dailyTotal.get(r.date) ?? 0) + r.value);
+    const d = normalizeRowDate(r.date);
+    if (tag && !d.startsWith(tag)) continue;
+    if (window && !(d >= window.startDate && d < window.endDate)) continue;
+    dailyTotal.set(d, (dailyTotal.get(d) ?? 0) + r.value);
   }
 
   const sums: number[] = [0, 0, 0, 0, 0, 0, 0];
@@ -204,11 +436,14 @@ export function averageByDayOfWeek(
 export function rollupMonthly(
   rows: { date: string; value: number }[],
   startDate?: string,
+  endDate?: string,
 ): { date: string; value: number }[] {
   const sums = new Map<string, number>();
   for (const r of rows) {
-    if (startDate && r.date < startDate) continue;
-    const month = r.date.slice(0, 7);
+    const d = normalizeRowDate(r.date);
+    if (startDate && d < startDate) continue;
+    if (endDate && d >= endDate) continue;
+    const month = d.slice(0, 7);
     sums.set(month, (sums.get(month) ?? 0) + r.value);
   }
   return Array.from(sums.entries())
@@ -269,6 +504,7 @@ export function aggregateFeatures(
   entities: GlenwoodFeatureEntity[],
   selectedIds: Set<string>,
   latestYear: string,
+  window?: DateWindow,
 ): FeatureAggregate {
   const visible = selectedIds.size === 0
     ? entities
@@ -283,8 +519,17 @@ export function aggregateFeatures(
   let population = 0;
 
   for (const f of visible) {
-    const daily = f.dailyVisits ?? f.monthlyVisits ?? [];
-    const fTotal = daily.reduce((acc, r) => acc + r.value, 0);
+    // POIs: prefer origins-derived monthly visits (POI_Zipcodes_Visits) so
+    // window math captures the latest months. Hubs / city-wide already
+    // have daily series.
+    const daily =
+      f.dailyVisits ??
+      (f.monthlyVisits != null && f.origins.length === 0
+        ? f.monthlyVisits
+        : poiMonthlyFromOrigins(f));
+    const fTotal = window
+      ? sumInWindow(daily, window)
+      : daily.reduce((acc, r) => acc + r.value, 0);
     totalVisits += fTotal;
     const pop = profileScalar(f.profile, '_population') ?? 0;
     population += pop;
@@ -311,20 +556,52 @@ export function aggregateFeatures(
   };
 }
 
-// Visitation KPIs from the city-wide bundle.
-export function visitationKpis(file: GlenwoodVisitationFile, year: number): GlenwoodKpi[] {
+// Visitation KPIs from the city-wide bundle. When `window` is supplied, the
+// Total Visits + Out-of-market visitors values are recomputed from
+// dailyVisits within that window (rather than reading the annual metric
+// record), which is necessary in Monthly timeframe mode where only a single
+// month of data is in scope.
+export function visitationKpis(
+  file: GlenwoodVisitationFile,
+  year: number,
+  window?: DateWindow,
+  sublabel?: string,
+): GlenwoodKpi[] {
   const annual = file.annualMetrics.find((m) => m.year === year) ?? file.annualMetrics[file.annualMetrics.length - 1];
-  const totalThisYear = totalVisits(
-    file.dailyVisits.byType.filter((r) => r.type !== 'Inbound Commuters').map((r) => ({ date: r.date, value: r.value })),
-    annual?.year,
-  );
-  const visitorsThisYear = annual?.outOfMarketVisitors ?? 0;
+  const totalLabelYear = annual?.year ?? '—';
+
+  // Total Visits sums every category row per date (Residents + Inbound
+  // Commuters + Out-of-Market Visitors). Previously this excluded Inbound
+  // Commuters; the chart's Avg Daily Visits default now uses the same
+  // byType-summed total, so the KPI matches.
+  const totalVisitsValue = window
+    ? sumInWindow(
+        file.dailyVisits.byType.map((r) => ({ date: r.date, value: r.value })),
+        window,
+      )
+    : totalVisits(
+        file.dailyVisits.byType.map((r) => ({ date: r.date, value: r.value })),
+        annual?.year,
+      );
+  const visitorsValue = window
+    ? sumInWindow(
+        file.dailyVisits.byType
+          .filter((r) => r.type === 'Out-of-Market Visitors')
+          .map((r) => ({ date: r.date, value: r.value })),
+        window,
+      )
+    : (annual?.outOfMarketVisitors ?? 0);
+
   const med = file.visitorProfile['_medianIncome'];
+  const totalSublabel = sublabel ?? String(totalLabelYear);
+  // The dedicated "Out-of-market Visitors" KPI was removed by user request —
+  // the same number is implicit in the Visits Breakdown pie (Tourist slice)
+  // and the Category section of the ranking card.
+  void visitorsValue;
   return [
     { label: 'Visitor Median Income', value: med ? fmtCurrency(med) : '—' },
     { label: 'Household Size', value: '2.6', sublabel: 'Avg (calc)' },
-    { label: 'Total Visits', value: fmtCount(totalThisYear), sublabel: String(annual?.year ?? '—') },
-    { label: `${annual?.year ?? '—'} Visitors`, value: fmtCount(visitorsThisYear), sublabel: 'Out-of-market' },
+    { label: 'Total Visits', value: fmtCount(totalVisitsValue), sublabel: totalSublabel },
     {
       label: 'Median Stay',
       value: annual?.medianDailyTimeMinutes != null ? `${annual.medianDailyTimeMinutes} min` : '—',
@@ -337,8 +614,9 @@ export function hubKpis(
   file: GlenwoodHubsFile,
   selectedIds: Set<string>,
   latestYear: string,
+  window?: DateWindow,
 ): GlenwoodKpi[] {
-  const agg = aggregateFeatures(file.hubs, selectedIds, latestYear);
+  const agg = aggregateFeatures(file.hubs, selectedIds, latestYear, window);
   return featureKpis(agg, selectedIds.size, file.hubs.length, 'hubs');
 }
 
@@ -346,8 +624,9 @@ export function poiKpis(
   file: GlenwoodPoisFile,
   selectedIds: Set<string>,
   latestYear: string,
+  window?: DateWindow,
 ): GlenwoodKpi[] {
-  const agg = aggregateFeatures(file.pois, selectedIds, latestYear);
+  const agg = aggregateFeatures(file.pois, selectedIds, latestYear, window);
   return featureKpis(agg, selectedIds.size, file.pois.length, 'POIs');
 }
 

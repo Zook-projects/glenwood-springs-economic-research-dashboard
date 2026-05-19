@@ -1,24 +1,30 @@
 // GlenwoodVisitationStrip — bottom strip for the Visitation sub-view.
-// Always renders a Visits Breakdown pie as card 1; cards 2 + 3 swap by
-// metric. In Visits mode the Visit Trends + Avg Daily Visits cards share
-// a Type/Distance toggle (top-right of the trends card) and cross-filter:
-// clicking a series in the legend filters the day-of-week bars to that
-// series, and clicking a day-of-week bar filters the trend lines to rows
-// on that weekday.
+// Card 1 is the Visits Breakdown pie (always); cards 2 + 3 swap by metric.
+// In Visits mode the bottom row shows Visit Trends and Avg Daily Visits
+// by Day of Week. A 3-section ranking card sits above the rightmost
+// column. The ranking card and the DOW chart act as two-way cross-filters:
+//   - Clicking a ranking row narrows the trends + DOW + left-panel KPI.
+//   - Clicking a DOW bar narrows the trends + ranking card.
 
 import { useMemo, useState } from 'react';
 import type { GlenwoodVisitationFile } from '../../../types/placer-glenwood';
 import { MiniTrendChart, type TrendSeries } from '../MiniTrendChart';
 import { GlenwoodDayOfWeekChart } from './GlenwoodDayOfWeekChart';
 import { GlenwoodVisitorTypePie } from './GlenwoodVisitorTypePie';
-import { GlenwoodDimToggle } from './GlenwoodDimToggle';
-import { GlenwoodSeriesLegend } from './GlenwoodSeriesLegend';
+import { GlenwoodRankingCard, type RankingSection } from './GlenwoodRankingCard';
 import {
   averageByDayOfWeek,
   fmtCount,
   tiersFromVisitationCategories,
+  findLatestDate,
+  timeframeWindows,
+  sumInWindow,
+  rollupMonthly,
+  rollupAnnual,
 } from './glenwoodMetrics';
 import type { GlenwoodMetric } from './GlenwoodMetricToggle';
+import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
+import type { VisitationFilter } from './GlenwoodBottomStrip';
 
 const STRIP_CARD_HEIGHT = 260;
 
@@ -38,29 +44,61 @@ const TYPE_COLORS: Record<string, string> = {
 };
 const TYPE_KEYS = ['Residents', 'Inbound Commuters', 'Out-of-Market Visitors'] as const;
 
-type Dim = 'type' | 'distance';
+const OVERNIGHT_LABELS: Record<number, string> = {
+  0: 'Day Trip',
+  1: 'Overnight',
+};
+const OVERNIGHT_COLORS: Record<number, string> = {
+  0: '#7faedd',
+  1: '#FFB454',
+};
 
-// Day-of-week index used by JS getUTCDay (0=Sun..6=Sat) → our Mon-first
-// display order. averageByDayOfWeek returns bars in [Mon, Tue, ... Sun]
-// so index i in the bar list maps to JS dow = ((i + 1) % 7).
+// JS getUTCDay (0=Sun..6=Sat) vs the Mon-first display order used by the
+// DOW chart. averageByDayOfWeek returns bars [Mon, Tue, ... Sun]; bar
+// index i maps to JS dow = ((i + 1) % 7).
 function dowFromBarIndex(i: number): number {
   return (i + 1) % 7;
+}
+
+// Per-section row key encoding for the ranking card. Mirrors the format
+// used when constructing the rows — needs to round-trip so clicks resolve
+// back to (dimension, key).
+function rankingKey(
+  dimension: 'distance' | 'category' | 'overnight',
+  key: string,
+): string {
+  if (dimension === 'distance') return `dist-${key}`;
+  if (dimension === 'category') return `cat-${key}`;
+  return `over-${key}`;
 }
 
 interface Props {
   file: GlenwoodVisitationFile;
   metric: GlenwoodMetric;
+  timeframe: GlenwoodTimeframe;
+  filter: VisitationFilter;
+  onFilterChange: (next: VisitationFilter) => void;
 }
 
-export function GlenwoodVisitationStrip({ file, metric }: Props) {
-  const [dim, setDim] = useState<Dim>('distance');
-  const [seriesFilter, setSeriesFilter] = useState<string | null>(null);
+export function GlenwoodVisitationStrip({
+  file,
+  metric,
+  timeframe,
+  filter,
+  onFilterChange,
+}: Props) {
   const [dowFilter, setDowFilter] = useState<number | null>(null);
 
   const latestYear = useMemo(() => {
     const years = file.annualMetrics.map((m) => m.year);
     return years.length > 0 ? Math.max(...years) : new Date().getFullYear();
   }, [file]);
+
+  const latestDate = useMemo(
+    () => findLatestDate(file.dailyVisits.byType) ?? `${latestYear}-12-31`,
+    [file, latestYear],
+  );
+  const tw = useMemo(() => timeframeWindows(latestDate, timeframe), [latestDate, timeframe]);
 
   const tierSlices = useMemo(
     () =>
@@ -72,70 +110,288 @@ export function GlenwoodVisitationStrip({ file, metric }: Props) {
     [file, latestYear],
   );
 
-  // Rows for the active dimension, narrowed to the recent 24-month window
-  // used by the trends + DOW cards.
-  const cutoff = `${latestYear - 1}-01-01`;
+  // Trends-window source rows for the active dimension. When the filter
+  // selects "overnight", we fall back to the same dimension's source for
+  // the trend lines (distance, by default) — the overnight feed only has
+  // overnight=1 rows, so showing it as the trends dimension would render
+  // a single line.
+  const trendDimension =
+    filter?.dimension === 'overnight'
+      ? 'distance'
+      : (filter?.dimension ?? 'distance');
+
+  // Convenience flags for filter shape.
+  const filterKeys = filter?.keys ?? [];
+  const isSectionSelection = filterKeys.includes('ALL');
+  const rowKeys = filterKeys.filter((k) => k !== 'ALL');
+  const trendCutoff = tw.trendStart === 'all' ? '' : tw.trendStart;
   const dimRows = useMemo(() => {
-    if (dim === 'type') {
+    if (trendDimension === 'category') {
       return file.dailyVisits.byType
-        .filter((r) => r.date >= cutoff)
+        .filter((r) => !trendCutoff || r.date >= trendCutoff)
         .map((r) => ({ date: r.date, key: r.type as string, value: r.value }));
     }
     return file.dailyVisits.byDistance
-      .filter((r) => r.date >= cutoff)
+      .filter((r) => !trendCutoff || r.date >= trendCutoff)
       .map((r) => ({ date: r.date, key: r.distance as string, value: r.value }));
-  }, [file, dim, cutoff]);
+  }, [file, trendDimension, trendCutoff]);
 
-  const seriesOrder = dim === 'type' ? TYPE_KEYS : DISTANCE_KEYS;
-  const seriesColor = dim === 'type' ? TYPE_COLORS : DISTANCE_COLORS;
-  const seriesLabel = (k: string) => (dim === 'distance' ? `${k} mi` : k);
+  const seriesOrder = trendDimension === 'category' ? TYPE_KEYS : DISTANCE_KEYS;
+  const seriesColor = trendDimension === 'category' ? TYPE_COLORS : DISTANCE_COLORS;
+  const seriesLabel = (k: string) =>
+    trendDimension === 'distance' ? `${k} mi` : k;
 
-  // Visit Trends data: rows in the active dim, filtered by dowFilter when
-  // set, rolled up to monthly per series.
+  // Highlight the trend line(s) that match the active filter (only when
+  // the filter's dimension matches what the trends chart is rendering
+  // AND the filter is row-specific). A whole-section selection leaves
+  // all series at full emphasis.
+  const highlightedSeriesKeys =
+    filter && filter.dimension === trendDimension && !isSectionSelection
+      ? rowKeys
+      : null;
+
   const trendSeries: TrendSeries[] = useMemo(() => {
     const filtered = dowFilter == null
       ? dimRows
       : dimRows.filter((r) => new Date(r.date + 'T00:00:00Z').getUTCDay() === dowFilter);
     return seriesOrder.map((k) => {
-      const monthly = new Map<string, number>();
-      for (const r of filtered) {
-        if (r.key !== k) continue;
-        const m = r.date.slice(0, 7);
-        monthly.set(m, (monthly.get(m) ?? 0) + r.value);
-      }
-      const points = Array.from(monthly.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([m, value]) => {
-          const [y, mo] = m.split('-').map(Number);
-          return { year: y + (mo - 1) / 12, value };
-        });
+      const rowsForKey = filtered.filter((r) => r.key === k);
+      // YTD mode pre-filters each year's rows down to Jan–latestMonth so
+      // the annual rollup gives one apples-to-apples point per year.
+      const annualSource = tw.trendMonthFilter != null
+        ? rowsForKey.filter(
+            (r) => parseInt(r.date.slice(5, 7), 10) <= tw.trendMonthFilter!,
+          )
+        : rowsForKey;
+      const rolled =
+        tw.trendGranularity === 'annual'
+          ? rollupAnnual(annualSource)
+          : rollupMonthly(rowsForKey, tw.trendStart === 'all' ? undefined : tw.trendStart);
+      const points = rolled.map((p) => {
+        const [y, mo] = p.date.split('-').map(Number);
+        return { year: y + (mo - 1) / 12, value: p.value };
+      });
       return { key: k, label: seriesLabel(k), color: seriesColor[k], points };
     });
-  }, [dimRows, seriesOrder, seriesColor, dowFilter]);
+  }, [dimRows, seriesOrder, seriesColor, dowFilter, tw]);
 
-  // Day-of-week bars: rows in the active dim, narrowed by seriesFilter
-  // when set, averaged across the latest full year.
-  const dowBars = useMemo(() => {
-    const rows = (seriesFilter == null
-      ? dimRows
-      : dimRows.filter((r) => r.key === seriesFilter)
-    ).map((r) => ({ date: r.date, value: r.value }));
-    return averageByDayOfWeek(rows, latestYear);
-  }, [dimRows, seriesFilter, latestYear]);
+  // DOW averaging source. Narrows to the active ranking filter when row
+  // keys are selected; whole-section selection ("ALL") uses every row in
+  // that dimension.
+  const dowSourceRows = useMemo<{ date: string; value: number }[]>(() => {
+    if (!filter) {
+      // No filter — sum across all category rows per date so the daily
+      // total covers every visitor type (Residents + Inbound Commuters +
+      // Out-of-Market Visitors). The byDistance feed only carries
+      // out-of-market visits, so it can't be used for the unfiltered
+      // default.
+      return file.dailyVisits.byType.map((r) => ({ date: r.date, value: r.value }));
+    }
+    const keep = (key: string) => isSectionSelection || rowKeys.includes(key);
+    if (filter.dimension === 'distance') {
+      return file.dailyVisits.byDistance
+        .filter((r) => keep(r.distance))
+        .map((r) => ({ date: r.date, value: r.value }));
+    }
+    if (filter.dimension === 'category') {
+      return file.dailyVisits.byType
+        .filter((r) => keep(r.type))
+        .map((r) => ({ date: r.date, value: r.value }));
+    }
+    // overnight (only overnight=1 rows exist in the feed; section + single
+    // row selection collapse to the same source).
+    return (file.dailyVisits.byOvernight ?? []).map((r) => ({
+      date: r.date,
+      value: r.value,
+    }));
+  }, [file, filter, isSectionSelection, rowKeys]);
 
-  const legendItems = seriesOrder.map((k) => ({
-    key: k,
-    label: seriesLabel(k),
-    color: seriesColor[k],
-  }));
+  const dowBars = useMemo(
+    () => averageByDayOfWeek(dowSourceRows, tw.window),
+    [dowSourceRows, tw],
+  );
 
-  const dimSwitchClearsFilter = () => {
-    setSeriesFilter(null);
-    setDowFilter(null);
+  // Ranking card: three sections. Each row's value sums dailyVisits within
+  // the active timeframe window, intersected with the active dowFilter
+  // when set. YoY compares the same row against the prior window.
+  const rankingSections: RankingSection[] = useMemo(() => {
+    const applyDow = <R extends { date: string }>(rows: R[]) =>
+      dowFilter == null
+        ? rows
+        : rows.filter(
+            (r) => new Date(r.date + 'T00:00:00Z').getUTCDay() === dowFilter,
+          );
+    const sections: RankingSection[] = [];
+
+    // Distance
+    const distRowsAll = file.dailyVisits.byDistance;
+    sections.push({
+      title: 'Distance',
+      rows: DISTANCE_KEYS.map((k) => {
+        const rowsForKey = applyDow(distRowsAll.filter((r) => r.distance === k)).map((r) => ({
+          date: r.date,
+          value: r.value,
+        }));
+        const value = sumInWindow(rowsForKey, tw.window);
+        const prior = sumInWindow(rowsForKey, tw.prior);
+        const yoyPct = prior > 0 ? ((value - prior) / prior) * 100 : null;
+        return {
+          key: rankingKey('distance', k),
+          label: `${k} mi`,
+          color: DISTANCE_COLORS[k],
+          value,
+          yoyPct,
+        };
+      }),
+    });
+
+    // Category
+    const typeRowsAll = file.dailyVisits.byType;
+    sections.push({
+      title: 'Category',
+      rows: TYPE_KEYS.map((k) => {
+        const rowsForKey = applyDow(typeRowsAll.filter((r) => r.type === k)).map((r) => ({
+          date: r.date,
+          value: r.value,
+        }));
+        const value = sumInWindow(rowsForKey, tw.window);
+        const prior = sumInWindow(rowsForKey, tw.prior);
+        const yoyPct = prior > 0 ? ((value - prior) / prior) * 100 : null;
+        return {
+          key: rankingKey('category', k),
+          label: k,
+          color: TYPE_COLORS[k],
+          value,
+          yoyPct,
+        };
+      }),
+    });
+
+    // Overnight (only overnight=1 rows exist in the feed)
+    const overnightRowsAll = (file.dailyVisits.byOvernight ?? []).map((r) => ({
+      date: r.date,
+      value: r.value,
+    }));
+    const overnightRows = applyDow(overnightRowsAll);
+    const overnightValue = sumInWindow(overnightRows, tw.window);
+    const overnightPrior = sumInWindow(overnightRows, tw.prior);
+    const overnightYoy =
+      overnightPrior > 0
+        ? ((overnightValue - overnightPrior) / overnightPrior) * 100
+        : null;
+    sections.push({
+      title: 'Overnight',
+      rows: [
+        {
+          key: rankingKey('overnight', '1'),
+          label: OVERNIGHT_LABELS[1],
+          color: OVERNIGHT_COLORS[1],
+          value: overnightValue,
+          yoyPct: overnightYoy,
+        },
+      ],
+    });
+
+    return sections;
+  }, [file, tw, dowFilter]);
+
+  // Currently-highlighted row keys, expressed in the rankingKey-prefixed
+  // form the ranking card uses for its `selectedKeys` prop.
+  const selectedRankingKeys = useMemo(() => {
+    if (!filter || isSectionSelection) return new Set<string>();
+    return new Set(
+      rowKeys.map((k) =>
+        rankingKey(filter.dimension, filter.dimension === 'overnight' ? '1' : k),
+      ),
+    );
+  }, [filter, isSectionSelection, rowKeys]);
+
+  // Section header → display title. Click a header → select that whole
+  // section.
+  const SECTION_TITLES: Record<'distance' | 'category' | 'overnight', string> = {
+    distance: 'Distance',
+    category: 'Category',
+    overnight: 'Overnight',
+  };
+  const selectedSections = useMemo(
+    () =>
+      filter && isSectionSelection
+        ? new Set([SECTION_TITLES[filter.dimension]])
+        : new Set<string>(),
+    [filter, isSectionSelection],
+  );
+
+  const handleRankingClick = (k: string) => {
+    // Reverse the rankingKey encoding to recover (dimension, key).
+    let dim: 'distance' | 'category' | 'overnight' | null = null;
+    let rowKey: string | null = null;
+    if (k.startsWith('dist-')) {
+      dim = 'distance';
+      rowKey = k.slice('dist-'.length);
+    } else if (k.startsWith('cat-')) {
+      dim = 'category';
+      rowKey = k.slice('cat-'.length);
+    } else if (k.startsWith('over-')) {
+      dim = 'overnight';
+      rowKey = k.slice('over-'.length);
+    }
+    if (!dim || rowKey == null) return;
+
+    // Different dimension (or empty filter) → start fresh with this row.
+    if (!filter || filter.dimension !== dim) {
+      onFilterChange({ dimension: dim, keys: [rowKey] });
+      return;
+    }
+
+    // Same dimension → toggle this row in/out. A whole-section ('ALL')
+    // state collapses to just this row on first row click.
+    const baseKeys = isSectionSelection ? [] : rowKeys;
+    const next = baseKeys.includes(rowKey)
+      ? baseKeys.filter((x) => x !== rowKey)
+      : [...baseKeys, rowKey];
+    if (next.length === 0) {
+      onFilterChange(null);
+    } else {
+      onFilterChange({ dimension: dim, keys: next });
+    }
+  };
+
+  const handleSectionClick = (title: string) => {
+    const dim = (Object.entries(SECTION_TITLES).find(([, t]) => t === title)?.[0] ??
+      null) as 'distance' | 'category' | 'overnight' | null;
+    if (!dim) return;
+    // Toggle the section: re-clicking the active section clears the filter.
+    if (filter && filter.dimension === dim && isSectionSelection) {
+      onFilterChange(null);
+    } else {
+      onFilterChange({ dimension: dim, keys: ['ALL'] });
+    }
   };
 
   return (
     <div className="px-3 flex flex-col gap-2">
+      {/* Ranking row: aligns with the column template below so the card sits
+          above the rightmost bottom card and matches its width. */}
+      {metric === 'visits' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="hidden md:block" />
+          <div className="hidden md:block" />
+          <div className="flex flex-col gap-2 min-w-0">
+            <GlenwoodRankingCard
+              title="Visitation Rankings"
+              subtitle={tw.subtitle}
+              sections={rankingSections}
+              valueFormat={fmtCount}
+              sort="value-desc"
+              selectedKeys={selectedRankingKeys}
+              onRowClick={handleRankingClick}
+              selectedSections={selectedSections}
+              onSectionClick={handleSectionClick}
+            />
+          </div>
+        </div>
+      )}
+
       <div
         className="grid grid-cols-1 md:grid-cols-3 gap-3"
         style={{ height: STRIP_CARD_HEIGHT }}
@@ -158,32 +414,18 @@ export function GlenwoodVisitationStrip({ file, metric }: Props) {
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-center justify-between gap-2"
                 style={{ color: 'var(--text-dim)' }}
               >
-                <span className="truncate">Visit Trends by {dim === 'type' ? 'Type' : 'Distance'}</span>
-                <GlenwoodDimToggle<Dim>
-                  options={[
-                    { value: 'distance', label: 'Distance' },
-                    { value: 'type', label: 'Type' },
-                  ]}
-                  value={dim}
-                  onChange={(d) => {
-                    setDim(d);
-                    dimSwitchClearsFilter();
-                  }}
-                  ariaLabel="Visit trends dimension"
-                />
+                <span className="truncate">
+                  Visit Trends by {trendDimension === 'category' ? 'Type' : 'Distance'}
+                </span>
               </div>
-              <GlenwoodSeriesLegend
-                items={legendItems}
-                selected={seriesFilter}
-                onSelect={setSeriesFilter}
-              />
               <div className="flex-1 min-h-0">
                 <MiniTrendChart
                   series={trendSeries}
                   height="fill"
                   valueFormat={(v) => fmtCount(v)}
-                  highlightedKey={seriesFilter}
+                  highlightedKey={highlightedSeriesKeys}
                   hideLegend
+                  tooltipDateGranularity={tw.trendGranularity}
                 />
               </div>
             </div>
@@ -195,8 +437,22 @@ export function GlenwoodVisitationStrip({ file, metric }: Props) {
               >
                 <span>Avg Daily Visits · Day of Week</span>
                 <span className="text-[9px]">
-                  {latestYear}
-                  {seriesFilter ? ` · ${seriesLabel(seriesFilter)}` : ''}
+                  {tw.subtitle.includes(' vs ')
+                    ? tw.subtitle.split(' vs ')[0]
+                    : tw.subtitle}
+                  {filter
+                    ? ` · ${
+                        isSectionSelection
+                          ? `All ${SECTION_TITLES[filter.dimension]}`
+                          : rowKeys.length > 1
+                            ? `${rowKeys.length} ${SECTION_TITLES[filter.dimension]} selected`
+                            : filter.dimension === 'distance'
+                              ? `${rowKeys[0]} mi`
+                              : filter.dimension === 'overnight'
+                                ? OVERNIGHT_LABELS[1]
+                                : rowKeys[0]
+                      }`
+                    : ''}
                 </span>
               </div>
               <GlenwoodDayOfWeekChart

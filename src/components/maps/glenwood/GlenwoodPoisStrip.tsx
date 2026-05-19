@@ -5,7 +5,7 @@
 //                   state explaining the gap).
 //   Demographics  — Household Income · Household Size
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type {
   GlenwoodPoisFile,
   GlenwoodFeatureEntity,
@@ -13,10 +13,23 @@ import type {
 import { MiniTrendChart, type TrendSeries } from '../MiniTrendChart';
 import { GlenwoodDistributionBar } from './GlenwoodDistributionBar';
 import { GlenwoodVisitorTypePie } from './GlenwoodVisitorTypePie';
-import { fmtCount, tiersFromZipRows } from './glenwoodMetrics';
+import { GlenwoodRankingCard, type RankingRow } from './GlenwoodRankingCard';
+import {
+  fmtCount,
+  tiersFromZipRows,
+  findLatestDate,
+  timeframeWindows,
+  sumInWindow,
+  rollupMonthly,
+  rollupAnnual,
+  poiMonthlyFromOrigins,
+  classifyZipTier,
+  type VisitorTier,
+} from './glenwoodMetrics';
 
 const TIER_YEAR = 2025;
 import type { GlenwoodMetric } from './GlenwoodMetricToggle';
+import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
 const STRIP_CARD_HEIGHT = 260;
 
@@ -25,10 +38,22 @@ const SERIES_PALETTE = [
   '#4dd0e1', '#ffd54f', '#a1887f',
 ];
 
+// Match the tier colors used in GlenwoodVisitorTypePie so the YoY chart
+// reads as the same Local/Regional/Tourist palette. White-gradient, with
+// the brightest bar reserved for the nearest tier.
+const TIER_COLOR: Record<VisitorTier, string> = {
+  Local: 'rgba(255,255,255,1)',
+  Regional: 'rgba(255,255,255,0.72)',
+  Tourist: 'rgba(255,255,255,0.46)',
+};
+const TIER_ORDER: VisitorTier[] = ['Local', 'Regional', 'Tourist'];
+
 interface Props {
   file: GlenwoodPoisFile;
   selectedIds: Set<string>;
+  onToggleId: (id: string) => void;
   metric: GlenwoodMetric;
+  timeframe: GlenwoodTimeframe;
 }
 
 function aggregateBuckets(
@@ -41,7 +66,10 @@ function aggregateBuckets(
   const sum = new Map<string, number>();
   for (const p of pois) {
     const cat = (p.profile as Record<string, unknown>)[category];
-    const monthlyTotal = (p.monthlyVisits ?? []).reduce((acc, r) => acc + r.value, 0) || 1;
+    // Weight by POI_Zipcodes_Visits totals (more complete than the Visits
+    // sheet), with a 1.0 floor so a POI with no origin data still
+    // contributes to the demographic averages.
+    const monthlyTotal = p.origins.reduce((acc, o) => acc + (o.visits ?? 0), 0) || 1;
     if (!cat || typeof cat !== 'object') continue;
     totalWeight += monthlyTotal;
     for (const [k, v] of Object.entries(cat as Record<string, number>)) {
@@ -55,27 +83,185 @@ function aggregateBuckets(
     .map(([k, v]) => ({ label: k.replace(/\$/g, ''), value: v / totalWeight }));
 }
 
-export function GlenwoodPoisStrip({ file, selectedIds, metric }: Props) {
+export function GlenwoodPoisStrip({
+  file,
+  selectedIds,
+  onToggleId,
+  metric,
+  timeframe,
+}: Props) {
+  const [selectedTier, setSelectedTier] = useState<VisitorTier | null>(null);
+
   const visible = useMemo(
     () => (selectedIds.size === 0 ? file.pois : file.pois.filter((p) => selectedIds.has(p.id))),
     [file, selectedIds],
   );
 
+  // Origins-derived monthly visits per POI. POI_Zipcodes_Visits extends
+  // further into the current year than the standalone Visits sheet (Apr
+  // 2026 vs Dec 2025), so we source the time series from origins.
+  // When a tier filter is active, we re-aggregate origins by tier so the
+  // monthly series only counts visitors classified into that tier.
+  const monthlyById = useMemo(() => {
+    const m = new Map<string, { date: string; value: number }[]>();
+    if (!selectedTier) {
+      for (const p of file.pois) m.set(p.id, poiMonthlyFromOrigins(p));
+      return m;
+    }
+    for (const p of file.pois) {
+      const sums = new Map<string, number>();
+      for (const o of p.origins) {
+        if (!o.month) continue;
+        if (classifyZipTier(o.zip) !== selectedTier) continue;
+        sums.set(o.month, (sums.get(o.month) ?? 0) + o.visits);
+      }
+      const series = Array.from(sums.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([month, value]) => ({ date: month, value }));
+      m.set(p.id, series);
+    }
+    return m;
+  }, [file, selectedTier]);
+
+  // Anchor windows on the latest monthly date across all POIs so window
+  // math stays stable when the user toggles POI chips.
+  const latestDate = useMemo(() => {
+    const all: { date: string }[] = [];
+    for (const series of monthlyById.values()) all.push(...series);
+    return findLatestDate(all);
+  }, [monthlyById]);
+  const tw = useMemo(
+    () => (latestDate ? timeframeWindows(latestDate, timeframe) : null),
+    [latestDate, timeframe],
+  );
+
   const trendSeries: TrendSeries[] = useMemo(() => {
+    if (!tw) return [];
     return visible.map((p, i) => {
-      const points = (p.monthlyVisits ?? []).map((r) => {
-        const [y, mo] = r.date.split('-').map(Number);
-        return { year: y + (mo - 1) / 12, value: r.value };
+      const rows = monthlyById.get(p.id) ?? [];
+      const annualSource = tw.trendMonthFilter != null
+        ? rows.filter(
+            (r) => parseInt(r.date.slice(5, 7), 10) <= tw.trendMonthFilter!,
+          )
+        : rows;
+      const rolled =
+        tw.trendGranularity === 'annual'
+          ? rollupAnnual(annualSource)
+          : rollupMonthly(rows, tw.trendStart === 'all' ? undefined : tw.trendStart);
+      const points = rolled.map((p) => {
+        const [y, mo] = p.date.split('-').map(Number);
+        return { year: y + (mo - 1) / 12, value: p.value };
       });
-      const trimmed = points.slice(-24);
       return {
         key: p.id,
         label: p.name,
         color: SERIES_PALETTE[i % SERIES_PALETTE.length],
-        points: trimmed,
+        points,
       };
     });
-  }, [visible]);
+  }, [visible, tw]);
+
+  // Per-tier YoY % series. For each (tier, period) we sum visits across
+  // every visible POI's origin rows, classify each zip into
+  // Local/Regional/Tourist, then divide current period by same period
+  // prior year. Period granularity follows the active timeframe:
+  //   - Monthly mode → 13 monthly buckets (each compared to same month
+  //                    prior year)
+  //   - Annual mode  → annual buckets across full history
+  //   - YTD mode     → annual buckets, prefiltered to Jan–latestMonth so
+  //                    each year reports Jan-N YoY vs prior Jan-N
+  const yoyTierSeries: TrendSeries[] = useMemo(() => {
+    if (!tw) return [];
+
+    // periodKey: "YYYY-MM" for monthly, "YYYY" for annual/ytd.
+    const isMonthly = tw.trendGranularity === 'monthly';
+    const periodOf = (origin: { year: number; month?: string | null }) =>
+      isMonthly ? (origin.month ?? '') : String(origin.year);
+    const priorPeriod = (key: string) => {
+      if (isMonthly) {
+        const [y, m] = key.split('-').map(Number);
+        return `${y - 1}-${String(m).padStart(2, '0')}`;
+      }
+      return String(parseInt(key, 10) - 1);
+    };
+    // For YTD mode, only count months <= trendMonthFilter when building
+    // the annual buckets.
+    const monthInYtd = (origin: { month?: string | null }) => {
+      if (tw.trendMonthFilter == null) return true;
+      if (!origin.month) return false;
+      const m = parseInt(origin.month.slice(5, 7), 10);
+      return m <= tw.trendMonthFilter;
+    };
+    // For monthly mode, narrow to the trendStart cutoff (so we don't pull
+    // ancient history into the chart). Annual/YTD show full history.
+    const inTrendWindow = (origin: { month?: string | null; year: number }) => {
+      if (isMonthly) {
+        if (tw.trendStart === 'all') return true;
+        const m = origin.month;
+        return m != null && `${m}-01` >= tw.trendStart;
+      }
+      return true;
+    };
+
+    // periodKey → tier → visits
+    const totals = new Map<string, Record<VisitorTier, number>>();
+    for (const p of visible) {
+      for (const o of p.origins) {
+        if (!o.month) continue;
+        if (!monthInYtd(o)) continue;
+        if (!inTrendWindow(o)) continue;
+        const key = periodOf(o);
+        if (!key) continue;
+        const tier = classifyZipTier(o.zip);
+        const slot = totals.get(key) ?? { Local: 0, Regional: 0, Tourist: 0 };
+        slot[tier] += o.visits;
+        totals.set(key, slot);
+      }
+    }
+    // Prior-period totals — same tally but unfiltered by trend window so
+    // YoY can look back into the prior period even when it falls outside
+    // the chart's display range.
+    const allTotals = new Map<string, Record<VisitorTier, number>>();
+    for (const p of visible) {
+      for (const o of p.origins) {
+        if (!o.month) continue;
+        if (!monthInYtd(o)) continue;
+        const key = periodOf(o);
+        if (!key) continue;
+        const tier = classifyZipTier(o.zip);
+        const slot = allTotals.get(key) ?? { Local: 0, Regional: 0, Tourist: 0 };
+        slot[tier] += o.visits;
+        allTotals.set(key, slot);
+      }
+    }
+
+    return TIER_ORDER.map((tier) => {
+      const points = Array.from(totals.entries())
+        .map(([key, cur]) => {
+          const priorKey = priorPeriod(key);
+          const prior = allTotals.get(priorKey);
+          if (!prior || prior[tier] <= 0) return null;
+          const pct = ((cur[tier] - prior[tier]) / prior[tier]) * 100;
+          // Convert periodKey to decimal-year for the chart x-axis.
+          let decYear: number;
+          if (isMonthly) {
+            const [y, m] = key.split('-').map(Number);
+            decYear = y + (m - 1) / 12;
+          } else {
+            decYear = parseInt(key, 10);
+          }
+          return { year: decYear, value: pct };
+        })
+        .filter((p): p is { year: number; value: number } => p != null)
+        .sort((a, b) => a.year - b.year);
+      return {
+        key: tier,
+        label: tier,
+        color: TIER_COLOR[tier],
+        points,
+      };
+    });
+  }, [visible, tw]);
 
   const tierSlices = useMemo(() => {
     // POI origins are monthly; sum each zip's TIER_YEAR visits across all
@@ -124,15 +310,58 @@ export function GlenwoodPoisStrip({ file, selectedIds, metric }: Props) {
     [visible],
   );
 
-  const selectionTag =
+  const baseSelectionTag =
     selectedIds.size === 0 ? `All ${file.pois.length} POIs` : `${selectedIds.size} selected`;
+  const selectionTag = selectedTier
+    ? `${baseSelectionTag} · ${selectedTier}`
+    : baseSelectionTag;
 
-  // POI daily visits aren't published, so the avg-daily-visits card is
-  // suppressed in Visits mode and the grid collapses to 2 columns.
-  const gridCols = metric === 'visits' ? 'md:grid-cols-2' : 'md:grid-cols-3';
+  // Bottom row is 3 columns in both modes:
+  //   Visits        — Pie · Visit Trends by POI · YoY % by Tier
+  //   Demographics  — Pie · Household Income · Household Size
+  const gridCols = 'md:grid-cols-3';
+
+  // Ranking rows: per-POI window total + per-POI YoY (window vs prior).
+  // Computed off the FULL POI list; selection state is communicated via
+  // the `dim` flag, matching the retail-hubs cross-filter pattern.
+  const visitsRows: RankingRow[] = useMemo(() => {
+    if (!tw) return [];
+    return file.pois.map((p, i) => {
+      const rows = monthlyById.get(p.id) ?? [];
+      const value = sumInWindow(rows, tw.window);
+      const prior = sumInWindow(rows, tw.prior);
+      const yoyPct = prior > 0 ? ((value - prior) / prior) * 100 : null;
+      return {
+        key: p.id,
+        label: p.name,
+        color: SERIES_PALETTE[i % SERIES_PALETTE.length],
+        value,
+        yoyPct,
+        dim: selectedIds.size > 0 && !selectedIds.has(p.id),
+      };
+    });
+  }, [file, monthlyById, tw, selectedIds]);
 
   return (
     <div className="px-3 flex flex-col gap-2">
+      {metric === 'visits' && tw && (
+        <div className={`grid grid-cols-1 ${gridCols} gap-3`}>
+          <div className="hidden md:block" />
+          <div className="hidden md:block" />
+          <div className="flex flex-col gap-2 min-w-0">
+            <GlenwoodRankingCard
+              title="Visits per POI"
+              subtitle={`${selectionTag} · ${tw.subtitle}`}
+              rows={visitsRows}
+              valueFormat={fmtCount}
+              sort="value-desc"
+              selectedKeys={selectedIds}
+              onRowClick={onToggleId}
+            />
+          </div>
+        </div>
+      )}
+
       <div
         className={`grid grid-cols-1 ${gridCols} gap-3`}
         style={{ height: STRIP_CARD_HEIGHT }}
@@ -145,26 +374,70 @@ export function GlenwoodPoisStrip({ file, selectedIds, metric }: Props) {
             <span>Visits Breakdown</span>
             <span className="text-[9px]">{selectionTag}</span>
           </div>
-          <GlenwoodVisitorTypePie slices={tierSlices} />
+          <GlenwoodVisitorTypePie
+            slices={tierSlices}
+            selectedTier={selectedTier}
+            onSelectTier={setSelectedTier}
+          />
         </div>
 
         {metric === 'visits' ? (
-          <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
-            <div
-              className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
-              style={{ color: 'var(--text-dim)' }}
-            >
-              <span>Visit Trends by POI</span>
-              <span className="text-[9px]">{selectionTag}</span>
+          <>
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                <span>Visit Trends by POI</span>
+                <span className="text-[9px]">{selectionTag}</span>
+              </div>
+              <div className="flex-1 min-h-0">
+                <MiniTrendChart
+                  series={trendSeries}
+                  height="fill"
+                  valueFormat={(v) => fmtCount(v)}
+                  hideLegend
+                  tooltipDateGranularity={tw?.trendGranularity ?? 'monthly'}
+                />
+              </div>
             </div>
-            <div className="flex-1 min-h-0">
-              <MiniTrendChart
-                series={trendSeries}
-                height="fill"
-                valueFormat={(v) => fmtCount(v)}
-              />
+
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                <span>YoY Change by Tier</span>
+                <span className="text-[9px]">{selectionTag}</span>
+              </div>
+              {/* Inline legend chips — matches the tier-color scheme of
+                  the Visits Breakdown pie above so the user can read all
+                  three series at a glance. */}
+              <div className="flex gap-2 text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                {TIER_ORDER.map((t) => (
+                  <span key={t} className="flex items-center gap-1">
+                    <span
+                      className="inline-block w-1.5 h-1.5 rounded-full"
+                      style={{ background: TIER_COLOR[t] }}
+                    />
+                    {t}
+                  </span>
+                ))}
+              </div>
+              <div className="flex-1 min-h-0">
+                <MiniTrendChart
+                  series={yoyTierSeries}
+                  height="fill"
+                  yMin="auto"
+                  valueFormat={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
+                  hideLegend
+                  highlightedKey={selectedTier}
+                  tooltipDateGranularity={tw?.trendGranularity ?? 'monthly'}
+                  zeroBaseline
+                />
+              </div>
             </div>
-          </div>
+          </>
         ) : (
           <>
             <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">

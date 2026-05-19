@@ -32,6 +32,7 @@ import type {
   ZipMeta,
 } from '../types/flow';
 import { buildHeatmapGeoJson } from '../lib/heatmapPoints';
+import { useEscapeKey } from '../lib/useEscapeKey';
 import type { HeatmapSide } from '../components/HeatmapModeToggle';
 import {
   ANCHOR_COUNTY,
@@ -353,6 +354,15 @@ export function CommuteView({ data }: CommuteViewProps) {
   // The guard suppresses the hover tooltip for one specific corridor until the
   // user's mouse leaves it, at which point the suppression clears.
   const [suppressedHover, setSuppressedHover] = useState<CorridorId | null>(null);
+
+  // ESC clears any stuck hover/pinned tooltip. Helpful when the user
+  // switches metric or view mid-hover and the corridor's mouseleave
+  // event never fires.
+  useEscapeKey(() => {
+    setHover(null);
+    setPinned(null);
+    setSuppressedHover(null);
+  });
   // Block selection mode + selected block FIPS codes (and `zip:<zcta>`
   // synthetic keys for cross-anchor centroid fallback rows). Drives a
   // synthetic FlowRow set via filterFlowsBySelectedBlocks that narrows the

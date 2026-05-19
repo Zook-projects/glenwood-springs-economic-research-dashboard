@@ -192,11 +192,14 @@ export function DashboardTile({
     <aside
       className="glass relative z-10 flex flex-col w-full md:w-[380px] md:h-full md:overflow-hidden"
     >
-      <div className="px-5 pt-5 pb-4 space-y-4 md:flex-1 md:overflow-y-auto">
-        {/* Header */}
-        <div className="space-y-0.5">
+      <div className="px-3 md:px-4 py-4 flex flex-col gap-4 md:flex-1 md:overflow-y-auto">
+        {/* Header — matches the GPS Activity panel rhythm: side padding
+            on `px-3 md:px-4 py-4`, top-level sections on `flex flex-col
+            gap-4`, and the kicker / title / subtitle rows on `gap-2`. */}
+        <header className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <span
+              aria-hidden="true"
               className="inline-block w-1.5 h-1.5 rounded-full"
               style={{ background: 'var(--accent)' }}
             />
@@ -218,7 +221,7 @@ export function DashboardTile({
           <div className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
             2002–2023 LEHD LODES8 · 11 workplace ZIP codes
           </div>
-        </div>
+        </header>
 
         {/* Mode toggle. When a non-anchor place is selected the toggle stays
             in place but renders disabled and pinned to 'inbound' — the

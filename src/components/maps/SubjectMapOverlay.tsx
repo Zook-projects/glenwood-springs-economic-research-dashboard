@@ -15,6 +15,7 @@ import type { SubjectId } from '../../config/subjects';
 import { RAMPS, quintileIndex } from '../../lib/subjectColorRamps';
 import type { CountyGeometry } from '../../lib/useCountyGeometry';
 import type { ZipMeta } from '../../types/flow';
+import { useEscapeKey } from '../../lib/useEscapeKey';
 
 export type GeoLevel = 'place' | 'county';
 export type MapLayerKind = 'symbols' | 'choropleth';
@@ -71,6 +72,11 @@ export function SubjectMapOverlay({
     x: number;
     y: number;
   } | null>(null);
+
+  // ESC dismisses a sticky hover tooltip — useful when the user switches
+  // metric mid-hover and the mouseleave event for the previous element
+  // never fires.
+  useEscapeKey(() => setHover(null));
 
   const ramp = RAMPS[subjectId];
 

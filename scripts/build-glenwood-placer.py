@@ -520,32 +520,28 @@ def build_pois() -> dict:
         for name, slug in POI_SLUGS.items()
     }
 
-    # Visits: header row 1, data row 2+
-    # Columns: A POI, B Date, C POI Visits
-    ws = wb["Visits"]
-    min_month: str | None = None
-    max_month: str | None = None
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if len(row) < 3:
-            continue
-        poi = row[0]
-        d = iso_date(row[1])
-        visits = positive_int(row[2])
-        if not isinstance(poi, str) or poi not in pois or d is None or visits is None:
-            continue
-        month_key = d[:7]
-        pois[poi]["monthlyVisits"].append({"date": month_key, "value": visits})
-        if min_month is None or month_key < min_month:
-            min_month = month_key
-        if max_month is None or month_key > max_month:
-            max_month = month_key
-
-    # Zip Codes - Visits: header row 2, data row 3+
-    # Columns: B Year, C Month, D POI, E Geo_Yr, F Geo_Yr_Month, G City State Year,
-    #          H Zip Code, I City, J State, K lat, L lng, M % of Visits,
-    #          N Visits, O YoY Change, P % YoY
+    # Zip Codes - Visits is the canonical source for both origin zips AND
+    # monthly POI totals. The standalone "Visits" sheet is older — for the
+    # latest months Placer only updates the Zip Codes - Visits sheet, and
+    # within that sheet some months are POI-level summary rows (no zip)
+    # where Placer didn't supply a zip-level breakdown. We capture both
+    # row types here.
+    #
+    # Header row 2; data row 3+:
+    #   B Year | C Month | D POI | E Geo_Yr | F Geo_Yr_Month |
+    #   G City State Year | H Zip Code | I City | J State | K lat | L lng |
+    #   M % of Visits | N Visits | O YoY Change | P % YoY
     ws = wb["Zip Codes - Visits"]
     latlng_acc: dict[tuple[str, str], dict] = {}
+    # poi -> month -> visits (from POI-level summary rows, zip is None)
+    poi_summary: dict[str, dict[str, int]] = {p: {} for p in pois}
+    # poi -> month -> running zip-row sum (for months where no summary
+    # row was supplied)
+    poi_zip_sum: dict[str, dict[str, int]] = {p: {} for p in pois}
+
+    min_month: str | None = None
+    max_month: str | None = None
+
     for row in ws.iter_rows(min_row=3, values_only=True):
         if len(row) < 16:
             continue
@@ -558,9 +554,25 @@ def build_pois() -> dict:
         if not isinstance(poi, str) or poi not in pois:
             continue
         month = iso_month(year, month_name)
-        zip_code = row[7]
-        if zip_code is None:
+        if month is None:
             continue
+        zip_code = row[7]
+        visits = positive_int(row[13])
+        if visits is None:
+            continue
+
+        if min_month is None or month < min_month:
+            min_month = month
+        if max_month is None or month > max_month:
+            max_month = month
+
+        if zip_code is None:
+            # POI-level summary row: the only signal of monthly volume for
+            # months where Placer didn't ship a zip breakdown (typical for
+            # low-volume months at low-traffic POIs).
+            poi_summary[poi][month] = visits
+            continue
+
         try:
             zip_str_val = f"{int(zip_code):05d}"
         except (TypeError, ValueError):
@@ -568,10 +580,7 @@ def build_pois() -> dict:
         lat = finite_float(row[10])
         lng = finite_float(row[11])
         pct = finite_float(row[12])
-        visits = positive_int(row[13])
         yoy_pct = finite_float(row[15])
-        if visits is None:
-            continue
         pois[poi]["origins"].append({
             "year": year,
             "month": month,
@@ -580,6 +589,7 @@ def build_pois() -> dict:
             "pctOfVisits": round(pct, 6) if pct is not None else None,
             "yoyPct": round(yoy_pct, 4) if yoy_pct is not None else None,
         })
+        poi_zip_sum[poi][month] = poi_zip_sum[poi].get(month, 0) + visits
         # Accumulate origin-zip totals across all months for the map layer.
         key = (poi, zip_str_val)
         agg = latlng_acc.setdefault(
@@ -602,6 +612,19 @@ def build_pois() -> dict:
         if entry["lat"] is None or entry["lng"] is None:
             continue
         pois[poi]["originsLatLng"].append(entry)
+
+    # Build monthlyVisits per POI by merging the POI-level summary rows
+    # with the per-month sum of zip-level rows. POI-level summary wins
+    # when both are present (they agree where both exist; the summary is
+    # the authoritative number when zip rows are sparse).
+    for poi in pois:
+        merged: dict[str, int] = dict(poi_zip_sum[poi])
+        for month, visits in poi_summary[poi].items():
+            merged[month] = visits
+        pois[poi]["monthlyVisits"] = [
+            {"date": m, "value": v}
+            for m, v in sorted(merged.items())
+        ]
 
     # Extra Data: header row 2, data row 3+
     # Columns: B Geography, C Year, D Geo_Yr, E Attribute, F Value

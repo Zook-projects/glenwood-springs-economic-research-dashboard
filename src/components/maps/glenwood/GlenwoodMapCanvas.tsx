@@ -15,6 +15,7 @@ import type { LngLatBoundsLike } from 'maplibre-gl';
 import { SubjectMapCanvas, useMapProjection } from '../../SubjectMapCanvas';
 import type { GlenwoodPlacerData, GlenwoodFeatures } from '../../../types/placer-glenwood';
 import type { GlenwoodSubView } from './GlenwoodSubViewTabs';
+import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
 const GLENWOOD_BOUNDS: LngLatBoundsLike = [
   [-107.45, 39.46],
@@ -34,6 +35,11 @@ const COLOR_ORIGIN_DOT = 'rgba(183, 148, 244, 0.6)';
 interface Props {
   data: GlenwoodPlacerData;
   subView: GlenwoodSubView;
+  // Accepted for future feature-coloring (e.g., color hubs by window
+  // totals). Currently unused — the basemap stays the same across
+  // timeframes. Keeping it threaded so we can wire it in without
+  // touching the call site.
+  timeframe: GlenwoodTimeframe;
   selectedHubs: Set<string>;
   selectedPois: Set<string>;
   onToggleHub: (id: string) => void;
@@ -367,6 +373,8 @@ function GlenwoodLayerManager({
 export function GlenwoodMapCanvas({
   data,
   subView,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  timeframe: _timeframe,
   selectedHubs,
   selectedPois,
   onToggleHub,

@@ -3,6 +3,13 @@
 // 3 swap by metric:
 //   Visits        — Visit Trends by Hub · Avg Daily Visits by DOW
 //   Demographics  — Household Income · Household Size
+//
+// Two stacked ranking cards sit above the rightmost column (Visits per
+// Hub, YoY Change per Hub). Clicking a ranking row toggles that hub in
+// the parent selectedIds set — the same state as the chips in the left
+// panel — so everything else (KPIs, trends, DOW, pie, demographics) re-
+// renders consistently. The DOW chart in turn filters the ranking-card
+// values by clicked weekday.
 
 import { useMemo, useState } from 'react';
 import type {
@@ -13,16 +20,22 @@ import { MiniTrendChart, type TrendSeries } from '../MiniTrendChart';
 import { GlenwoodDistributionBar } from './GlenwoodDistributionBar';
 import { GlenwoodDayOfWeekChart } from './GlenwoodDayOfWeekChart';
 import { GlenwoodVisitorTypePie } from './GlenwoodVisitorTypePie';
-import { GlenwoodSeriesLegend } from './GlenwoodSeriesLegend';
+import { GlenwoodRankingCard, type RankingRow } from './GlenwoodRankingCard';
 import {
   averageByDayOfWeek,
   fmtCount,
   profileScalar,
   tiersFromZipRows,
+  findLatestDate,
+  timeframeWindows,
+  sumInWindow,
+  rollupMonthly,
+  rollupAnnual,
 } from './glenwoodMetrics';
 
 const TIER_YEAR = 2025;
 import type { GlenwoodMetric } from './GlenwoodMetricToggle';
+import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
 
 const STRIP_CARD_HEIGHT = 260;
 
@@ -42,7 +55,9 @@ function isIncomeBucketKey(k: string): boolean {
 interface Props {
   file: GlenwoodHubsFile;
   selectedIds: Set<string>;
+  onToggleId: (id: string) => void;
   metric: GlenwoodMetric;
+  timeframe: GlenwoodTimeframe;
 }
 
 function aggregateBuckets(
@@ -69,8 +84,13 @@ function aggregateBuckets(
     .map(([k, v]) => ({ label: k.replace(/\$/g, ''), value: v / totalWeight }));
 }
 
-export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
-  const [seriesFilter, setSeriesFilter] = useState<string | null>(null);
+export function GlenwoodRetailHubsStrip({
+  file,
+  selectedIds,
+  onToggleId,
+  metric,
+  timeframe,
+}: Props) {
   const [dowFilter, setDowFilter] = useState<number | null>(null);
 
   const visible = useMemo(
@@ -78,29 +98,39 @@ export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
     [file, selectedIds],
   );
 
+  // Anchor windows on the latest date present across all hubs (not just
+  // selected ones) so the comparison range stays stable as the user toggles
+  // hub chips on and off.
+  const latestDate = useMemo(() => {
+    const all = file.hubs.flatMap((h) => h.dailyVisits ?? []);
+    return findLatestDate(all);
+  }, [file]);
+  const tw = useMemo(
+    () => (latestDate ? timeframeWindows(latestDate, timeframe) : null),
+    [latestDate, timeframe],
+  );
+
   const trendSeries: TrendSeries[] = useMemo(() => {
-    const today = new Date();
-    const cutoff = new Date(today.getFullYear() - 2, today.getMonth(), 1)
-      .toISOString()
-      .slice(0, 10);
+    if (!tw) return [];
     return visible.map((h, i) => {
       const rows = (h.dailyVisits ?? []).filter(
         (r) =>
-          r.date >= cutoff &&
           (dowFilter == null ||
             new Date(r.date + 'T00:00:00Z').getUTCDay() === dowFilter),
       );
-      const monthly = new Map<string, number>();
-      for (const r of rows) {
-        const m = r.date.slice(0, 7);
-        monthly.set(m, (monthly.get(m) ?? 0) + r.value);
-      }
-      const points = Array.from(monthly.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([m, value]) => {
-          const [y, mo] = m.split('-').map(Number);
-          return { year: y + (mo - 1) / 12, value };
-        });
+      const annualSource = tw.trendMonthFilter != null
+        ? rows.filter(
+            (r) => parseInt(r.date.slice(5, 7), 10) <= tw.trendMonthFilter!,
+          )
+        : rows;
+      const rolled =
+        tw.trendGranularity === 'annual'
+          ? rollupAnnual(annualSource)
+          : rollupMonthly(rows, tw.trendStart === 'all' ? undefined : tw.trendStart);
+      const points = rolled.map((p) => {
+        const [y, mo] = p.date.split('-').map(Number);
+        return { year: y + (mo - 1) / 12, value: p.value };
+      });
       return {
         key: h.id,
         label: h.name,
@@ -108,7 +138,7 @@ export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
         points,
       };
     });
-  }, [visible, dowFilter]);
+  }, [visible, dowFilter, tw]);
 
   const tierSlices = useMemo(
     () =>
@@ -149,24 +179,10 @@ export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
   );
 
   const dowBars = useMemo(() => {
-    const today = new Date();
-    const lastFullYear = today.getFullYear() - 1;
-    const sourceHubs = seriesFilter
-      ? visible.filter((h) => h.id === seriesFilter)
-      : visible;
-    const rows = sourceHubs.flatMap((h) => h.dailyVisits ?? []);
-    return averageByDayOfWeek(rows, lastFullYear);
-  }, [visible, seriesFilter]);
-
-  const legendItems = useMemo(
-    () =>
-      visible.map((h, i) => ({
-        key: h.id,
-        label: h.name,
-        color: SERIES_PALETTE[i % SERIES_PALETTE.length],
-      })),
-    [visible],
-  );
+    const rows = visible.flatMap((h) => h.dailyVisits ?? []);
+    if (!tw) return averageByDayOfWeek(rows);
+    return averageByDayOfWeek(rows, tw.window);
+  }, [visible, tw]);
 
   const dowFromBarIndex = (i: number) => (i + 1) % 7;
   const selectedBarIndex =
@@ -175,8 +191,54 @@ export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
   const selectionTag =
     selectedIds.size === 0 ? `All ${file.hubs.length} hubs` : `${selectedIds.size} selected`;
 
+  // Ranking rows: one row per hub, value = window total, yoyPct = signed %
+  // (window vs prior). When a DOW bar is active, the window-total only
+  // counts rows on that weekday — so the ranking responds to the cross-
+  // filter from the DOW card too. Click selection lives in selectedIds.
+  const visitsRows: RankingRow[] = useMemo(() => {
+    if (!tw) return [];
+    const filterDow = (date: string) =>
+      dowFilter == null
+        ? true
+        : new Date(date + 'T00:00:00Z').getUTCDay() === dowFilter;
+    return file.hubs.map((h, i) => {
+      const rows = (h.dailyVisits ?? [])
+        .filter((r) => filterDow(r.date))
+        .map((r) => ({ date: r.date, value: r.value }));
+      const value = sumInWindow(rows, tw.window);
+      const prior = sumInWindow(rows, tw.prior);
+      const yoyPct = prior > 0 ? ((value - prior) / prior) * 100 : null;
+      return {
+        key: h.id,
+        label: h.name,
+        color: SERIES_PALETTE[i % SERIES_PALETTE.length],
+        value,
+        yoyPct,
+        dim: selectedIds.size > 0 && !selectedIds.has(h.id),
+      };
+    });
+  }, [file, tw, selectedIds, dowFilter]);
+
   return (
     <div className="px-3 flex flex-col gap-2">
+      {metric === 'visits' && tw && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="hidden md:block" />
+          <div className="hidden md:block" />
+          <div className="flex flex-col gap-2 min-w-0">
+            <GlenwoodRankingCard
+              title="Visits per Hub"
+              subtitle={`${selectionTag} · ${tw.subtitle}`}
+              rows={visitsRows}
+              valueFormat={fmtCount}
+              sort="value-desc"
+              selectedKeys={selectedIds}
+              onRowClick={onToggleId}
+            />
+          </div>
+        </div>
+      )}
+
       <div
         className="grid grid-cols-1 md:grid-cols-3 gap-3"
         style={{ height: STRIP_CARD_HEIGHT }}
@@ -202,18 +264,13 @@ export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
                 <span>Visit Trends by Hub</span>
                 <span className="text-[9px]">{selectionTag}</span>
               </div>
-              <GlenwoodSeriesLegend
-                items={legendItems}
-                selected={seriesFilter}
-                onSelect={setSeriesFilter}
-              />
               <div className="flex-1 min-h-0">
                 <MiniTrendChart
                   series={trendSeries}
                   height="fill"
                   valueFormat={(v) => fmtCount(v)}
-                  highlightedKey={seriesFilter}
                   hideLegend
+                  tooltipDateGranularity={tw?.trendGranularity ?? 'monthly'}
                 />
               </div>
             </div>
@@ -225,10 +282,11 @@ export function GlenwoodRetailHubsStrip({ file, selectedIds, metric }: Props) {
               >
                 <span>Avg Daily Visits · Day of Week</span>
                 <span className="text-[9px]">
-                  latest full year
-                  {seriesFilter
-                    ? ` · ${visible.find((h) => h.id === seriesFilter)?.name ?? ''}`
-                    : ''}
+                  {tw?.subtitle
+                    ? tw.subtitle.includes(' vs ')
+                      ? tw.subtitle.split(' vs ')[0]
+                      : tw.subtitle
+                    : 'latest'}
                 </span>
               </div>
               <GlenwoodDayOfWeekChart

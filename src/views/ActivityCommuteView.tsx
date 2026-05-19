@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDraggable } from '../hooks/useDraggable';
+import { useEscapeKey } from '../lib/useEscapeKey';
 import { MapCanvas } from '../components/MapCanvas';
 import { ActiveFiltersOverlay } from '../components/ActiveFiltersOverlay';
 import { ZipSelector } from '../components/ZipSelector';
@@ -24,6 +25,7 @@ import { ModeToggle } from '../components/ModeToggle';
 import { GlenwoodScopeToggle, type GlenwoodScope } from '../components/maps/glenwood/GlenwoodScopeToggle';
 import { GlenwoodSubViewTabs, type GlenwoodSubView } from '../components/maps/glenwood/GlenwoodSubViewTabs';
 import { GlenwoodMetricToggle, type GlenwoodMetric } from '../components/maps/glenwood/GlenwoodMetricToggle';
+import { GlenwoodTimeframeToggle, type GlenwoodTimeframe } from '../components/maps/glenwood/GlenwoodTimeframeToggle';
 import { GlenwoodLeftPanel } from '../components/maps/glenwood/GlenwoodLeftPanel';
 import { GlenwoodMapCanvas } from '../components/maps/glenwood/GlenwoodMapCanvas';
 import { GlenwoodBottomStrip } from '../components/maps/glenwood/GlenwoodBottomStrip';
@@ -139,9 +141,17 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
   //                            origin = resident anchor, dest = leakage ZIP)
   const [metric, setMetric] = useState<ActivityMetric>('workers');
 
-  const [scope, setScopeRaw] = useState<GlenwoodScope>('region');
+  const [scope, setScopeRaw] = useState<GlenwoodScope>('glenwood');
   const [glenwoodSubView, setGlenwoodSubView] = useState<GlenwoodSubView>('visitation');
   const [glenwoodMetric, setGlenwoodMetric] = useState<GlenwoodMetric>('visits');
+  const [glenwoodTimeframe, setGlenwoodTimeframe] = useState<GlenwoodTimeframe>('ytd');
+  // Visitation ranking-card cross-filter. Lifted to the view because the
+  // left-panel KPI and the bottom-strip cards both narrow when it's set.
+  // `keys` is a multi-select list of row labels OR the sentinel "ALL"
+  // (mutually exclusive with row keys) for whole-section selections.
+  const [visitationFilter, setVisitationFilter] = useState<
+    { dimension: 'distance' | 'category' | 'overnight'; keys: string[] } | null
+  >(null);
   const [selectedHubs, setSelectedHubs] = useState<Set<string>>(() => new Set());
   const [selectedPois, setSelectedPois] = useState<Set<string>>(() => new Set());
   const setScope = (next: GlenwoodScope) => {
@@ -156,6 +166,7 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
   const setGlenwoodSubViewSafe = (next: GlenwoodSubView) => {
     if (next === 'retailHubs') setSelectedPois(new Set());
     else if (next === 'pois') setSelectedHubs(new Set());
+    if (next !== 'visitation') setVisitationFilter(null);
     setGlenwoodSubView(next);
   };
   const isGlenwoodScope = scope === 'glenwood';
@@ -494,6 +505,17 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
   // corridor hover/pinned, but keyed to a single OD pair.
   const [odHover, setOdHover] = useState<OdHoverState | null>(null);
   const [odPinned, setOdPinned] = useState<OdHoverState | null>(null);
+
+  // ESC clears every tooltip-style state at once. Tooltips can otherwise
+  // get stranded when the user switches metric / view mid-hover and the
+  // mouseleave event for the corridor never fires.
+  useEscapeKey(() => {
+    setHover(null);
+    setPinned(null);
+    setSuppressedHover(null);
+    setOdHover(null);
+    setOdPinned(null);
+  });
 
   // Drag-to-move offsets for the two pinned tooltip panels. Each
   // resets to (0, 0) when a new selection is pinned so the user
@@ -1930,6 +1952,18 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
                   onChange={setGlenwoodMetric}
                 />
               </div>
+              <div className="flex flex-col gap-1">
+                <div
+                  className="text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  Timeframe
+                </div>
+                <GlenwoodTimeframeToggle
+                  value={glenwoodTimeframe}
+                  onChange={setGlenwoodTimeframe}
+                />
+              </div>
             </>
           )}
 
@@ -2052,6 +2086,8 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
             <GlenwoodLeftPanel
               data={glenwoodPlacer}
               subView={glenwoodSubView}
+              timeframe={glenwoodTimeframe}
+              visitationFilter={visitationFilter}
               selectedHubs={selectedHubs}
               selectedPois={selectedPois}
               onToggleHub={(id) => {
@@ -2085,6 +2121,7 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
             <GlenwoodMapCanvas
               data={glenwoodPlacer}
               subView={glenwoodSubView}
+              timeframe={glenwoodTimeframe}
               selectedHubs={selectedHubs}
               selectedPois={selectedPois}
               onToggleHub={(id) => {
@@ -2242,8 +2279,27 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
                 data={glenwoodPlacer}
                 subView={glenwoodSubView}
                 metric={glenwoodMetric}
+                timeframe={glenwoodTimeframe}
                 selectedHubs={selectedHubs}
                 selectedPois={selectedPois}
+                visitationFilter={visitationFilter}
+                onVisitationFilterChange={setVisitationFilter}
+                onToggleHub={(id) => {
+                  setSelectedHubs((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  });
+                }}
+                onTogglePoi={(id) => {
+                  setSelectedPois((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  });
+                }}
               />
             </div>
           )}

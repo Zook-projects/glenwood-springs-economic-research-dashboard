@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { scaleLinear } from 'd3-scale';
 import { line as d3line, area as d3area, curveMonotoneX } from 'd3-shape';
 import type { TrendPoint } from '../../types/context';
+import { useEscapeKey } from '../../lib/useEscapeKey';
 
 export interface TrendSeries {
   key: string;
@@ -29,10 +30,10 @@ interface Props {
   yMin?: 'auto' | 'zero';
   // Number formatter for hover tooltip + axis labels. Default: locale-string.
   valueFormat?: (v: number) => string;
-  // When set, the matching series renders at full emphasis and the rest
-  // dim out so the user can read a single line in context. Falsy = all
-  // series at normal weight.
-  highlightedKey?: string | null;
+  // When set, the matching series render at full emphasis and the rest
+  // dim out. Accepts a single key (legacy single-select), an array of
+  // keys (multi-select), or null for all-series-at-normal-weight.
+  highlightedKey?: string | string[] | null;
   // Row label used in the floating tooltip when in single-series mode.
   // Multi-series uses each series.label and ignores this prop.
   name?: string;
@@ -40,6 +41,14 @@ interface Props {
   // the chart whenever `series` has length > 0. Callers that supply
   // their own (clickable) legend pass true so the row doesn't double up.
   hideLegend?: boolean;
+  // Tooltip header date formatting. 'monthly' (default) renders the
+  // hovered point as "MMM YYYY"; 'annual' renders just "YYYY" because the
+  // underlying series are annual rollups plotted at year-start.
+  tooltipDateGranularity?: 'annual' | 'monthly';
+  // When true, render a horizontal reference line at y=0 (when 0 falls
+  // within the chart's y-domain). Useful for delta/percent charts where
+  // positive vs negative regions need an obvious split.
+  zeroBaseline?: boolean;
 }
 
 // Module-level identity formatter so the rendering code can compare against
@@ -57,10 +66,17 @@ export function MiniTrendChart({
   highlightedKey = null,
   name = 'Value',
   hideLegend = false,
+  tooltipDateGranularity = 'monthly',
+  zeroBaseline = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 280, h: typeof height === 'number' ? height : 200 });
   const [hoverX, setHoverX] = useState<number | null>(null);
+
+  // ESC dismisses the hover crosshair + floating tooltip. Lets users
+  // recover when the tooltip lingers after they pan away from the chart
+  // without crossing the SVG's mouseleave boundary.
+  useEscapeKey(() => setHoverX(null));
 
   // Track container size — width always; height only when 'fill'.
   useEffect(() => {
@@ -158,7 +174,21 @@ export function MiniTrendChart({
 
   const yTicks = yScale.ticks(4);
   const xTickCount = Math.min(4, Math.max(2, Math.floor(innerW / 80)));
-  const xTickValues = xScale.ticks(xTickCount);
+  // X-axis ticks are integer years drawn from within the data domain. d3's
+  // default `ticks()` will happily emit fractional years (e.g. 2024.5),
+  // which then Math.round into duplicate "2025"s and a phantom "2026" when
+  // the data actually ends at 2025.92. Restricting to integers that the
+  // data actually spans eliminates both surprises.
+  const xTickValues = ((): number[] => {
+    const start = Math.ceil(xMin);
+    const end = Math.floor(xMax);
+    if (end < start) return [Math.round(xMin)];
+    const years: number[] = [];
+    for (let y = start; y <= end; y++) years.push(y);
+    if (years.length <= xTickCount) return years;
+    const step = Math.ceil(years.length / xTickCount);
+    return years.filter((_, i) => i % step === 0);
+  })();
 
   // Build line + (single-series only) area paths.
   const isSingle = renderableSeries.length === 1;
@@ -313,14 +343,36 @@ export function MiniTrendChart({
           strokeWidth={1}
         />
 
+        {/* Optional zero baseline (only drawn when 0 lies inside the
+            current y-domain — e.g. percent-delta charts that span both
+            positive and negative values). */}
+        {zeroBaseline && yMinVal <= 0 && yMaxVal + yPad >= 0 && (
+          <line
+            x1={padLeft}
+            x2={padLeft + innerW}
+            y1={yScale(0)}
+            y2={yScale(0)}
+            stroke="rgba(255,255,255,0.45)"
+            strokeWidth={1}
+          />
+        )}
+
         {/* Series — area + line. Area only renders for single-series mode
             so multi-series stacked-fills don't muddy the chart. When
             `highlightedKey` is set, the matching series renders bolder and
             non-matching series dim out so the user can read a single line
             in context. */}
         {renderableSeries.map((s) => {
-          const isHighlighted = highlightedKey != null && s.key === highlightedKey;
-          const isDimmed = highlightedKey != null && s.key !== highlightedKey;
+          // Resolve highlight set: a string is treated as a single-key
+          // array; an empty array behaves like null (no emphasis).
+          const highlightSet = Array.isArray(highlightedKey)
+            ? new Set(highlightedKey)
+            : highlightedKey
+              ? new Set([highlightedKey])
+              : null;
+          const hasHighlight = highlightSet != null && highlightSet.size > 0;
+          const isHighlighted = hasHighlight && highlightSet!.has(s.key);
+          const isDimmed = hasHighlight && !highlightSet!.has(s.key);
           const strokeOpacity = isDimmed ? 0.22 : 1;
           const strokeWidth = isHighlighted
             ? 2.5
@@ -403,7 +455,9 @@ export function MiniTrendChart({
               className="font-semibold tnum mb-1"
               style={{ color: '#ffffff' }}
             >
-              {Math.round(hover.year)}
+              {tooltipDateGranularity === 'annual'
+                ? Math.round(hover.year)
+                : decimalYearToMonthLabel(hover.year)}
             </div>
             {hoverLookups.map(({ series: s, point: p }) => (
               <div
@@ -433,6 +487,21 @@ export function MiniTrendChart({
       })()}
     </div>
   );
+}
+
+// Convert a decimal-year value (e.g., 2025.333 → April 2025) into a "MMM
+// YYYY" label for the tooltip. Inverse of the encoder used by the Glenwood
+// strips: `year + (month - 1) / 12`. Months snap to the nearest integer so
+// off-by-floating-point inputs still resolve cleanly.
+function decimalYearToMonthLabel(decimalYear: number): string {
+  const y = Math.floor(decimalYear);
+  const m = Math.round((decimalYear - y) * 12);
+  const safeM = ((m % 12) + 12) % 12;
+  const carryY = y + Math.floor(m / 12);
+  return new Date(carryY, safeM, 1).toLocaleString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 // Abbreviate large numbers for tick labels: 50000 → "50k", 1234567 → "1.2M".

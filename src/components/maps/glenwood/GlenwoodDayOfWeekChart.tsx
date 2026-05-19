@@ -24,6 +24,13 @@ export function GlenwoodDayOfWeekChart({
   onSelect,
 }: Props) {
   const max = Math.max(1, ...bars.map((b) => b.value));
+  // Use a min-max normalized ratio so the lowest-value bar always lands on
+  // the alpha floor regardless of how tightly clustered the data is. With
+  // `value / max` alone, weekday distributions that hover within a narrow
+  // band (e.g. 32K–40K) render as near-identical bars; this normalization
+  // restores a visible gradient across the seven bars.
+  const minVal = Math.min(...bars.map((b) => b.value));
+  const valueRange = Math.max(1e-9, max - minVal);
   const clickable = onSelect != null;
   return (
     <div className="flex flex-1 min-h-0 gap-1 items-stretch">
@@ -31,6 +38,22 @@ export function GlenwoodDayOfWeekChart({
         const pct = (b.value / max) * 100;
         const active = selectedDay === i;
         const dim = selectedDay != null && !active;
+        // Value-driven white ramp — bars render as white-on-transparent
+        // with the alpha keyed off `b.value / max`. Matches the
+        // Workforce/RAC bottom-strip card treatment (white bars with
+        // dim variants for lower-value rows). The active selection
+        // outline still uses the accent color so the cross-filter cue
+        // reads against the white fills.
+        const ratio = (b.value - minVal) / valueRange;
+        // 35–100% alpha range over the min/max-normalized ratio. The
+        // floor keeps low-volume weekdays legible against the dark map
+        // background while still leaving a clear gradient from minimum
+        // to peak.
+        const alphaPct = active ? 100 : Math.round(35 + ratio * 65);
+        const fill =
+          alphaPct >= 100
+            ? '#ffffff'
+            : `rgba(255, 255, 255, ${(alphaPct / 100).toFixed(2)})`;
         return (
           <button
             key={b.day}
@@ -68,8 +91,7 @@ export function GlenwoodDayOfWeekChart({
               <div
                 className="w-full rounded-t"
                 style={{
-                  background: accent,
-                  opacity: 0.65 + (b.value / max) * 0.35,
+                  background: fill,
                   height: `${pct}%`,
                   minHeight: 2,
                   outline: active ? `1px solid ${accent}` : undefined,

@@ -98,7 +98,14 @@ export function metricsInCategory(
 }
 
 export function ActivityMetricToggle({ value, onChange }: Props) {
-  const accent = RAMPS.activity.accent;
+  // Pull the accent + soft variant from the scoped CSS theme so the
+  // metric toggle in the Region view matches the rest of the GPS
+  // Activity surface (currently the Regional-tier grey from the visitor
+  // palette). Falls back to the static RAMPS value only as a defensive
+  // default — `.placer-theme` always wraps this component in practice.
+  void RAMPS;
+  const accent = 'var(--accent)';
+  const accentSoft = 'var(--accent-soft)';
   const activeCategory = categoryOf(value);
 
   // Per-category last-active sub-metric. Re-clicking a category restores the
@@ -142,7 +149,7 @@ export function ActivityMetricToggle({ value, onChange }: Props) {
               title={cat.label}
               className="text-left px-2 py-1.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
               style={{
-                background: active ? `${accent}29` : 'rgba(255,255,255,0.03)',
+                background: active ? accentSoft : 'rgba(255,255,255,0.03)',
                 border: `1px solid ${active ? accent : 'var(--panel-border)'}`,
                 color: active ? accent : 'var(--text-h)',
               }}
@@ -173,7 +180,7 @@ export function ActivityMetricToggle({ value, onChange }: Props) {
               title={opt.label}
               className="text-left px-2 py-1.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors focus:outline-none focus-visible:ring-1"
               style={{
-                background: active ? `${accent}29` : 'rgba(255,255,255,0.03)',
+                background: active ? accentSoft : 'rgba(255,255,255,0.03)',
                 border: `1px solid ${active ? accent : 'var(--panel-border)'}`,
                 color: active ? accent : 'var(--text-h)',
               }}

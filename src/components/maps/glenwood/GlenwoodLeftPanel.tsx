@@ -8,12 +8,25 @@ import type {
   GlenwoodFeatureEntity,
 } from '../../../types/placer-glenwood';
 import type { GlenwoodSubView } from './GlenwoodSubViewTabs';
+import type { GlenwoodTimeframe } from './GlenwoodTimeframeToggle';
+import type { VisitationFilter } from './GlenwoodBottomStrip';
 import { SubjectKpiCard } from '../SubjectKpiCard';
-import { visitationKpis, hubKpis, poiKpis } from './glenwoodMetrics';
+import {
+  visitationKpis,
+  hubKpis,
+  poiKpis,
+  findLatestDate,
+  timeframeWindows,
+  sumInWindow,
+  fmtCount,
+  poiMonthlyFromOrigins,
+} from './glenwoodMetrics';
 
 interface Props {
   data: GlenwoodPlacerData;
   subView: GlenwoodSubView;
+  timeframe: GlenwoodTimeframe;
+  visitationFilter: VisitationFilter;
   selectedHubs: Set<string>;
   selectedPois: Set<string>;
   onToggleHub: (id: string) => void;
@@ -97,6 +110,8 @@ function SelectionChips({
 export function GlenwoodLeftPanel({
   data,
   subView,
+  timeframe,
+  visitationFilter,
   selectedHubs,
   selectedPois,
   onToggleHub,
@@ -109,17 +124,79 @@ export function GlenwoodLeftPanel({
     if (subView === 'visitation') {
       const years = data.visitation.annualMetrics.map((m) => m.year);
       const latestYear = years.length > 0 ? Math.max(...years) : new Date().getFullYear();
-      return visitationKpis(data.visitation, latestYear);
+      const latestDate = findLatestDate(data.visitation.dailyVisits.byType);
+      const tw = latestDate ? timeframeWindows(latestDate, timeframe) : null;
+      const base = visitationKpis(
+        data.visitation,
+        latestYear,
+        tw?.window,
+        tw?.subtitle,
+      );
+      // When a ranking row is selected, overwrite Total Visits with the
+      // narrowed sum for that row's dimension+key. Other KPIs (median
+      // income, household size) are visitor-profile scalars that don't
+      // break down by segment, so they stay.
+      if (visitationFilter && tw) {
+        const keys = visitationFilter.keys;
+        const isWholeSection = keys.includes('ALL');
+        const rowKeys = keys.filter((k) => k !== 'ALL');
+        const keep = (label: string) =>
+          isWholeSection || rowKeys.includes(label);
+        let filteredRows: { date: string; value: number }[] = [];
+        if (visitationFilter.dimension === 'distance') {
+          filteredRows = data.visitation.dailyVisits.byDistance
+            .filter((r) => keep(r.distance))
+            .map((r) => ({ date: r.date, value: r.value }));
+        } else if (visitationFilter.dimension === 'category') {
+          filteredRows = data.visitation.dailyVisits.byType
+            .filter((r) => keep(r.type))
+            .map((r) => ({ date: r.date, value: r.value }));
+        } else {
+          // overnight: only overnight=1 rows exist in the feed
+          filteredRows = (data.visitation.dailyVisits.byOvernight ?? []).map((r) => ({
+            date: r.date,
+            value: r.value,
+          }));
+        }
+        const filteredTotal = sumInWindow(filteredRows, tw.window);
+        const sectionTitle: Record<'distance' | 'category' | 'overnight', string> = {
+          distance: 'Distance',
+          category: 'Category',
+          overnight: 'Overnight',
+        };
+        const segLabel = isWholeSection
+          ? `All ${sectionTitle[visitationFilter.dimension]}`
+          : rowKeys.length > 1
+            ? `${rowKeys.length} ${sectionTitle[visitationFilter.dimension]} selected`
+            : visitationFilter.dimension === 'distance'
+              ? `${rowKeys[0]} mi`
+              : rowKeys[0];
+        return base.map((k) =>
+          k.label === 'Total Visits'
+            ? { ...k, value: fmtCount(filteredTotal), sublabel: `${segLabel} · ${tw.subtitle}` }
+            : k,
+        );
+      }
+      return base;
     }
     if (subView === 'retailHubs') {
       const all = data.hubs.hubs.flatMap((h) => Object.keys(h.metrics));
       const latestYear = all.length > 0 ? all.sort().reverse()[0] : new Date().getFullYear().toString();
-      return hubKpis(data.hubs, selectedHubs, latestYear);
+      const dailyRows = data.hubs.hubs.flatMap((h) => h.dailyVisits ?? []);
+      const latestDate = findLatestDate(dailyRows);
+      const tw = latestDate ? timeframeWindows(latestDate, timeframe) : null;
+      return hubKpis(data.hubs, selectedHubs, latestYear, tw?.window);
     }
     const all = data.pois.pois.flatMap((p) => Object.keys(p.metrics));
     const latestYear = all.length > 0 ? all.sort().reverse()[0] : new Date().getFullYear().toString();
-    return poiKpis(data.pois, selectedPois, latestYear);
-  }, [data, subView, selectedHubs, selectedPois]);
+    // POI monthly grain comes from POI_Zipcodes_Visits (origins) rather
+    // than the standalone Visits sheet, so window anchoring picks up the
+    // longer date range.
+    const monthlyRows = data.pois.pois.flatMap((p) => poiMonthlyFromOrigins(p));
+    const latestDate = findLatestDate(monthlyRows);
+    const tw = latestDate ? timeframeWindows(latestDate, timeframe) : null;
+    return poiKpis(data.pois, selectedPois, latestYear, tw?.window);
+  }, [data, subView, timeframe, visitationFilter, selectedHubs, selectedPois]);
 
   return (
     <div className="flex flex-col gap-3">

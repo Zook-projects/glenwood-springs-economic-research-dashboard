@@ -1,17 +1,26 @@
 // GlenwoodVisitorTypePie — donut chart with three slices: Local / Regional
 // / Tourist. Plus a legend with counts and percentages.
+//
+// Both the slices AND the legend rows act as a cross-filter when an
+// `onSelectTier` handler is provided: clicking either narrows the rest of
+// the strip to that tier's visits, clicking again clears the selection.
 
 import { fmtCount } from './glenwoodMetrics';
-import type { VisitorTierSlice } from './glenwoodMetrics';
+import type { VisitorTier, VisitorTierSlice } from './glenwoodMetrics';
 
 interface Props {
   slices: VisitorTierSlice[];
+  selectedTier?: VisitorTier | null;
+  onSelectTier?: (tier: VisitorTier | null) => void;
 }
 
+// White-gradient palette — mirrors the Avg Daily Visits DOW bars and the
+// RAC/WAC reference card. Brightest = nearest tier (Local), translucent =
+// farthest (Tourist).
 const TIER_COLOR: Record<string, string> = {
-  Local: '#86b3ee',
-  Regional: '#FFB454',
-  Tourist: '#6dd182',
+  Local: 'rgba(255,255,255,1)',
+  Regional: 'rgba(255,255,255,0.72)',
+  Tourist: 'rgba(255,255,255,0.46)',
 };
 
 function arcPath(
@@ -42,7 +51,11 @@ function arcPath(
   ].join(' ');
 }
 
-export function GlenwoodVisitorTypePie({ slices }: Props) {
+export function GlenwoodVisitorTypePie({
+  slices,
+  selectedTier = null,
+  onSelectTier,
+}: Props) {
   const total = slices.reduce((acc, s) => acc + s.visits, 0);
   if (total === 0) {
     return (
@@ -54,6 +67,11 @@ export function GlenwoodVisitorTypePie({ slices }: Props) {
       </div>
     );
   }
+  const interactive = onSelectTier != null;
+  const handleClick = (tier: VisitorTier) => {
+    if (!interactive) return;
+    onSelectTier!(selectedTier === tier ? null : tier);
+  };
   // Layout: donut on the left, legend rows on the right.
   const SIZE = 120;
   const CX = SIZE / 2;
@@ -76,39 +94,72 @@ export function GlenwoodVisitorTypePie({ slices }: Props) {
         style={{ width: SIZE, height: SIZE, flexShrink: 0 }}
         aria-label="Visitor tier distribution"
       >
-        {wedges.map((w) => (
-          <path
-            key={w.tier}
-            d={arcPath(CX, CY, R_OUTER, R_INNER, w.start, w.end)}
-            fill={TIER_COLOR[w.tier]}
-            stroke="rgba(0,0,0,0.4)"
-            strokeWidth={0.5}
-          >
-            <title>{`${w.tier}: ${fmtCount(w.visits)} (${(w.share * 100).toFixed(1)}%)`}</title>
-          </path>
-        ))}
+        {wedges.map((w) => {
+          const isSelected = selectedTier === w.tier;
+          const isDimmed = selectedTier != null && !isSelected;
+          return (
+            <path
+              key={w.tier}
+              d={arcPath(CX, CY, R_OUTER, R_INNER, w.start, w.end)}
+              fill={TIER_COLOR[w.tier]}
+              stroke={
+                isSelected ? 'var(--accent)' : 'rgba(0,0,0,0.4)'
+              }
+              strokeWidth={isSelected ? 1.5 : 0.5}
+              opacity={isDimmed ? 0.4 : 1}
+              style={{ cursor: interactive ? 'pointer' : 'default' }}
+              onClick={interactive ? () => handleClick(w.tier) : undefined}
+              aria-pressed={interactive ? isSelected : undefined}
+            >
+              <title>{`${w.tier}: ${fmtCount(w.visits)} (${(w.share * 100).toFixed(1)}%)`}</title>
+            </path>
+          );
+        })}
       </svg>
       <ul className="flex flex-col gap-1.5 flex-1 min-w-0">
-        {slices.map((s) => (
-          <li key={s.tier} className="flex items-center gap-2">
-            <span
-              className="w-2.5 h-2.5 rounded-sm shrink-0"
-              style={{ background: TIER_COLOR[s.tier] }}
-            />
-            <span
-              className="text-[11px] flex-1"
-              style={{ color: 'var(--text-h)' }}
-            >
-              {s.tier}
-            </span>
-            <span
-              className="text-[10px] tabular-nums"
-              style={{ color: 'var(--text-dim)' }}
-            >
-              {fmtCount(s.visits)} · {(s.share * 100).toFixed(1)}%
-            </span>
-          </li>
-        ))}
+        {slices.map((s) => {
+          const isSelected = selectedTier === s.tier;
+          const isDimmed = selectedTier != null && !isSelected;
+          const RowTag = (interactive ? 'button' : 'div') as 'button' | 'div';
+          return (
+            <li key={s.tier}>
+              <RowTag
+                type={interactive ? 'button' : undefined}
+                onClick={interactive ? () => handleClick(s.tier) : undefined}
+                aria-pressed={interactive ? isSelected : undefined}
+                className={
+                  'w-full flex items-center gap-2 rounded transition-colors' +
+                  (interactive ? ' cursor-pointer hover:bg-white/[0.04] px-1' : '')
+                }
+                style={{
+                  opacity: isDimmed ? 0.45 : 1,
+                  background: isSelected ? 'rgba(255,255,255,0.06)' : 'transparent',
+                  outline: isSelected ? '1px solid var(--accent)' : 'none',
+                  outlineOffset: -1,
+                  border: 'none',
+                  textAlign: 'left',
+                }}
+              >
+                <span
+                  className="w-2.5 h-2.5 rounded-sm shrink-0"
+                  style={{ background: TIER_COLOR[s.tier] }}
+                />
+                <span
+                  className="text-[11px] flex-1"
+                  style={{ color: 'var(--text-h)' }}
+                >
+                  {s.tier}
+                </span>
+                <span
+                  className="text-[10px] tabular-nums"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  {fmtCount(s.visits)} · {(s.share * 100).toFixed(1)}%
+                </span>
+              </RowTag>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

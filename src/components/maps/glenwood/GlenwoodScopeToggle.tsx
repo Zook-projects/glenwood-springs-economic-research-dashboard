@@ -16,8 +16,8 @@ interface Props {
 }
 
 const OPTIONS = [
-  { value: 'region' as const, label: 'Region' },
   { value: 'glenwood' as const, label: 'Glenwood' },
+  { value: 'region' as const, label: 'Region' },
 ];
 
 export function GlenwoodScopeToggle({ scope, onChange, glenwoodAvailable }: Props) {
@@ -31,7 +31,7 @@ export function GlenwoodScopeToggle({ scope, onChange, glenwoodAvailable }: Prop
       >
         <MapToggleSegmented<GlenwoodScope>
           options={OPTIONS}
-          value="region"
+          value="glenwood"
           onChange={() => {}}
           accent={accent}
           ariaLabel="Activity scope"
