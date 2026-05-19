@@ -531,8 +531,7 @@ export function GlenwoodVisitationStrip({
               onSectionClick={handleSectionClick}
             />
             <div
-              className="glass rounded-md p-3 flex flex-col gap-2 min-h-0"
-              style={{ height: 170 }}
+              className="glass rounded-md p-3 flex flex-col gap-2 min-h-[260px] md:min-h-0 md:h-[170px]"
             >
               <div
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
@@ -572,10 +571,9 @@ export function GlenwoodVisitationStrip({
       )}
 
       <div
-        className="grid grid-cols-1 md:grid-cols-3 gap-3 pointer-events-auto"
-        style={{ height: STRIP_CARD_HEIGHT }}
+        className="grid grid-cols-1 md:grid-cols-3 gap-3 pointer-events-auto md:h-[260px]"
       >
-        <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+        <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-[260px] md:min-h-0">
           <div
             className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
             style={{ color: 'var(--text-dim)' }}
@@ -596,7 +594,7 @@ export function GlenwoodVisitationStrip({
 
         {metric === 'visits' ? (
           <>
-            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-[260px] md:min-h-0">
               <div
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-center justify-between gap-2"
                 style={{ color: 'var(--text-dim)' }}
@@ -620,7 +618,7 @@ export function GlenwoodVisitationStrip({
               </div>
             </div>
 
-            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-[260px] md:min-h-0">
               <div
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
                 style={{ color: 'var(--text-dim)' }}
@@ -645,7 +643,7 @@ export function GlenwoodVisitationStrip({
           </>
         ) : (
           <>
-            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-[260px] md:min-h-0">
               <div
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
                 style={{ color: 'var(--text-dim)' }}
@@ -665,7 +663,7 @@ export function GlenwoodVisitationStrip({
               )}
             </div>
 
-            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-0">
+            <div className="glass rounded-md p-3 flex flex-col gap-2 min-h-[260px] md:min-h-0">
               <div
                 className="text-[10px] font-semibold uppercase tracking-wider flex items-baseline justify-between"
                 style={{ color: 'var(--text-dim)' }}

@@ -10,9 +10,11 @@ import { SubjectMapCanvas } from '../../components/SubjectMapCanvas';
 import { DemographicsMapTile } from '../../components/maps/DemographicsMapTile';
 import { SubjectMapOverlay } from '../../components/maps/SubjectMapOverlay';
 import { DemographicsMapStrip } from '../../components/maps/DemographicsMapStrip';
+import { MultiSelectToolbar } from '../../components/maps/MultiSelectToolbar';
 import { DEMOGRAPHICS_METRICS, type DemographicsMetricId } from '../../components/maps/demographicsMetrics';
 import { useCountyGeometry } from '../../lib/useCountyGeometry';
 import { computeWorkforceTotals } from '../../lib/workforceTotals';
+import { RAMPS } from '../../lib/subjectColorRamps';
 import type { AppOutletContext } from '../../App';
 
 export function DemographicsMapView() {
@@ -98,6 +100,15 @@ export function DemographicsMapView() {
           onSelectZip={mapState.handleSelectZip}
           onSelectCounty={mapState.handleSelectCounty}
         />
+        <div className="absolute left-3 bottom-3 md:bottom-[284px] pointer-events-auto">
+          <MultiSelectToolbar
+            multiSelect={mapState.multiSelect}
+            onMultiSelectChange={mapState.setMultiSelect}
+            totalSelected={mapState.selectedZips.size + mapState.selectedCountyGeoids.size}
+            onClearSelections={mapState.clearSelections}
+            accent={RAMPS.demographics.accent}
+          />
+        </div>
       </SubjectMapCanvas>
     </MapShell>
   );

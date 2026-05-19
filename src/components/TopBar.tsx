@@ -8,9 +8,12 @@
 // on /map/workforce — keeps the URL as the single source of truth instead
 // of silently remembering the last visited map.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { QrCodePopup } from './QrCodePopup';
+import { WelcomePopup } from './WelcomePopup';
+
+const WELCOME_SEEN_KEY = 'gsech-welcome-seen-v1';
 
 type TabId = 'dashboard' | 'map';
 
@@ -33,6 +36,28 @@ export function TopBar() {
     map: null,
   });
   const [qrOpen, setQrOpen] = useState(false);
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+
+  // Auto-open the welcome notice on first visit. Once dismissed, the localStorage
+  // flag keeps it from popping up on every refresh; users can re-open it from the
+  // Welcome button. Wrapped in try/catch so privacy-mode browsers (no localStorage)
+  // still get the intro — they'll just see it every load instead of once.
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(WELCOME_SEEN_KEY)) setWelcomeOpen(true);
+    } catch {
+      setWelcomeOpen(true);
+    }
+  }, []);
+
+  const closeWelcome = () => {
+    setWelcomeOpen(false);
+    try {
+      localStorage.setItem(WELCOME_SEEN_KEY, '1');
+    } catch {
+      // localStorage unavailable — fine, just no persistence
+    }
+  };
 
   const activeId: TabId = location.pathname.startsWith('/map') ? 'map' : 'dashboard';
 
@@ -67,7 +92,7 @@ export function TopBar() {
 
   return (
     <header
-      className="sticky top-0 z-50 w-full glass"
+      className="sticky top-0 z-50 w-full glass relative"
       style={{
         borderBottom: '1px solid var(--panel-border)',
       }}
@@ -122,7 +147,20 @@ export function TopBar() {
             );
           })}
         </div>
-        <div className="hidden md:flex md:justify-self-end">
+        <div className="hidden md:flex md:justify-self-end items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setWelcomeOpen(true)}
+            aria-label="Show welcome notice"
+            className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-1"
+            style={{
+              color: 'var(--accent)',
+              border: '1px solid var(--accent)',
+              background: 'transparent',
+            }}
+          >
+            Welcome
+          </button>
           <button
             type="button"
             onClick={() => setQrOpen((v) => !v)}
@@ -138,8 +176,27 @@ export function TopBar() {
             QR Code
           </button>
         </div>
+        {/* Mobile-only Welcome trigger — small "i" icon pinned to the top-right
+            of the header. Lets returning mobile visitors re-open the notice
+            after the first-visit auto-open has been dismissed. The desktop
+            buttons live in the md+ right slot above. */}
+        <button
+          type="button"
+          onClick={() => setWelcomeOpen(true)}
+          aria-label="Show welcome notice"
+          className="md:hidden absolute right-2 top-1.5 inline-flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-semibold transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-1"
+          style={{
+            color: 'var(--accent)',
+            border: '1px solid var(--accent)',
+            background: 'transparent',
+            lineHeight: 1,
+          }}
+        >
+          i
+        </button>
       </div>
       <QrCodePopup open={qrOpen} onClose={() => setQrOpen(false)} />
+      <WelcomePopup open={welcomeOpen} onClose={closeWelcome} />
     </header>
   );
 }

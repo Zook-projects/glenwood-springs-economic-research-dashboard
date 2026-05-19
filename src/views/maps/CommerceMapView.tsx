@@ -7,6 +7,7 @@ import { SubjectMapCanvas } from '../../components/SubjectMapCanvas';
 import { CommerceMapTile } from '../../components/maps/CommerceMapTile';
 import { SubjectMapOverlay } from '../../components/maps/SubjectMapOverlay';
 import { CommerceMapStrip } from '../../components/maps/CommerceMapStrip';
+import { MultiSelectToolbar } from '../../components/maps/MultiSelectToolbar';
 import {
   COMMERCE_METRICS,
   type CommerceVariantId,
@@ -14,6 +15,7 @@ import {
 } from '../../components/maps/commerceMetrics';
 import { useCountyGeometry } from '../../lib/useCountyGeometry';
 import { computeWorkforceTotals } from '../../lib/workforceTotals';
+import { RAMPS } from '../../lib/subjectColorRamps';
 import type { AppOutletContext } from '../../App';
 
 export function CommerceMapView() {
@@ -101,6 +103,15 @@ export function CommerceMapView() {
           onSelectZip={mapState.handleSelectZip}
           onSelectCounty={mapState.handleSelectCounty}
         />
+        <div className="absolute left-3 bottom-3 md:bottom-[284px] pointer-events-auto">
+          <MultiSelectToolbar
+            multiSelect={mapState.multiSelect}
+            onMultiSelectChange={mapState.setMultiSelect}
+            totalSelected={mapState.selectedZips.size + mapState.selectedCountyGeoids.size}
+            onClearSelections={mapState.clearSelections}
+            accent={RAMPS.commerce.accent}
+          />
+        </div>
       </SubjectMapCanvas>
     </MapShell>
   );

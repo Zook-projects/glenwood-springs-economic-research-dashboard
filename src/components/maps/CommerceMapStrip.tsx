@@ -23,7 +23,6 @@ import { MiniTrendChart, type TrendSeries } from './MiniTrendChart';
 import { RAMPS, seriesColor } from '../../lib/subjectColorRamps';
 import type { GeoLevel } from './SubjectMapOverlay';
 import type { WorkforceTotals } from '../../lib/workforceTotals';
-import { MultiSelectToolbar } from './MultiSelectToolbar';
 
 const STRIP_CARD_HEIGHT = 260;
 
@@ -238,16 +237,8 @@ export function CommerceMapStrip({
 
   return (
     <div className="px-3 flex flex-col gap-2">
-      <MultiSelectToolbar
-        multiSelect={multiSelect}
-        onMultiSelectChange={onMultiSelectChange}
-        totalSelected={totalSelected}
-        onClearSelections={onClearSelections}
-        accent={accent}
-      />
       <div
-        className="grid grid-cols-1 md:grid-cols-3 gap-3"
-        style={{ height: STRIP_CARD_HEIGHT }}
+        className="grid grid-cols-1 md:grid-cols-3 gap-3 md:h-[260px]"
       >
         <RegionKpis
           region={headlineAggregate}
@@ -325,7 +316,7 @@ function RegionKpis({
 }) {
   return (
     <div
-      className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden"
+      className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden"
       style={accent ? { borderColor: accent } : undefined}
     >
       <div className="flex items-baseline justify-between">
@@ -408,7 +399,7 @@ function TrendCard({
   cadence: CommerceCadence;
 }) {
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
+    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
       <div className="flex items-baseline justify-between gap-2">
         <div
           className="text-[10px] font-semibold uppercase tracking-wider truncate"
@@ -470,7 +461,7 @@ function RankedListCard({
 }) {
   const max = rows.length ? (rows[0].value ?? 0) : 0;
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
+    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
       <div
         className="text-[10px] font-semibold uppercase tracking-wider"
         style={{ color: 'var(--text-h)' }}

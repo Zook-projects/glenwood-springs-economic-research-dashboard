@@ -55,7 +55,7 @@ export function MapSubjectTabs() {
       <div
         role="tablist"
         aria-label="Map subject"
-        className="flex items-stretch gap-0.5 overflow-x-auto px-3 md:px-4"
+        className="flex items-stretch gap-0.5 overflow-x-auto overflow-y-hidden px-3 md:px-4"
         onKeyDown={handleKey}
       >
         {MAP_SUBJECTS.map((s) => {

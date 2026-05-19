@@ -144,7 +144,7 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
   const [scope, setScopeRaw] = useState<GlenwoodScope>('glenwood');
   const [glenwoodSubView, setGlenwoodSubView] = useState<GlenwoodSubView>('visitation');
   const [glenwoodMetric, setGlenwoodMetric] = useState<GlenwoodMetric>('visits');
-  const [glenwoodTimeframe, setGlenwoodTimeframe] = useState<GlenwoodTimeframe>('ytd');
+  const [glenwoodTimeframe, setGlenwoodTimeframe] = useState<GlenwoodTimeframe>('monthly');
   // Visitation ranking-card cross-filter. Lifted to the view because the
   // left-panel KPI and the bottom-strip cards both narrow when it's set.
   // `keys` is a multi-select list of row labels OR the sentinel "ALL"
@@ -2116,6 +2116,138 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
       </aside>
 
       <main className="relative w-full md:flex-1">
+        {/* Strip blocks — rendered as siblings of the map div, BEFORE the
+            map in source order. On mobile (where the strip wrappers' md:absolute
+            classes are inactive), this puts the strip cards above the map in
+            the vertical stack: aside (KPIs) → strip → map. On desktop the
+            strip wrappers become absolute positioned at the bottom of <main>,
+            sitting over the map div (which fills <main> via md:absolute md:inset-0).
+            Net effect: identical desktop layout, repositioned mobile layout. */}
+        {!isGlenwoodScope && isShopperMetric && (
+          <ShopperBottomCardStrip
+            flows={applyPinnedFlowFilter(
+              filterForSelection(directionFilteredFlows, selectedZip, effectiveMode),
+            )}
+            selectedZip={selectedZip}
+            scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : 'All Residents'}
+            selectedCategories={selectedShopperCategories}
+            onSelectCategories={setSelectedShopperCategories}
+            selectedPartners={selectedShopperPartners}
+            onSelectPartners={setSelectedShopperPartners}
+            topProperties={topShopperProperties}
+            zips={zips}
+            placerYear={placerYear}
+            mode={effectiveMode}
+          />
+        )}
+
+        {isGlenwoodScope && glenwoodPlacer && (
+          <div
+            className="md:absolute md:left-0 md:right-0 md:bottom-0 md:z-20 pointer-events-none"
+            style={{ paddingBottom: 8 }}
+          >
+            <GlenwoodBottomStrip
+              data={glenwoodPlacer}
+              subView={glenwoodSubView}
+              metric={glenwoodMetric}
+              timeframe={glenwoodTimeframe}
+              selectedHubs={selectedHubs}
+              selectedPois={selectedPois}
+              visitationFilter={visitationFilter}
+              onVisitationFilterChange={setVisitationFilter}
+              onToggleHub={(id) => {
+                setSelectedHubs((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+              onTogglePoi={(id) => {
+                setSelectedPois((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                });
+              }}
+            />
+          </div>
+        )}
+
+        {!isGlenwoodScope && !isShopperMetric && (selectedZip || isVisitorCategory) && (
+          <div
+            className="md:absolute md:left-0 md:right-0 md:bottom-0 md:z-20 pointer-events-auto"
+            style={{ paddingBottom: 8 }}
+          >
+            <ActivityBottomCardStrip
+              selectedZip={selectedZip}
+              scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : ''}
+              flowsInbound={directionFilteredInbound}
+              flowsOutbound={directionFilteredOutbound}
+              placerFlowsInbound={flowsInbound}
+              placerAnchors={destAnchors}
+              placerYear={placerYear}
+              visitorTypePieData={
+                isVisitorCategory && visitorTypePieData
+                  ? {
+                      regional: visitorTypePieData.regional,
+                      tourist: visitorTypePieData.tourist,
+                      unit: originSymbolUnit,
+                      distanceBands: visitorTypePieData.distanceBands,
+                    }
+                  : undefined
+              }
+              workplaceMetricLabels={
+                statsMetricLabels
+                  ? isVisitorCategory
+                    ? {
+                        total: statsMetricLabels.total,
+                        unitNoun: metric === 'visitors' ? 'visitors' : 'visits',
+                        totalShareNoun:
+                          metric === 'visitors' ? 'visitors' : 'visits',
+                        crossShareLabel: 'Cross-ZIP visit share',
+                        crossShareVerb: 'arrive at',
+                        distanceWeighting:
+                          metric === 'visitors' ? 'Visitor-weighted' : 'Visit-weighted',
+                      }
+                    : { total: statsMetricLabels.total }
+                  : undefined
+              }
+              workplaceCommuteDistanceMultiplier={isVisitorCategory ? 1 : 2}
+              workplaceCommuteDistanceLabel={
+                isVisitorCategory
+                  ? 'Average one-way visit distance'
+                  : 'Average roundtrip commute distance'
+              }
+              zips={zips}
+              corridorIndex={corridorIndex}
+              corridorNodes={corridorNodes}
+              flowIndex={flowIndex}
+              driveDistance={driveDistance}
+              directionFilter={directionFilter}
+              passThroughOrigin={passThroughOrigin}
+              passThroughDest={passThroughDest}
+              onPassThroughOriginChange={setPassThroughOrigin}
+              onPassThroughDestChange={setPassThroughDest}
+              hideWorkforceFlows={isVisitorCategory}
+              hidePassThrough={isVisitorCategory}
+              hideTopOutflow={isVisitorCategory}
+              topInflowSubtitle={
+                isVisitorCategory ? 'Where visitors come from' : undefined
+              }
+              topOutflowSubtitle={
+                isVisitorCategory ? 'Where this destination’s visitors also go' : undefined
+              }
+              isVisitorCategory={isVisitorCategory}
+              visitorPlaceRows={visitorPlaceRows}
+              onSelectVisitorAnchor={setSelectedZip}
+              visitorTypeFilterKey={visitorTypeFilterKey}
+              onVisitorSliceClick={handleVisitorSliceClick}
+            />
+          </div>
+        )}
+
         <div className="relative w-full h-[80vh] md:h-auto md:absolute md:inset-0">
           {isGlenwoodScope && glenwoodPlacer ? (
             <GlenwoodMapCanvas
@@ -2244,155 +2376,6 @@ export function ActivityCommuteView({ data, placer, glenwoodPlacer }: Props) {
             />
           )}
 
-          {/* Shopper bottom strip — KPI / Pie / Place Rankings docked at
-              the bottom of the map area, plus a floating Category Rankings
-              card pinned to the right rail above the strip's third column
-              (the strip itself renders both elements via absolute
-              positioning). Renders for the shopper metric whether or not
-              an anchor is selected; when an anchor is selected the cards
-              scope to that resident anchor's outbound shopping. */}
-          {!isGlenwoodScope && isShopperMetric && (
-            <ShopperBottomCardStrip
-              // Pass the SELECTION-narrowed flows (not partner-narrowed)
-              // so Place Rankings can list the full set of clickable
-              // partners; the strip applies its own partner filter for
-              // the KPI / Pie / Category cards. When a corridor or OD
-              // branch is pinned, layer the click-to-filter on top so
-              // every card reads against the pinned flow.
-              flows={applyPinnedFlowFilter(
-                filterForSelection(directionFilteredFlows, selectedZip, effectiveMode),
-              )}
-              selectedZip={selectedZip}
-              scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : 'All Residents'}
-              selectedCategories={selectedShopperCategories}
-              onSelectCategories={setSelectedShopperCategories}
-              selectedPartners={selectedShopperPartners}
-              onSelectPartners={setSelectedShopperPartners}
-              topProperties={topShopperProperties}
-              zips={zips}
-              placerYear={placerYear}
-              mode={effectiveMode}
-            />
-          )}
-
-          {/* Bottom card strip (Workers / Visitors).
-              · Workers / Visitors with an anchor selected → full anchor
-                card set (Workplace Metrics + Top Inflow [+ Outflow / Pass
-                Through depending on metric guards]).
-              · Visitors with NO anchor selected → strip still renders so
-                the Visitor-Type Mix pie card stays visible (anchor-
-                specific cards are gated inside the strip on selectedZip).
-              · Shoppers → uses ShopperBottomCardStrip above. */}
-          {isGlenwoodScope && glenwoodPlacer && (
-            // pointer-events-none here so the empty grid-spacer columns in
-            // the strip's ranking row don't block zoom/pan on the map
-            // underneath. Visible card rows inside GlenwoodBottomStrip opt
-            // back in with pointer-events-auto.
-            <div
-              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-none"
-              style={{ paddingBottom: 8 }}
-            >
-              <GlenwoodBottomStrip
-                data={glenwoodPlacer}
-                subView={glenwoodSubView}
-                metric={glenwoodMetric}
-                timeframe={glenwoodTimeframe}
-                selectedHubs={selectedHubs}
-                selectedPois={selectedPois}
-                visitationFilter={visitationFilter}
-                onVisitationFilterChange={setVisitationFilter}
-                onToggleHub={(id) => {
-                  setSelectedHubs((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(id)) next.delete(id);
-                    else next.add(id);
-                    return next;
-                  });
-                }}
-                onTogglePoi={(id) => {
-                  setSelectedPois((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(id)) next.delete(id);
-                    else next.add(id);
-                    return next;
-                  });
-                }}
-              />
-            </div>
-          )}
-
-          {!isGlenwoodScope && !isShopperMetric && (selectedZip || isVisitorCategory) && (
-            <div
-              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
-              style={{ paddingBottom: 8 }}
-            >
-              <ActivityBottomCardStrip
-                selectedZip={selectedZip}
-                scope={selectedZip ? zips.find((z) => z.zip === selectedZip)?.place ?? selectedZip : ''}
-                flowsInbound={directionFilteredInbound}
-                flowsOutbound={directionFilteredOutbound}
-                placerFlowsInbound={flowsInbound}
-                placerAnchors={destAnchors}
-                placerYear={placerYear}
-                visitorTypePieData={
-                  isVisitorCategory && visitorTypePieData
-                    ? {
-                        regional: visitorTypePieData.regional,
-                        tourist: visitorTypePieData.tourist,
-                        unit: originSymbolUnit,
-                        distanceBands: visitorTypePieData.distanceBands,
-                      }
-                    : undefined
-                }
-                workplaceMetricLabels={
-                  statsMetricLabels
-                    ? isVisitorCategory
-                      ? {
-                          total: statsMetricLabels.total,
-                          unitNoun: metric === 'visitors' ? 'visitors' : 'visits',
-                          totalShareNoun:
-                            metric === 'visitors' ? 'visitors' : 'visits',
-                          crossShareLabel: 'Cross-ZIP visit share',
-                          crossShareVerb: 'arrive at',
-                          distanceWeighting:
-                            metric === 'visitors' ? 'Visitor-weighted' : 'Visit-weighted',
-                        }
-                      : { total: statsMetricLabels.total }
-                    : undefined
-                }
-                workplaceCommuteDistanceMultiplier={isVisitorCategory ? 1 : 2}
-                workplaceCommuteDistanceLabel={
-                  isVisitorCategory
-                    ? 'Average one-way visit distance'
-                    : 'Average roundtrip commute distance'
-                }
-                zips={zips}
-                corridorIndex={corridorIndex}
-                corridorNodes={corridorNodes}
-                flowIndex={flowIndex}
-                driveDistance={driveDistance}
-                directionFilter={directionFilter}
-                passThroughOrigin={passThroughOrigin}
-                passThroughDest={passThroughDest}
-                onPassThroughOriginChange={setPassThroughOrigin}
-                onPassThroughDestChange={setPassThroughDest}
-                hideWorkforceFlows={isVisitorCategory}
-                hidePassThrough={isVisitorCategory}
-                hideTopOutflow={isVisitorCategory}
-                topInflowSubtitle={
-                  isVisitorCategory ? 'Where visitors come from' : undefined
-                }
-                topOutflowSubtitle={
-                  isVisitorCategory ? 'Where this destination’s visitors also go' : undefined
-                }
-                isVisitorCategory={isVisitorCategory}
-                visitorPlaceRows={visitorPlaceRows}
-                onSelectVisitorAnchor={setSelectedZip}
-                visitorTypeFilterKey={visitorTypeFilterKey}
-                onVisitorSliceClick={handleVisitorSliceClick}
-              />
-            </div>
-          )}
         </div>
 
         {/* Pinned tooltip — full breakdown, docked top-right. Mirrors the

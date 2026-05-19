@@ -42,6 +42,12 @@ export function MapShell({ children, leftPanel, bottomStrip }: Props) {
   // overlays the map at the bottom with absolute positioning, mirroring the
   // Workforce BottomCardStrip pattern. Cards using the .glass class pick up
   // the map underneath via backdrop-filter.
+  //
+  // Mobile flow: aside (KPIs/controls) → strip (cards inline) → map (fixed
+  // viewport height). The strip is rendered twice — once inline for mobile,
+  // once absolute over the map for desktop — so each layout gets the right
+  // DOM positioning without one fighting the other. The strips are pure
+  // prop renders, so the duplication is cheap.
   return (
     <div className="flex flex-col flex-1 min-h-0 w-full">
       <MapSubjectTabs />
@@ -54,11 +60,16 @@ export function MapShell({ children, leftPanel, bottomStrip }: Props) {
             {leftPanel}
           </aside>
         )}
-        <div className="flex-1 min-h-0 relative">
+        {bottomStrip && (
+          <div className="md:hidden w-full py-3">
+            {bottomStrip}
+          </div>
+        )}
+        <div className="relative w-full h-[70vh] md:h-auto md:flex-1 md:min-h-0">
           {children}
           {bottomStrip && (
             <div
-              className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
+              className="hidden md:block absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
               style={{ paddingBottom: 12 }}
             >
               {bottomStrip}

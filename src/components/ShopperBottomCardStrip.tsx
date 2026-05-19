@@ -308,17 +308,19 @@ export function ShopperBottomCardStrip({
         />
       </div>
 
-      {/* Bottom strip — three equal-width cards docked at the bottom of
-          the map area. The third column is just the Place Rankings now;
-          the Category Rankings live in the floating card above. */}
+      {/* Bottom strip — three equal-width cards. On desktop, docked at the
+          bottom of the map area via absolute positioning. On mobile, falls
+          back to normal flow so it can render above the map in source order
+          (the parent ActivityCommuteView reorders strip-before-map for the
+          mobile vertical stack). The third column is just the Place Rankings
+          now; the Category Rankings live in the floating card above. */}
       <div
-        className="absolute left-0 right-0 bottom-0 z-20 pointer-events-auto"
+        className="md:absolute md:left-0 md:right-0 md:bottom-0 md:z-20 pointer-events-auto"
         style={{ paddingBottom: 12 }}
       >
         <div className="px-3 flex flex-col gap-2">
           <div
-            className="grid grid-cols-1 md:grid-cols-3 gap-3"
-            style={{ height: STRIP_CARD_HEIGHT }}
+            className="grid grid-cols-1 md:grid-cols-3 gap-3 md:h-[260px]"
           >
             <ShopperKpis
               scope={scope}
@@ -393,7 +395,7 @@ function ShopperKpis({
       ? selectedCategories[0]
       : `${selectedCategories.length} categories`;
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
+    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
       <div className="flex items-baseline justify-between">
         <div
           className="text-[10px] font-semibold uppercase tracking-wider truncate"
@@ -484,7 +486,7 @@ function CategoryPieCard({
   const arcs = useMemo(() => pieGen(rows.filter((r) => r.value > 0)), [pieGen, rows]);
 
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
+    <div className="glass rounded-md p-3 flex flex-col gap-2 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
       <div className="flex items-baseline justify-between gap-2">
         <div
           className="text-[10px] font-semibold uppercase tracking-wider truncate"
@@ -600,7 +602,7 @@ function CategoryRankings({
   // `maxHeight: 50vh` cap so unusual category counts fall back to
   // scrolling via `overflow-y-auto` on the list.
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden">
+    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
       <div className="flex items-baseline justify-between gap-2">
         <div
           className="text-[10px] font-semibold uppercase tracking-wider truncate"
@@ -701,7 +703,7 @@ function PropertyRankings({
     ? `${scope} residents · Placer ${placerYear}`
     : `All residents · Placer ${placerYear}`;
   return (
-    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-0 overflow-hidden">
+    <div className="glass rounded-md p-3 flex flex-col gap-1.5 min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
       <div className="flex items-baseline justify-between gap-2">
         <div
           className="text-[10px] font-semibold uppercase tracking-wider truncate"

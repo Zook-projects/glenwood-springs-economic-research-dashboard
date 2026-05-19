@@ -7,9 +7,11 @@ import { SubjectMapCanvas } from '../../components/SubjectMapCanvas';
 import { HousingMapTile } from '../../components/maps/HousingMapTile';
 import { SubjectMapOverlay } from '../../components/maps/SubjectMapOverlay';
 import { HousingMapStrip } from '../../components/maps/HousingMapStrip';
+import { MultiSelectToolbar } from '../../components/maps/MultiSelectToolbar';
 import { HOUSING_METRICS, type HousingMetricId } from '../../components/maps/housingMetrics';
 import { useCountyGeometry } from '../../lib/useCountyGeometry';
 import { computeWorkforceTotals } from '../../lib/workforceTotals';
+import { RAMPS } from '../../lib/subjectColorRamps';
 import type { AppOutletContext } from '../../App';
 
 // Deep-link entry: callers (e.g. the dashboard's Zillow View Map button) can
@@ -106,6 +108,15 @@ export function HousingMapView() {
           onSelectZip={mapState.handleSelectZip}
           onSelectCounty={mapState.handleSelectCounty}
         />
+        <div className="absolute left-3 bottom-3 md:bottom-[284px] pointer-events-auto">
+          <MultiSelectToolbar
+            multiSelect={mapState.multiSelect}
+            onMultiSelectChange={mapState.setMultiSelect}
+            totalSelected={mapState.selectedZips.size + mapState.selectedCountyGeoids.size}
+            onClearSelections={mapState.clearSelections}
+            accent={RAMPS.housing.accent}
+          />
+        </div>
       </SubjectMapCanvas>
     </MapShell>
   );
